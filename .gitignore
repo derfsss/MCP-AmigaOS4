@@ -1,0 +1,176 @@
+# =============================================================================
+# Design docs + agent memory — kept local only; never committed to GitHub.
+# Add any new design / planning / investigation file here when it lands.
+# =============================================================================
+CLAUDE.md
+AGENT_MEMORY.md
+REQUIREMENTS.md
+INVESTIGATION.md
+IMPLEMENTATION.md
+MCP_CAPABILITIES.md
+docs/private/
+plans/
+notes/
+*.private.md
+*.notes.md
+
+# =============================================================================
+# Local configuration — may contain hostnames, COM ports, PSKs.
+# =============================================================================
+config.toml
+config.local.toml
+.env
+.env.local
+
+# Claude Code per-project settings (user-local, includes permissions /
+# allowlist and other workstation-specific state)
+.claude/
+*.local
+secrets/
+
+# =============================================================================
+# Result archive (large binaries, captures, screenshots)
+#
+# Anchored to root so the host's `archive/` Python module under
+# `host/src/amiga_fleet_mcp/archive/` isn't accidentally hidden.
+# =============================================================================
+/archive/
+/runs/
+*.png
+*.jpg
+*.qcow2
+*.iso
+*.lha
+*.zip
+*.savevm
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+logs/
+
+# =============================================================================
+# Python
+#
+# Common build / cache directories are anchored to the repo root with a
+# leading "/" so they don't accidentally hide files inside third-party
+# submodules (a submodule's own `lib/` or `build/` is its own concern,
+# not ours).
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+/MANIFEST
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+/.venv/
+/venv/
+/env/
+/ENV/
+.python-version
+uv.lock
+
+# Host-package build / venv dirs — anchored so submodule trees aren't affected.
+/host/.venv/
+/host/build/
+/host/dist/
+/host/.pytest_cache/
+/host/.mypy_cache/
+/host/.ruff_cache/
+
+# =============================================================================
+# C / cross-compile artefacts (MCPd)
+#
+# Unanchored *.o etc. is fine — those are universally build output.
+# But anchor mcpd/build/ etc. to the *project root* so a submodule's
+# own build outputs are governed by the submodule, not by us.
+# =============================================================================
+*.o
+*.a
+*.elf
+*.obj
+*.so.*
+/mcpd/build/
+/mcpd/MCPd
+/mcpd/MCPd.debug
+/scripts/crashtest
+*.map
+*.lst
+
+# Patches applied to submodules at build time should already exist in the
+# repo; do NOT add third-party/ to ignores. Submodule contents are tracked
+# by the submodule's own pointer in this repo, and patches/ subdirs are
+# our own committed code.
+
+# Defensive: the historical Enhancer SDK header overlay tree
+# (A-EON Technology Ltd © 2018) is not redistributable. Even though
+# MCPd no longer #includes those headers, keep the directory pinned
+# in .gitignore so a developer who has the tree on disk doesn't
+# accidentally publish it via `git add -A`.
+/third-party/amiga-sdk-extras/
+
+# =============================================================================
+# Editor / IDE
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+Desktop.ini
+
+# =============================================================================
+# Internal / one-shot dev validation scripts (pre-existing milestone scripts).
+# Re-introduce a script here if it grows back into something committed.
+# =============================================================================
+scripts/phase*.py
+scripts/validate_installer_phase*.py
+
+# =============================================================================
+# Misc
+# =============================================================================
+.cache/
+.tmp/
+tmp/
+scratch/
+*.bak
+*.orig

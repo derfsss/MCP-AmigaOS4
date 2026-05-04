@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  host:
+    name: Host (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync dependencies
+        working-directory: host
+        run: uv sync --dev --python ${{ matrix.python-version }}
+
+      - name: Lint (ruff)
+        working-directory: host
+        run: uv run ruff check src tests
+
+      - name: Type-check (mypy)
+        working-directory: host
+        run: uv run mypy src
+
+      - name: Test (pytest)
+        working-directory: host
+        run: uv run pytest -q
+
+      - name: Smoke — --version
+        working-directory: host
+        run: uv run amiga-fleet-mcp --version
+
+  mcpd:
+    name: MCPd (cross-compile via walkero/amigagccondocker)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Pull cross-compile image
+        run: docker pull walkero/amigagccondocker:os4-gcc11
+
+      - name: Build MCPd
+        run: |
+          # Mount the repo root so the Makefile's
+          # `../third-party/cjson/cJSON.c` reference resolves inside
+          # the container; mirror what `make docker-build` does
+          # locally on a developer machine.
+          docker run --rm -v "$(pwd)":/src -w /src/mcpd \
+            walkero/amigagccondocker:os4-gcc11 \
+            make all
+
+      - name: Verify binary produced
+        run: |
+          test -f mcpd/MCPd
+          file mcpd/MCPd

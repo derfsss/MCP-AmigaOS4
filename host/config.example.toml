@@ -1,0 +1,83 @@
+# amiga-fleet-mcp configuration example
+#
+# Copy this file to one of the following locations and edit it for
+# your environment:
+#
+#   $AMIGA_FLEET_CONFIG                                 (env override)
+#   %APPDATA%\amiga-fleet-mcp\config.toml               (Windows default)
+#   ~/.config/amiga-fleet-mcp/config.toml               (Linux / macOS default)
+#
+# Or pass it explicitly:
+#
+#   amiga-fleet-mcp --config /path/to/config.toml
+#
+# Replace every <placeholder> below with a value appropriate to your
+# environment.
+
+[server]
+log_level     = "info"                   # debug | info | warn | error
+log_dir       = "<absolute path to a writable log directory>"
+archive_root  = "<absolute path to a writable archive directory>"
+mcp_transport = "stdio"                  # stdio | sse | streamable-http
+# mcp_http_addr = "127.0.0.1:7180"       # only set when mcp_transport != "stdio"
+
+[paths]
+# Optional helper paths used by some tools (QEMU lifecycle, test
+# orchestration). Omit entries you do not use.
+qemu_runner      = "<absolute path to qemu-runner checkout>"
+amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
+qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
+
+[defaults]
+# Per-tool parameter defaults. When a tool is invoked without a
+# value for one of these parameters, the server falls back to the
+# value here. Pass the parameter explicitly on a call to override.
+# Every entry is optional; remove the ones you don't need.
+#
+#   dest_volume    Default for installer.* tools that take dest_volume
+#                  (the AmigaDOS volume to install into).
+#   sources_dir    Default for installer.scan_sources / preflight /
+#                  stage / install_x5000 / run.
+#   bootstrap_dir  Default for installer.stage's diskimage-bootstrap/
+#                  directory.
+#   machine        Default for installer.required_files / preflight /
+#                  stage / run / verify (e.g. "X5000", "A1222").
+#   iso_filename   Default ISO filename inside sources_dir; rarely
+#                  useful since the installer auto-detects it.
+#
+# dest_volume   = "BootTest:"
+# sources_dir   = "<absolute path to your AmigaOS source tree>"
+# bootstrap_dir = "<absolute path to a diskimage-bootstrap directory>"
+# machine       = "X5000"
+
+# ---- Example: QEMU Pegasos2 target -------------------------------
+
+[targets.qemu-pegasos2]
+type         = "qemu"
+display_name = "QEMU Pegasos2"
+machine      = "pegasos2"
+tags         = ["qemu", "pegasos2"]      # filter via fleet.* tools
+qemu_config  = "<absolute path to your QEMU machine's config.json>"
+
+  [targets.qemu-pegasos2.channels.mcpd]
+  enabled  = true
+  endpoint = "127.0.0.1:4422"            # host-side hostfwd port
+
+  [targets.qemu-pegasos2.channels.qmp]
+  enabled  = true
+  endpoint = "127.0.0.1:14422"
+
+  [targets.qemu-pegasos2.channels.gdb]
+  enabled  = true
+  endpoint = "127.0.0.1:1234"
+
+# ---- Example: real AmigaOne X5000 over Ethernet ------------------
+
+[targets.x5000-real]
+type           = "remote"
+display_name   = "X5000 (real hardware)"
+tags           = ["real-hw", "x5000"]
+
+  [targets.x5000-real.channels.mcpd]
+  enabled  = true
+  endpoint = "<target-ip>:4322"

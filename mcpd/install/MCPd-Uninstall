@@ -1,0 +1,23 @@
+; MCPd-Uninstall - remove MCPd auto-start and binary.
+;
+; Restores S:Network-Startup from the backup made by MCPd-Install,
+; then deletes SYS:System/MCPd/.
+
+FailAt 21
+
+If EXISTS S:Network-Startup.before-mcpd
+  Echo "MCPd-Uninstall: restoring S:Network-Startup from backup"
+  Copy S:Network-Startup.before-mcpd S:Network-Startup
+  Delete >NIL: S:Network-Startup.before-mcpd
+Else
+  Echo "MCPd-Uninstall: no backup found - leaving S:Network-Startup as-is"
+  Echo "                (you may need to remove the MCPd line manually)"
+EndIf
+
+If EXISTS SYS:System/MCPd
+  Echo "MCPd-Uninstall: removing SYS:System/MCPd/"
+  Delete >NIL: SYS:System/MCPd ALL QUIET
+EndIf
+
+Echo "MCPd-Uninstall: done. Reboot or kill any running MCPd process."
+Quit 0

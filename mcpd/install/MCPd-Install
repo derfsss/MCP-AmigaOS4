@@ -1,0 +1,47 @@
+; MCPd-Install - install MCPd to SYS:System/MCPd and add it to
+; S:Network-Startup so it auto-launches on boot.
+;
+; Usage from a Shell on the target:
+;     CD <path containing MCPd binary>
+;     Execute MCPd-Install
+;
+; Idempotent: re-running won't double-append the launch line and
+; won't re-overwrite the Network-Startup backup.
+
+FailAt 21
+
+If NOT EXISTS MCPd
+  Echo "MCPd-Install: MCPd binary not found in CWD - copy it here first"
+  Quit 20
+EndIf
+
+Echo "MCPd-Install: copying binary to SYS:System/MCPd/"
+MakeDir >NIL: SYS:System/MCPd
+Copy MCPd SYS:System/MCPd/MCPd CLONE
+; New files default to E=protected (non-executable). +rwed clears
+; bits 0..3 (read/write/execute/delete = all allowed).
+Protect SYS:System/MCPd/MCPd +rwed
+
+If NOT EXISTS S:Network-Startup.before-mcpd
+  Echo "MCPd-Install: backing up S:Network-Startup -> S:Network-Startup.before-mcpd"
+  Copy S:Network-Startup S:Network-Startup.before-mcpd
+EndIf
+
+Search S:Network-Startup "SYS:System/MCPd/MCPd" QUIET >NIL:
+If WARN
+  Echo "MCPd-Install: appending launch line to S:Network-Startup"
+  ; Build the new file via Type + Echo, then move into place.
+  Type S:Network-Startup TO T:mcpd_ns_new
+  Echo >>T:mcpd_ns_new ""
+  Echo >>T:mcpd_ns_new "; MCPd - Model Context Protocol daemon"
+  Echo >>T:mcpd_ns_new "Run >NIL: <NIL: SYS:System/MCPd/MCPd"
+  Copy T:mcpd_ns_new S:Network-Startup
+  Delete >NIL: T:mcpd_ns_new
+Else
+  Echo "MCPd-Install: launch line already present in S:Network-Startup"
+EndIf
+
+Echo ""
+Echo "MCPd-Install: done. Reboot to auto-launch MCPd on :4322."
+Echo "             Or launch immediately:  Run >NIL: <NIL: SYS:System/MCPd/MCPd"
+Quit 0

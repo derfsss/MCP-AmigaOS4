@@ -1,0 +1,26 @@
+; MCPd-Watchdog - relaunch MCPd if it exits.
+;
+; Invoked from S:Network-Startup as:
+;     Run >NIL: <NIL: Execute SYS:System/MCPd/MCPd-Watchdog
+;
+; Each iteration runs MCPd synchronously. If MCPd exits (clean Break
+; or crash), we wait 5s and relaunch. The Wait gives a fast-fail
+; startup loop a chance to be interrupted via Break, and stops it
+; from burning CPU.
+;
+; Logs to T:MCPd-Watchdog.log (RAM-backed, wiped on reboot).
+;
+; To stop the watchdog: Break the process (Status FULL to find pid,
+; then Break <pid> C). The Break interrupts the Wait or the running
+; MCPd, the script exits cleanly.
+
+FailAt 99999
+
+Echo >>T:MCPd-Watchdog.log "==== watchdog starting ===="
+
+Lab loop
+    Echo >>T:MCPd-Watchdog.log "[*] launching MCPd"
+    SYS:System/MCPd/MCPd
+    Echo >>T:MCPd-Watchdog.log "[*] MCPd exited rc=$RC; sleeping 5s"
+    Wait 5
+Skip loop BACK

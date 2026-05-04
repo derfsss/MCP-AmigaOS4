@@ -1,0 +1,8 @@
+# Third-party submodules — one entry per dependency.
+#
+# See THIRD_PARTY_LICENSES.md for licensing details. Each entry pairs
+# a path under third-party/ with an upstream URL (or a derfsss/<name>
+# fork when patches are applied) and a pinned commit.
+[submodule "third-party/cjson"]
+	path = third-party/cjson
+	url = https://github.com/DaveGamble/cJSON.git
