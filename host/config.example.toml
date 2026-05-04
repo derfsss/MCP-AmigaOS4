@@ -81,3 +81,13 @@ tags           = ["real-hw", "x5000"]
   [targets.x5000-real.channels.mcpd]
   enabled  = true
   endpoint = "<target-ip>:4322"
+
+  # Optional: FTDI USB-TTL cable wired to the X5000 P18 internal
+  # MCU header. Enables the `power.*` namespace (power.on /
+  # power.off / power.toggle_stream / etc) -- the only software
+  # path to boot a fully-off X5000. See INSTALL.md for cable
+  # pinout. The MCU is fixed at 38400 8N1.
+  # [targets.x5000-real.channels.mcu]
+  # enabled = true
+  # port    = "COM5"             # or /dev/ttyUSB1 on Linux/macOS
+  # baud    = 38400

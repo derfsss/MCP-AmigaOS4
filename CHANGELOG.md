@@ -1,5 +1,21 @@
 # Change log
 
+## Unreleased
+
+### Added
+
+- **`power.*` namespace** — host-side driver for the Amiga's
+  internal MCU debug shell (X5000 P18 / A1222 P15) over an FTDI
+  USB-TTL cable wired to the host. Bypasses MCPd entirely, so the
+  tools work regardless of AOS state. Eight tools:
+  `power.help`, `power.identify`, `power.identify_dates`,
+  `power.sensors`, `power.toggle_stream`, `power.on`, `power.off`,
+  `power.shell`. The destructive ones (`on` / `off` /
+  `toggle_stream` / `shell`) require `confirm: true`. `power.on`
+  is the only software path to boot a fully-off X5000.
+  Configuration via the existing `[targets.<name>.channels.mcu]`
+  block (`port`, `baud = 38400`).
+
 ## 1.0 — Initial public release
 
 First public release of MCP-AmigaOS4.

@@ -29,6 +29,7 @@ from .tools import fleet as fleet_tool
 from .tools import fleet_discover as discover_tool
 from .tools import fs as fs_tool
 from .tools import installer as installer_tool
+from .tools import power as power_tool
 from .tools import qemu as qemu_tool
 from .tools import serial as serial_tool
 from .tools import snapshots as snap_tool
@@ -490,6 +491,114 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         (specifically: whether PCI I/O at VA 0xF8000000 maps to
         PA 0xF_F800_0000 in the 36-bit world). Read-only; safe."""
         return await sys_tool.sys_tlb_dump(fleet, fleet.resolve_target(target))
+
+    # ---------- power.* (host-side P18 / P15 MCU debug shell) -----
+
+    @mcp.tool(name="power_help", title="power.help")
+    @archived("power.help", archive)
+    async def power_help(
+        *, target: str | None = None,
+    ) -> power_tool.ShellReply:
+        """List the MCU debug-shell commands (`help`). Talks to the
+        host-side serial cable wired to the target's MCU header
+        (X5000 P18 / A1222 P15) -- bypasses MCPd entirely. Requires
+        `[targets.<name>.channels.mcu]` configured."""
+        return await power_tool.power_help(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="power_identify", title="power.identify")
+    @archived("power.identify", archive)
+    async def power_identify(
+        *, target: str | None = None,
+    ) -> power_tool.ShellReply:
+        """MCU H/W + F/W revisions and build type (`id`)."""
+        return await power_tool.power_identify(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="power_identify_dates", title="power.identify_dates")
+    @archived("power.identify_dates", archive)
+    async def power_identify_dates(
+        *, target: str | None = None,
+    ) -> power_tool.ShellReply:
+        """MCU + CPLD build date and time (`id date`)."""
+        return await power_tool.power_identify_dates(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="power_sensors", title="power.sensors")
+    @archived("power.sensors", archive)
+    async def power_sensors(
+        *, target: str | None = None,
+    ) -> power_tool.ShellReply:
+        """One-shot voltage + temperature read via the debug shell
+        (`v`). Reply is human-formatted ASCII; use `sys.mcu_cmd
+        cmd="v"` instead for the wire `$vXXYY...` form parsed into
+        structured fields."""
+        return await power_tool.power_sensors(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="power_toggle_stream", title="power.toggle_stream")
+    @archived("power.toggle_stream", archive)
+    async def power_toggle_stream(
+        *, target: str | None = None,
+        watch_s: float = 0.0, confirm: bool = False,
+    ) -> Any:
+        """Toggle the MCU's continuous-emission state (`q`).
+
+        With `watch_s > 0`: toggle on, capture the stream for that
+        many seconds, toggle back off, return the captured ASCII.
+        With `watch_s = 0`: send `q` once and return the immediate
+        reply -- caller is responsible for sending `q` again to
+        disable.
+
+        Hardware-destructive: requires `confirm=True`."""
+        return await power_tool.power_toggle_stream(
+            fleet, fleet.resolve_target(target),
+            watch_s=watch_s, confirm=confirm,
+        )
+
+    @mcp.tool(name="power_on", title="power.on")
+    @archived("power.on", archive)
+    async def power_on(
+        *, target: str | None = None, confirm: bool = False,
+    ) -> power_tool.ShellReply:
+        """Power up all supplies (`p`). Boots a powered-off X5000;
+        **issues a hard reset if the box is already on**.
+
+        The only software path to power an X5000 ON from a fully-off
+        state. Hardware-destructive: requires `confirm=True`."""
+        return await power_tool.power_on(
+            fleet, fleet.resolve_target(target), confirm=confirm,
+        )
+
+    @mcp.tool(name="power_off", title="power.off")
+    @archived("power.off", archive)
+    async def power_off(
+        *, target: str | None = None, confirm: bool = False,
+    ) -> power_tool.ShellReply:
+        """Shut down all supplies (`s`). Hardware-destructive:
+        requires `confirm=True`."""
+        return await power_tool.power_off(
+            fleet, fleet.resolve_target(target), confirm=confirm,
+        )
+
+    @mcp.tool(name="power_shell", title="power.shell")
+    @archived("power.shell", archive)
+    async def power_shell(
+        *, target: str | None = None,
+        cmd: str, confirm: bool = False,
+    ) -> power_tool.ShellReply:
+        """Generic MCU debug-shell passthrough. Anything other than
+        the documented `help` / `id` / `id date` / `v` / `q` / `p`
+        / `s` commands is untested. Hardware-destructive (could be
+        `s` etc.); requires `confirm=True`."""
+        return await power_tool.power_shell(
+            fleet, fleet.resolve_target(target),
+            cmd=cmd, confirm=confirm,
+        )
 
     @mcp.tool(name="app_notify", title="app.notify")
     @archived("app.notify", archive)
@@ -1181,6 +1290,33 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "tlb_dump":              sys_tool.sys_tlb_dump,
             # board supervisor
             "mcu_cmd":               sys_tool.sys_mcu_cmd,
+        }, method, params or {})
+
+    @mcp.tool(name="power", title="power.dispatch")
+    @archived("power.dispatch", archive)
+    async def power_ns(
+        *, method: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        """power.* dispatcher -- host-side X5000 / A1222 MCU debug
+        shell over the configured `[channels.mcu]` cable. `method`
+        is one of:
+
+          help, identify, identify_dates, sensors          (no confirm)
+          toggle_stream(watch_s, confirm),                 (confirm: true)
+          on(confirm), off(confirm), shell(cmd, confirm)   (confirm: true)
+
+        on / off / toggle_stream / shell are hardware-destructive
+        and require `confirm=True` in their params dict.
+        """
+        return await _ns({
+            "help":            power_tool.power_help,
+            "identify":        power_tool.power_identify,
+            "identify_dates":  power_tool.power_identify_dates,
+            "sensors":         power_tool.power_sensors,
+            "toggle_stream":   power_tool.power_toggle_stream,
+            "on":              power_tool.power_on,
+            "off":             power_tool.power_off,
+            "shell":           power_tool.power_shell,
         }, method, params or {})
 
     @mcp.tool(name="wb", title="wb.dispatch")

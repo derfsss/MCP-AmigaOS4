@@ -244,6 +244,28 @@ terminal program.
 | `serial_tail` | Read the last `max_bytes` of a capture log. |
 | `serial_clear` | Truncate the capture log. Capture must be stopped. |
 
+### Power control (`power.*`)
+
+Host-side driver for the X5000 / A1222 internal MCU debug shell,
+reached via the FTDI USB-TTL header on the Amiga motherboard
+(X5000 P18, A1222 P15). Bypasses MCPd entirely — works even when
+AOS / MCPd are off or wedged. `power.on` is the only software path
+to boot a fully-off X5000.
+
+Requires `[targets.<name>.channels.mcu]` configured with the host
+serial port + 38400 baud. Honours `[server] default_target`.
+
+| Tool | Confirm | Description |
+|---|---|---|
+| `power_help` | — | List the MCU shell's commands (`help`). |
+| `power_identify` | — | MCU H/W + F/W revisions (`id`). |
+| `power_identify_dates` | — | MCU + CPLD build date and time (`id date`). |
+| `power_sensors` | — | Voltages + temperatures, human-formatted (`v`). For the structured wire form, use `sys.mcu_cmd cmd="v"`. |
+| `power_toggle_stream` | **yes** | Toggle continuous-emission state (`q`). Optional `watch_s` to capture for N seconds and auto-toggle off. |
+| `power_on` | **yes** | Power up all supplies (`p`). Boots a powered-off X5000; **resets if already on**. |
+| `power_off` | **yes** | Shut down all supplies (`s`). |
+| `power_shell` | **yes** | Generic shell-command passthrough (escape hatch). |
+
 ### Namespace dispatchers
 
 Each major namespace also has a single dispatcher tool that takes a
@@ -264,6 +286,7 @@ to script an operation by method name rather than by tool name.
 | `app` | `app.*` |
 | `installer` | `installer.*` |
 | `serial` | `serial.*` |
+| `power` | `power.*` |
 
 ## MCP resources
 

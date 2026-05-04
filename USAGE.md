@@ -146,6 +146,7 @@ breakdown.
 | `app.notify`, `notify.fleet`, `notify.on_alert` | Ringhio popup notifications: per-target, broadcast, and event-driven. |
 | `installer.*` | Native AmigaOS 4.1 FE installer pipeline: list machines, scan host sources, preflight, mount / unmount ISO, recursive copy, LHA extraction, Kicklayout read / write / patch, staged upload, per-machine install (`installer.run` / `installer.install_x5000`), and post-install verification. |
 | `serial.*` | Host-side serial-capture lifecycle: start, stop, status, read, tail, clear. Captures a target's debug UART (e.g. X5000 rear-panel DB9) into a host-side log so kernel-debug output during boot or crash recovery can be read without a terminal program tying up the cable. |
+| `power.*` | Host-side X5000 / A1222 MCU debug-shell driver over the FTDI USB-TTL header (X5000 P18, A1222 P15). `power.on` boots a powered-off box; `power.off` shuts it down; `power.toggle_stream(watch_s)` captures continuous sensor blocks; plus `help`, `identify`, `identify_dates`, `sensors`, `shell`. The only software power-on path on real X5000 — bypasses MCPd entirely so it works when AOS is off or wedged. |
 
 ## MCP resources
 

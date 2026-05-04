@@ -193,6 +193,46 @@ Requirements:
 `serial.*` does not depend on MCPd; the capture runs purely on the
 host.
 
+### `power.*` (X5000 / A1222 internal MCU header only)
+
+Drives the Amiga's internal MCU debug shell over a host-side
+FTDI USB-TTL cable. Requirements:
+
+- `pyserial` on the host (same dependency as `serial.*`; already
+  installed).
+- An FTDI USB-TTL cable (3.3 V, 6-pin) wired to the target's
+  internal MCU header — **X5000 P18** or **A1222 P15**. Standard
+  FTDI colour-coded cable: black on pin 1, green on pin 6. **Not
+  the same cable as the rear-panel DB9 console** — that's the
+  U-Boot / kernel-debug UART, not the MCU.
+- Per-target configuration:
+
+  ```toml
+  [targets.x5000-real.channels.mcu]
+  enabled = true
+  port    = "COM5"            # or /dev/ttyUSB1 on Linux/macOS
+  baud    = 38400             # MCU is fixed at 38400 8N1
+  ```
+
+- Operating-system permission to open the port (same group
+  membership requirements as `serial.*` — `dialout` on Debian /
+  Ubuntu, `uucp` on Arch).
+
+The hardware-destructive tools (`power.on`, `power.off`,
+`power.toggle_stream`, `power.shell`) require `confirm: true` on
+every call — same accidental-fire guard as `sys.cold_reboot`.
+
+`power.*` does not depend on MCPd; it bypasses the SoC entirely.
+This is the only software path to boot a fully-off X5000 (the
+MCU's `p` command brings up the supplies regardless of AOS / MCPd
+state).
+
+If `[channels.mcu]` is not configured for the target, every
+`power.*` call returns `NotCapable`. If `serial.*` is currently
+capturing the same port, `power.*` returns `NotCapable` until the
+capture is stopped — the two surfaces share the underlying
+serial-port file handle.
+
 ## Installing the host server
 
 ### Using `uv` (recommended)

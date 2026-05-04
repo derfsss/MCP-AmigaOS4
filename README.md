@@ -33,8 +33,13 @@ can:
 - **Live X5000 hardware introspection** — board / CPU temperatures,
   voltages, fan PWM/RPM via the Cyrus MCU, plus CCSR registers, TLB
   walks, and IDebug-driven per-task crash snapshots.
+- **Out-of-band power control** — with the FTDI USB-TTL cable wired
+  to the X5000 P18 / A1222 P15 header, `power.on` / `power.off` /
+  `power.toggle_stream` drive the MCU debug shell directly from
+  MCP. Works regardless of AOS / MCPd state; the only software
+  path to boot a fully-off X5000.
 
-109 typed MCP tools, 8 live resources, validated end-to-end on QEMU
+118 typed MCP tools, 8 live resources, validated end-to-end on QEMU
 pegasos2 and real AmigaOne X5000 hardware.
 
 If that sounds useful, the rest of this README and the docs below
@@ -82,8 +87,8 @@ context in [USAGE.md](USAGE.md).
 
 - More than 100 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`,
   `wb.*`, `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
-  `app.notify`, `notify.*`, `installer.*`, and `serial.*`, plus a
-  namespace dispatcher per group. (`events.subscribe`,
+  `app.notify`, `notify.*`, `installer.*`, `serial.*`, and
+  `power.*`, plus a namespace dispatcher per group. (`events.subscribe`,
   `events.unsubscribe`, and `events.test_emit` are exposed only as
   daemon RPC methods, not MCP tools — clients call them directly
   through the transport.)
