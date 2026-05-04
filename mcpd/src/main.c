@@ -27,7 +27,7 @@
 extern void applib_register(void);
 extern void applib_shutdown(void);
 
-#define MCPD_VERSION "1.0"
+#define MCPD_VERSION "1.1"
 #define DEFAULT_PORT 4322
 #define BACKLOG 4
 

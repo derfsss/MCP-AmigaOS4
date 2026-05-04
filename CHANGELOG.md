@@ -1,20 +1,44 @@
 # Change log
 
-## Unreleased
+## 1.1 — Out-of-band power control
 
 ### Added
 
 - **`power.*` namespace** — host-side driver for the Amiga's
   internal MCU debug shell (X5000 P18 / A1222 P15) over an FTDI
   USB-TTL cable wired to the host. Bypasses MCPd entirely, so the
-  tools work regardless of AOS state. Eight tools:
+  tools work regardless of AOS / MCPd state. Eight tools:
   `power.help`, `power.identify`, `power.identify_dates`,
   `power.sensors`, `power.toggle_stream`, `power.on`, `power.off`,
-  `power.shell`. The destructive ones (`on` / `off` /
-  `toggle_stream` / `shell`) require `confirm: true`. `power.on`
-  is the only software path to boot a fully-off X5000.
-  Configuration via the existing `[targets.<name>.channels.mcu]`
-  block (`port`, `baud = 38400`).
+  `power.shell`. The four destructive ones (`on` / `off` /
+  `toggle_stream` / `shell`) require `confirm: true` — same
+  accidental-fire guard as `sys.cold_reboot`.
+- **`power.on` is the only software path to boot a fully-off
+  X5000.** Empirically a full off-then-boot cycle (`power.off` →
+  `power.on` → MCPd reachable) takes ~80 s on real X5000.
+  Recovery channel for wedged-network situations where
+  `sys.cold_reboot` can't reach the daemon any more.
+- New `[targets.<name>.channels.mcu]` configuration block
+  surfaces the FTDI USB-TTL cable to the new namespace
+  (`port`, `baud = 38400`). The schema field already existed; v1.1
+  adds the first consumer.
+
+### Tool count
+
+- 109 → 118 tools (+8 fine-grained `power.*` + 1 namespace
+  dispatcher).
+
+### Internal
+
+- New host-side `transports/p18.py` async pyserial driver.
+- `tools/power.py` with channel-resolution + confirm-gate
+  helpers; integrates with the existing `serial.*` capture
+  registry (returns `NotCapable` if the same port is being
+  captured, since the two surfaces share the underlying file
+  handle).
+- 18 new unit tests under `tests/unit/test_power.py` exercising
+  every confirm path + every channel-resolution edge case with a
+  mock-patched transport.
 
 ## 1.0 — Initial public release
 
