@@ -29,9 +29,20 @@ operator. In particular:
   trigger a soft power-off (`sys.cold_reboot`, `sys.mcu_cmd
   cmd="s"`). Treat a target running `MCPd` as fully owned by
   whoever holds the network path to it.
+- **Out-of-band power control**: when the operator has wired the
+  FTDI USB-TTL cable to the target's internal MCU header (X5000
+  P18 / A1222 P15) and configured `[targets.<name>.channels.mcu]`,
+  the host-side `power.*` tools (`power.on`, `power.off`,
+  `power.toggle_stream`, `power.shell`) can boot, hard-reset, and
+  shut down the box from MCP. This bypasses the daemon entirely
+  and works regardless of AOS state. Treat the host workstation
+  running `amiga-fleet-mcp` with cable attached as having physical
+  power-button access to the target.
 - **Confirm-gated destructive operations**: `sys.cold_reboot`,
-  `sys.mcu_cmd cmd="s"`, and the mutating `installer.*` /
-  `debug.write_*` tools require an explicit `confirm: true`
+  `sys.mcu_cmd cmd="s"`, the mutating `installer.*` /
+  `debug.write_*` tools, and the destructive `power.*` tools
+  (`power.on` / `power.off` / `power.toggle_stream` /
+  `power.shell`) all require an explicit `confirm: true`
   parameter. This is a guardrail against accidental fire, **not**
   an authentication mechanism. A connected client can always pass
   `confirm: true`.

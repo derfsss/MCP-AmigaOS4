@@ -210,6 +210,62 @@ arbitrary address to module / function / source.
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
 
+## Out-of-band power control (`power.*`)
+
+For real-hardware targets with the FTDI USB-TTL cable wired to the
+internal MCU debug header (X5000 P18, A1222 P15), the `power.*`
+namespace drives the MCU's interactive `>>` shell directly from
+the host. **It bypasses MCPd entirely** — works regardless of AOS
+or MCPd state, which makes it the only software path to:
+
+- Boot a fully-off X5000 (`power.on` ↔ MCU `p` command).
+- Recover a wedged box where `sys.cold_reboot` can't reach the
+  daemon any more (`power.off` then `power.on`).
+- Stream live sensor blocks over the cable
+  (`power.toggle_stream` with `watch_s = N`) without touching
+  AOS at all.
+
+Setup is one TOML block per target — see
+[INSTALL.md § `power.*`](INSTALL.md#power-x5000--a1222-internal-mcu-header-only)
+for the cable pinout and config:
+
+```toml
+[targets.x5000-real.channels.mcu]
+enabled = true
+port    = "COM5"            # or /dev/ttyUSB1
+baud    = 38400
+```
+
+| Tool | Shell | Confirm | What it does |
+|---|---|---|---|
+| `power.help` | `help` | — | Print the MCU's command list. |
+| `power.identify` | `id` | — | Cyrus-Plus board name + MCU/CPLD versions. |
+| `power.identify_dates` | `id date` | — | MCU + CPLD build dates and times. |
+| `power.sensors` | `v` | — | Voltages + temperatures, human-formatted. (For the structured wire form, prefer `sys.mcu_cmd cmd="v"`.) |
+| `power.toggle_stream` | `q` | yes | Toggle continuous-stream mode. With `watch_s = N`, capture for N seconds and auto-toggle off. |
+| `power.on` | `p` | yes | Power up all supplies. **Resets the box if already on.** |
+| `power.off` | `s` | yes | Shut down all supplies. |
+| `power.shell` | (any) | yes | Generic passthrough — escape hatch for undocumented MCU shell commands. |
+
+Hardware-destructive tools (`on`, `off`, `toggle_stream`, `shell`)
+require `confirm: true` on every call — same accidental-fire guard
+as `sys.cold_reboot`. If the cable is captured by `serial.*`, the
+power tools return `NotCapable` until the capture stops; the two
+surfaces share the underlying serial-port file handle.
+
+A typical recovery flow when the X5000 is wedged on the network:
+
+```
+power.off(target="x5000-real", confirm=true)
+# wait ~25 s for the supplies to drop
+power.on(target="x5000-real", confirm=true)
+# wait ~54 s for AOS + MCPd to come back up
+fleet.target_status(target="x5000-real")     # confirm reachable
+```
+
+`power.on` `p` empirically takes ~80 s for a full off-then-boot
+cycle before MCPd is reachable again on real X5000 hardware.
+
 ## Validation
 
 ```sh
@@ -259,3 +315,13 @@ MCPd traps `SIGBREAKF_CTRL_C`, unregisters from
 auto-start watchdog is installed, it will relaunch the daemon shortly
 afterwards; break the watchdog process too if the daemon should stay
 down until reboot.
+
+If the daemon is wedged and the network is no longer responsive,
+two out-of-band recovery paths are available:
+
+- `sys.cold_reboot(target=..., confirm=true)` if MCPd itself is
+  still answering JSON-RPC.
+- On X5000 / A1222 with the MCU header cable wired,
+  `power.off(target=..., confirm=true)` followed by `power.on(...)`
+  cycles the box from outside the SoC entirely (see
+  [Out-of-band power control](#out-of-band-power-control-power)).
