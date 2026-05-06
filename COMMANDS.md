@@ -85,20 +85,29 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 
 ### `fs.*`
 
+These are the daemon-side primitives. The byte-level methods
+(`fs.read` / `fs.write` / `fs.write_chunk`) carry content as
+base64 inside the JSON-RPC envelope — useful when the bytes only
+exist in memory or in the conversation context rather than as a
+file on the host. For "I have a host file, please transfer it"
+in either direction, prefer the host-side wrappers
+[`fs.upload` / `fs.download`](#per-target-tools) (described
+below) — they wrap these primitives with auto-chunking,
+auto-base64, auto-zlib, optional resume + SHA-256 verify.
+
 | Method | Description |
 |---|---|
 | `fs.list` | Directory listing. Optional `recursive` + `max_depth`. |
 | `fs.stat` | File or directory metadata. |
-| `fs.read` | Read a file. Optional `offset` + `length` for chunked reads. |
-| `fs.write` | Write a file from base64 payload. |
+| `fs.read` | Byte-level read: returns base64 of `length` bytes from `offset` (defaults: whole file from 0). Effective per-call cap ~24 MiB raw post-base64, so loop client-side for larger ranges — or use `fs.download`. |
+| `fs.write` | Byte-level one-shot write: takes base64 payload in the request, writes the whole file. Same ~24 MiB raw cap. For larger payloads use `fs.write_chunk` (or `fs.upload`). |
+| `fs.write_chunk` | Byte-level chunked / resumable write at `offset`. First chunk truncates by default; later chunks seek-and-write. Optional `compression="zlib"` + `raw_size`. Optional `total_size` on the first chunk pre-extends the file. Building block for `fs.upload`. |
 | `fs.delete` | Delete a path. Optional `recursive`. |
 | `fs.makedir` | Create a directory. |
 | `fs.rename` | Rename / move a file or directory. |
 | `fs.protect` | Set protection bits on a path. |
-| `fs.copy` | Copy a file (preserves protection and date via `CLONE`). |
+| `fs.copy` | Copy a file *on the target* (preserves protection and date via `CLONE`). Both src and dst are paths on the same Amiga. |
 | `fs.hash` | Streaming SHA-256 of a file. |
-| `fs.upload` | Whole-file host → target transfer. Hides the chunking + base64 + zlib mechanics: auto-chunks any size, auto-base64-encodes (binary-clean), auto-zlib when it saves ≥5%. Optional `resume`, `verify=sha256`. |
-| `fs.download` | Whole-file target → host transfer. Auto-pages via `fs.read(offset, length)`, auto-base64-decodes. Optional `resume`, `verify=sha256`. |
 
 ### `exec.*`
 
@@ -152,7 +161,8 @@ prints the live list.
 |---|---|
 | `proto_capabilities` | `proto.capabilities` |
 | `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
-| `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_upload` / `fs_download` | `fs.*` |
+| `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
+| `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` |
 | `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub) |
