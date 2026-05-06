@@ -1,5 +1,37 @@
 # Change log
 
+## Unreleased
+
+### Added
+
+- **`fs.upload` and `fs.download`** — whole-file transfer
+  wrappers that hide the chunking + base64 + zlib mechanics.
+  Point at a single file in either direction; works for any
+  size and any byte content (binary-clean):
+  - **`fs.upload(target, local_path, remote_path, ...)`**:
+    auto-chunks files larger than fit in one JSON-RPC frame,
+    auto-base64-encodes each chunk, auto-zlib-compresses
+    when `compression="auto"` (default) and the result is at
+    least 5% smaller. Skips pre-compressed .lha / .zip / .iso
+    payloads automatically. No separate reassembly step —
+    chunks land at their byte offsets in the destination file
+    via `fs.write_chunk`.
+  - **`fs.download(target, remote_path, local_path, ...)`**:
+    auto-pages via repeated `fs.read(offset, length)` calls,
+    auto-base64-decodes on receipt.
+  - Both support `resume=True` (continues from the existing
+    on-target / on-disk size) and `verify=True` (SHA-256
+    both sides via `fs.hash` + local hashlib walk; raises on
+    mismatch).
+  - Available as fine-grained tools `fs_upload` / `fs_download`
+    and via the `fs` namespace dispatcher
+    (`fs(method="upload" / "download", params={...})`).
+- 15 new unit tests under `tests/unit/test_fs_transfer.py`
+  covering single-chunk + multi-chunk + auto-zlib + resume +
+  verify paths, plus a binary-clean round-trip with all 256
+  byte values to prove the auto-base64 path doesn't corrupt
+  binary content.
+
 ## 1.1 — Out-of-band power control
 
 ### Added

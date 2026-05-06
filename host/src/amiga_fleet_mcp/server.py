@@ -230,6 +230,85 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         """Streaming SHA-256 of a file (only sha256 supported for now)."""
         return await fs_tool.fs_hash(fleet, fleet.resolve_target(target), path, algo)
 
+    @mcp.tool(name="fs_upload", title="fs.upload")
+    @archived("fs.upload", archive)
+    async def fs_upload(
+        *,
+        target: str | None = None,
+        local_path: str,
+        remote_path: str,
+        chunk_size: int = 24 * 1024 * 1024,
+        compression: str = "auto",
+        verify: bool = False,
+        resume: bool = False,
+    ) -> fs_tool.UploadResult:
+        """Transfer a host-side file to the target -- works for any
+        size and any byte content (binary-clean). Hides the chunk +
+        base64 + zlib mechanics:
+
+          - **auto-chunks** files larger than fit in one JSON-RPC
+            frame, sending each chunk via `fs.write_chunk` at
+            consecutive byte offsets in the same destination file
+          - **auto-base64-encodes** each chunk on the way out
+            (and the daemon decodes on receipt), so NUL / 0xFF /
+            UTF-8 / arbitrary bytes round-trip exactly
+          - **auto-zlib-compresses** each chunk when
+            `compression="auto"` (default) and the result is at
+            least 5% smaller; skips pre-compressed .lha / .zip /
+            .iso payloads automatically
+
+        `resume=True`: probe the remote with `fs.stat` and
+        continue upload from the existing on-target size. Useful
+        after a network drop. Pair with `verify=True` for
+        end-to-end integrity if you don't trust the partial state.
+
+        `verify=True`: SHA-256 both sides via `fs.hash` + a local
+        hashlib walk; raise on mismatch.
+
+        No reassembly step needed -- chunks land at their byte
+        offsets within the same destination file."""
+        from typing import Literal, cast
+        return await fs_tool.fs_upload(
+            fleet, fleet.resolve_target(target),
+            local_path=local_path, remote_path=remote_path,
+            chunk_size=chunk_size,
+            compression=cast(Literal["none", "zlib", "auto"], compression),
+            verify=verify, resume=resume,
+        )
+
+    @mcp.tool(name="fs_download", title="fs.download")
+    @archived("fs.download", archive)
+    async def fs_download(
+        *,
+        target: str | None = None,
+        remote_path: str,
+        local_path: str,
+        chunk_size: int = 24 * 1024 * 1024,
+        verify: bool = False,
+        resume: bool = False,
+    ) -> fs_tool.DownloadResult:
+        """Transfer a target file to the host -- works for any
+        size and any byte content (binary-clean). Hides the page +
+        base64 mechanics:
+
+          - **auto-pages** via repeated `fs.read(offset, length)`
+            calls; one round-trip per `chunk_size` slice
+          - **auto-base64-decodes** each chunk on receipt (the
+            daemon always returns base64 over the wire), so
+            arbitrary bytes round-trip exactly
+
+        `resume=True`: continues append-mode from the existing
+        local file size if a partial download is on disk.
+
+        `verify=True`: SHA-256 both sides via `fs.hash` + a local
+        hashlib walk; raise on mismatch."""
+        return await fs_tool.fs_download(
+            fleet, fleet.resolve_target(target),
+            remote_path=remote_path, local_path=local_path,
+            chunk_size=chunk_size,
+            verify=verify, resume=resume,
+        )
+
     @mcp.tool(name="exec_cmd", title="exec.cmd")
     @archived("exec.cmd", archive)
     async def exec_cmd(
@@ -1222,6 +1301,10 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
           protect(target, path, bits)
           copy(target, src, dst)
           hash(target, path, algo="sha256")
+          upload(target, local_path, remote_path, chunk_size=24M,
+                 compression="auto", verify=False, resume=False)
+          download(target, remote_path, local_path, chunk_size=24M,
+                   verify=False, resume=False)
 
         target=None falls back to server.default_target.
         """
@@ -1237,6 +1320,8 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "protect":     fs_tool.fs_protect,
             "copy":        fs_tool.fs_copy,
             "hash":        fs_tool.fs_hash,
+            "upload":      fs_tool.fs_upload,
+            "download":    fs_tool.fs_download,
         }, method, params or {})
 
     @mcp.tool(name="sys", title="sys.dispatch")

@@ -161,3 +161,94 @@ async def chunked_upload(
         compressed_chunks=compressed_count,
         elapsed_s=time.monotonic() - t0,
     )
+
+
+# ---- download path ------------------------------------------------
+
+
+@dataclass
+class DownloadStats:
+    path: str
+    bytes_total: int
+    chunks: int
+    elapsed_s: float
+
+
+# Conservative read default: 24 MiB raw bytes per fs.read call.
+# fs.read returns raw bytes (no compression on this side yet) so
+# stays comfortably under the 32 MiB framing cap after base64.
+DEFAULT_READ_RAW = 24 * 1024 * 1024
+
+
+async def chunked_download(
+    fleet: Fleet,
+    target: str,
+    remote_path: str,
+    local_path: str | Path,
+    *,
+    chunk_size: int = DEFAULT_READ_RAW,
+    retries: int = 2,
+    resume_from: int = 0,
+) -> DownloadStats:
+    """Pull a file from the target by repeated `fs.read(offset,
+    length)` calls; reassembles into a single local file.
+
+    Resumable: pass `resume_from = N` (or use `verify=True` flag in
+    the wrapper tool) to start from byte N. Caller is responsible
+    for opening the local file in append-binary mode if resuming.
+
+    The remote file is read in size order via consecutive offsets;
+    no out-of-order assembly is needed -- bytes land at the same
+    offset they came from.
+    """
+    local = Path(local_path)
+    local.parent.mkdir(parents=True, exist_ok=True)
+
+    # Probe remote size via fs.stat so we know when to stop.
+    t = fleet.mcpd(target)
+    stat_raw = await t.request("fs.stat", {"path": remote_path}, timeout_s=30.0)
+    total = int(stat_raw["size"])
+
+    chunk_count = 0
+    t0 = time.monotonic()
+
+    mode = "ab" if resume_from > 0 else "wb"
+    with local.open(mode) as fh:
+        offset = resume_from
+        while offset < total:
+            length = min(chunk_size, total - offset)
+            last_err: Exception | None = None
+            for attempt in range(retries + 1):
+                try:
+                    raw = await t.request(
+                        "fs.read",
+                        {"path": remote_path, "offset": offset,
+                         "length": length},
+                        timeout_s=120.0,
+                    )
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < retries:
+                        time.sleep(0.5 * (attempt + 1))
+            if last_err is not None:
+                raise RuntimeError(
+                    f"fs.read failed at offset={offset} "
+                    f"after {retries+1} attempts: {last_err}"
+                ) from last_err
+            assert raw is not None  # for type-checker
+            payload = base64.b64decode(raw["content_b64"])
+            fh.write(payload)
+            offset += len(payload)
+            chunk_count += 1
+            if len(payload) == 0:
+                # Avoid infinite loop on a malformed daemon reply
+                break
+
+    return DownloadStats(
+        path=str(local),
+        bytes_total=total,
+        chunks=chunk_count,
+        elapsed_s=time.monotonic() - t0,
+    )
