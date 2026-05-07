@@ -111,6 +111,25 @@ and pass overrides on the rare exceptions.
 The same precedent applies to the existing `[server] default_target`
 key: a single-target setup can omit `target=...` from every call.
 
+## Helper paths (`[paths]`)
+
+The optional `[paths]` block points at external host-side checkouts
+and binaries. Every entry is **only required by a specific tool
+surface** — leave the others unset (or comment them out) and the
+remaining tools work fine. None of these are needed to talk to an
+already-running target via `fs.*` / `exec.*` / `sys.*` / `wb.*` /
+`power.*`.
+
+| `[paths]` key      | Required by                                                                                                                        | What to point it at |
+|---|---|---|
+| `qemu_runner`      | `qemu.*` lifecycle tools (`start` / `stop` / `reset` / `screenshot` / `savevm` / `loadvm` / `list_snapshots` / `delete_snapshot`) and the QMP transport. | An absolute path to a checkout of `derfsss/qemu-runner`. |
+| `amiga_qemu_tests` | `tests.*` orchestration (`tests.list_suites`, `tests.run_suite`, `tests.run_standard_dos_tests`, `tests.parse_output`).             | An absolute path to a checkout of `derfsss/AmigaQemuTests`. |
+| `qemu_binary`      | `qemu.start` only.                                                                                                                  | An absolute path to `qemu-system-ppc` (`qemu-system-ppc.exe` on Windows). |
+
+When a tool needs one of these and it's missing, the call returns
+an `InvalidParams` error naming the missing key, e.g.
+*`paths.amiga_qemu_tests not set in config — see USAGE.md#helper-paths-paths or run amiga-fleet-mcp --init`*.
+
 ## Discovering targets without prior IP knowledge
 
 ```sh
@@ -134,7 +153,7 @@ breakdown.
 | Namespace | Description |
 |---|---|
 | `proto.*` | Capability and version reporting. |
-| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256). |
+| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
 | `exec.cmd` | Run an AmigaDOS command with optional `args[]`, `cwd`, and timeout. |
 | `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder. |
 | `wb.*` | Workbench introspection: screens, windows, public-screen registry, frontmost screen and window. |
@@ -198,6 +217,54 @@ to maintain a persistent connection.
 serial output to the archive. `qemu.savevm` and `qemu.loadvm`
 checkpoint and restore guest state. `qemu.screenshot` returns a PNG
 image of the framebuffer.
+
+## Whole-file transfers (`fs.upload` / `fs.download`)
+
+The low-level `fs.read` / `fs.write` / `fs.write_chunk` methods
+operate at byte-level on the wire (32 MiB JSON-RPC frame cap).
+Two convenience wrappers hide all of that — point at a single
+file in either direction and the transfer just works:
+
+```python
+# Host -> target. Any size, any byte content.
+await fs.upload(
+    target="x5000-real",
+    local_path="/host/path/to/big.iso",
+    remote_path="DH0:tmp/big.iso",
+    verify=True,            # SHA-256 both sides after; raise on mismatch
+)
+
+# Target -> host. Same UX.
+await fs.download(
+    target="x5000-real",
+    remote_path="DH0:S/Startup-Sequence",
+    local_path="/host/path/startup.txt",
+    resume=True,            # continue an interrupted partial download
+)
+```
+
+What happens transparently:
+
+- **Auto-chunking** — files larger than `chunk_size` (24 MiB raw
+  by default) split into multiple `fs.write_chunk` calls (or
+  multiple `fs.read(offset, length)` calls on the way back).
+  Each chunk lands at its byte offset in the same destination
+  file; there's no separate reassembly step.
+- **Auto base64** — the JSON-RPC envelope can't carry raw bytes,
+  so chunks are base64-encoded on the way out and decoded on
+  the way back. Binary-clean: NUL / 0xFF / arbitrary bytes
+  round-trip exactly.
+- **Auto zlib** (uploads only) — when `compression="auto"` and
+  the result is at least 5% smaller, each chunk ships
+  pre-compressed. Skips already-compressed payloads (.lha /
+  .zip / .iso).
+- **Optional resume** — `resume=True` probes the remote /
+  local file size and continues from the partial state.
+- **Optional verify** — `verify=True` adds an `fs.hash`
+  round-trip + a local hashlib walk and raises on mismatch.
+
+For library callers, the same surface is reachable via
+`amiga_fleet_mcp.tools.fs.fs_upload` / `fs_download`.
 
 ## Live debugging
 

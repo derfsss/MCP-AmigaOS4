@@ -22,11 +22,22 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 # mcp_http_addr = "127.0.0.1:7180"       # only set when mcp_transport != "stdio"
 
 [paths]
-# Optional helper paths used by some tools (QEMU lifecycle, test
-# orchestration). Omit entries you do not use.
-qemu_runner      = "<absolute path to qemu-runner checkout>"
-amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
-qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
+# Optional helper paths. Each entry is consumed by a specific tool
+# surface; omit any entry whose tools you do not use. None of these
+# are required for `fs.*` / `exec.*` / `sys.*` / `wb.*` / `power.*`
+# against an already-running target.
+#
+# qemu_runner      Required by `qemu.*` lifecycle (start / stop / reset /
+#                  screenshot / savevm / loadvm) and by the QMP transport.
+#                  Path to a checkout of derfsss/qemu-runner.
+# amiga_qemu_tests Required by `tests.*` orchestration. Path to a checkout
+#                  of derfsss/AmigaQemuTests.
+# qemu_binary      Required by `qemu.start`. Absolute path to
+#                  qemu-system-ppc (qemu-system-ppc.exe on Windows).
+#
+# qemu_runner      = "<absolute path to qemu-runner checkout>"
+# amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
+# qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
 
 [defaults]
 # Per-tool parameter defaults. When a tool is invoked without a

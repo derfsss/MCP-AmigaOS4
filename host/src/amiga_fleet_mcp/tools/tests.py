@@ -30,7 +30,11 @@ _LIB_RESULTS: ModuleType | None = None
 def _load_aqt_module(aqt_root: Path | None, rel_path: str,
                      module_alias: str) -> ModuleType:
     if aqt_root is None:
-        raise InternalError("tests.* needs paths.amiga_qemu_tests in config.toml")
+        raise InternalError(
+            "tests.* needs paths.amiga_qemu_tests in config.toml — "
+            "see USAGE.md#helper-paths-paths or run "
+            "`amiga-fleet-mcp --init`"
+        )
     src = Path(aqt_root) / rel_path
     if not src.exists():
         raise InternalError(f"AmigaQemuTests module missing: {src}")
@@ -69,7 +73,11 @@ class SuitesResult(BaseModel):
 async def tests_list_suites(fleet: Fleet) -> SuitesResult:
     aqt = fleet.config.paths.amiga_qemu_tests
     if aqt is None:
-        raise InvalidParams("paths.amiga_qemu_tests not set in config")
+        raise InvalidParams(
+            "paths.amiga_qemu_tests not set in config — "
+            "see USAGE.md#helper-paths-paths or run "
+            "`amiga-fleet-mcp --init`"
+        )
     proj_dir = Path(aqt) / "config" / "projects"
     if not proj_dir.is_dir():
         raise InternalError(f"AmigaQemuTests projects dir missing: {proj_dir}")
@@ -261,7 +269,11 @@ class SuiteRunResult(BaseModel):
 def _load_suite(fleet: Fleet, name: str) -> dict[str, Any]:
     aqt = fleet.config.paths.amiga_qemu_tests
     if aqt is None:
-        raise InvalidParams("paths.amiga_qemu_tests not set")
+        raise InvalidParams(
+            "paths.amiga_qemu_tests not set in config — "
+            "see USAGE.md#helper-paths-paths or run "
+            "`amiga-fleet-mcp --init`"
+        )
     p = Path(aqt) / "config" / "projects" / f"{name}.json"
     if not p.exists():
         raise InvalidParams(

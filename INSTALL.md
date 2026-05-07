@@ -250,11 +250,15 @@ dependencies into a local `.venv/`.
 
 ```sh
 cd host
-python -m venv .venv
+python3 -m venv .venv         # Windows: py -3 -m venv .venv
 . .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e .
 amiga-fleet-mcp --version
 ```
+
+> Use `python3` / `py -3` rather than bare `python`: modern Linux
+> and macOS often ship `python3` only, and the Windows launcher
+> uses `py -3` to disambiguate from any 2.x install on `$PATH`.
 
 ### Wiring the server into an MCP client
 
@@ -264,8 +268,29 @@ For Claude Code:
 claude mcp add amiga-fleet -- amiga-fleet-mcp --config /path/to/config.toml
 ```
 
-A starter configuration file lives at `host/config.example.toml`; copy
-it to a permanent location (for example
+For a guided setup, run the wizard:
+
+```sh
+amiga-fleet-mcp --init
+```
+
+If an AI agent is doing the install, point it at
+[AGENTS_SETUP.md](AGENTS_SETUP.md) — that file is a deterministic
+spec (detection commands, decision tree, minimal config templates,
+validation steps, error → cause table) the agent can execute
+without further human input.
+
+It walks through every config block, validates the result through
+the same schema the server uses at startup, and writes
+`config.toml` to the platform default
+(`%APPDATA%\amiga-fleet-mcp\config.toml` on Windows,
+`~/.config/amiga-fleet-mcp/config.toml` elsewhere). Pass `--config
+/some/other/path.toml` to redirect the destination, `--force` to
+overwrite without prompting, or `--non-interactive` to emit a
+no-targets stub useful for CI smoke tests.
+
+If you'd rather hand-edit, copy `host/config.example.toml` to a
+permanent location (for example
 `~/.config/amiga-fleet-mcp/config.toml`) and edit the `[targets.*]`
 blocks. See [USAGE.md](USAGE.md) for the configuration schema.
 

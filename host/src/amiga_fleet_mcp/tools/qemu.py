@@ -84,7 +84,11 @@ async def qemu_start(fleet: Fleet, target: str) -> QemuStartResult:
         )
     qemu_binary = fleet.config.paths.qemu_binary
     if qemu_binary is None:
-        raise InvalidParams("paths.qemu_binary not set in config")
+        raise InvalidParams(
+            "paths.qemu_binary not set in config — "
+            "see USAGE.md#helper-paths-paths or run "
+            "`amiga-fleet-mcp --init`"
+        )
 
     existing = fleet.qemu_process(target)
     if existing is not None and existing.poll() is None:

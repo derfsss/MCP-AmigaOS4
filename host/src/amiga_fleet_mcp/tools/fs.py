@@ -244,3 +244,234 @@ async def fs_copy(
         dst=raw.get("dst", dst),
         output=raw.get("output", ""),
     )
+
+
+# ---- whole-file transfer wrappers ---------------------------------
+#
+# fs.upload / fs.download hide the chunk-size + zlib decisions so a
+# user just points to a single file, and any size works. There's no
+# user-visible "reassembly" -- chunks are written at byte offsets
+# within the SAME destination file (uploads) or pasted in arrival
+# order into a single output file (downloads). Both are resumable
+# and offer optional SHA-256 verify.
+
+
+class UploadResult(BaseModel):
+    target: str
+    local_path: str
+    remote_path: str
+    bytes_total: int
+    bytes_sent_compressed: int
+    chunks: int
+    compressed_chunks: int
+    elapsed_s: float
+    speed_mib_s: float
+    compression_ratio: float
+    resumed_from: int = 0
+    sha256_verified: bool = False
+    sha256: str | None = None
+
+
+class DownloadResult(BaseModel):
+    target: str
+    remote_path: str
+    local_path: str
+    bytes_total: int
+    chunks: int
+    elapsed_s: float
+    speed_mib_s: float
+    resumed_from: int = 0
+    sha256_verified: bool = False
+    sha256: str | None = None
+
+
+async def fs_upload(
+    fleet: Fleet,
+    target: str,
+    *,
+    local_path: str,
+    remote_path: str,
+    chunk_size: int = 24 * 1024 * 1024,
+    compression: Literal["none", "zlib", "auto"] = "auto",
+    verify: bool = False,
+    resume: bool = False,
+) -> UploadResult:
+    """Transfer a host-side file to the target. Works for any size
+    and any byte content: NUL bytes, 0xFF, UTF-8 sequences,
+    control characters all round-trip exactly. The wrapper:
+
+    1. **Auto-chunks** files larger than will fit in one JSON-RPC
+       frame, sending each chunk via `fs.write_chunk` at
+       consecutive byte offsets in the same destination file.
+       Files smaller than `chunk_size` go in one chunk.
+    2. **Auto-base64-encodes** each chunk on the way out (the
+       JSON-RPC envelope can't carry raw bytes). The daemon
+       decodes on receipt; you give the wrapper a path, you get
+       the bytes on the target.
+    3. **Auto-zlib-compresses** each chunk when
+       `compression="auto"` (default) and the result is at least
+       5% smaller. Skips pre-compressed payloads (.lha / .zip /
+       .iso) because their compressed form is no smaller.
+
+    `resume=True` probes the remote with `fs.stat` and continues
+    upload from the existing on-target size. Useful after a
+    network drop. Does **not** verify that the partial bytes
+    match -- pair with `verify=True` for end-to-end integrity.
+
+    `verify=True` runs `fs.hash` (SHA-256) on the target plus a
+    local hashlib walk, and raises `RuntimeError` if they
+    disagree. Adds one extra round-trip + a full local read.
+
+    No reassembly step: `fs.write_chunk` writes each chunk at its
+    byte offset within the destination file, so the file is
+    intact on disk the moment the last chunk lands.
+    """
+    import hashlib
+    from pathlib import Path
+    from time import monotonic
+
+    from ..upload import chunked_upload  # local import to avoid cycle
+
+    local = Path(local_path)
+    if not local.is_file():
+        raise FileNotFoundError(f"local file does not exist: {local}")
+    total = local.stat().st_size
+
+    resume_from = 0
+    if resume:
+        try:
+            stat = await fs_stat(fleet, target, remote_path)
+            resume_from = int(stat.size)
+            if resume_from >= total:
+                # Already complete -- short-circuit.
+                ratio = 1.0
+                return UploadResult(
+                    target=target, local_path=str(local),
+                    remote_path=remote_path,
+                    bytes_total=total, bytes_sent_compressed=0,
+                    chunks=0, compressed_chunks=0,
+                    elapsed_s=0.0, speed_mib_s=0.0,
+                    compression_ratio=ratio,
+                    resumed_from=resume_from,
+                )
+        except Exception:
+            resume_from = 0  # remote file doesn't exist; full upload
+
+    t0 = monotonic()
+    stats = await chunked_upload(
+        fleet, target, local, remote_path,
+        chunk_size=chunk_size, compression=compression,
+        resume_from=resume_from,
+    )
+
+    sha = None
+    sha_ok = False
+    if verify:
+        h = hashlib.sha256()
+        with local.open("rb") as fh:
+            for blk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(blk)
+        sha = h.hexdigest()
+        remote_hash = await fs_hash(fleet, target, remote_path, "sha256")
+        if remote_hash.hash.lower() != sha.lower():
+            raise RuntimeError(
+                f"upload SHA-256 mismatch for {remote_path!r}: "
+                f"local={sha} remote={remote_hash.hash}"
+            )
+        sha_ok = True
+
+    elapsed = monotonic() - t0
+    speed = (total / (1024 * 1024)) / elapsed if elapsed > 0 else 0.0
+    return UploadResult(
+        target=target,
+        local_path=str(local),
+        remote_path=remote_path,
+        bytes_total=stats.bytes_total,
+        bytes_sent_compressed=stats.bytes_sent_compressed,
+        chunks=stats.chunks,
+        compressed_chunks=stats.compressed_chunks,
+        elapsed_s=stats.elapsed_s,
+        speed_mib_s=round(speed, 2),
+        compression_ratio=round(stats.compression_ratio, 3),
+        resumed_from=resume_from,
+        sha256_verified=sha_ok,
+        sha256=sha,
+    )
+
+
+async def fs_download(
+    fleet: Fleet,
+    target: str,
+    *,
+    remote_path: str,
+    local_path: str,
+    chunk_size: int = 24 * 1024 * 1024,
+    verify: bool = False,
+    resume: bool = False,
+) -> DownloadResult:
+    """Transfer a target file to the host. Works for any size and
+    any byte content. The wrapper:
+
+    1. **Auto-pages** via repeated `fs.read(offset, length)`
+       calls; one round-trip per `chunk_size` slice.
+    2. **Auto-base64-decodes** each chunk on receipt (the daemon
+       always returns base64 over the wire) before writing to
+       the local file. Binary-clean: NUL bytes / 0xFF / arbitrary
+       byte sequences all round-trip exactly.
+
+    `resume=True`: continues append-mode from the existing local
+    file size if a partial download is on disk.
+
+    `verify=True`: SHA-256 both sides (target via `fs.hash`,
+    local via hashlib) and raises `RuntimeError` on mismatch.
+
+    Bytes land in arrival order at the matching offsets in the
+    output file -- no separate reassembly step.
+    """
+    import hashlib
+    from pathlib import Path
+    from time import monotonic
+
+    from ..upload import chunked_download
+
+    local = Path(local_path)
+    resume_from = 0
+    if resume and local.is_file():
+        resume_from = local.stat().st_size
+
+    t0 = monotonic()
+    stats = await chunked_download(
+        fleet, target, remote_path, local,
+        chunk_size=chunk_size, resume_from=resume_from,
+    )
+
+    sha = None
+    sha_ok = False
+    if verify:
+        h = hashlib.sha256()
+        with local.open("rb") as fh:
+            for blk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(blk)
+        sha = h.hexdigest()
+        remote_hash = await fs_hash(fleet, target, remote_path, "sha256")
+        if remote_hash.hash.lower() != sha.lower():
+            raise RuntimeError(
+                f"download SHA-256 mismatch for {remote_path!r}: "
+                f"local={sha} remote={remote_hash.hash}"
+            )
+        sha_ok = True
+
+    elapsed = monotonic() - t0
+    speed = (stats.bytes_total / (1024 * 1024)) / elapsed if elapsed > 0 else 0.0
+    return DownloadResult(
+        target=target,
+        remote_path=remote_path,
+        local_path=str(local),
+        bytes_total=stats.bytes_total,
+        chunks=stats.chunks,
+        elapsed_s=stats.elapsed_s,
+        speed_mib_s=round(speed, 2),
+        resumed_from=resume_from,
+        sha256_verified=sha_ok,
+        sha256=sha,
+    )

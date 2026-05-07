@@ -25,7 +25,9 @@ def _load_qmp_client(qemu_runner_path: Path | None) -> ModuleType:
         return _QMP_MODULE
     if qemu_runner_path is None:
         raise InternalError(
-            "QMP transport needs paths.qemu_runner in config.toml"
+            "QMP transport needs paths.qemu_runner in config.toml — "
+            "see USAGE.md#helper-paths-paths or run "
+            "`amiga-fleet-mcp --init`"
         )
     src = Path(qemu_runner_path) / "qmp_client.py"
     if not src.exists():

@@ -11,7 +11,7 @@
 #include "cJSON.h"
 
 #define MCPD_PROTOCOL_VERSION "1.0"
-#define MCPD_SERVER_VERSION   "mcpd/1.1"
+#define MCPD_SERVER_VERSION   "mcpd/1.2"
 
 typedef int (*method_handler_fn)(cJSON *params,
                                  cJSON **out_result,
