@@ -1,6 +1,6 @@
 # Change log
 
-## Unreleased
+## 1.2 — Guided setup and whole-file transfers
 
 ### Added
 
@@ -58,6 +58,11 @@
   verify paths, plus a binary-clean round-trip with all 256
   byte values to prove the auto-base64 path doesn't corrupt
   binary content.
+
+### Tool count
+
+- 118 → 121 tools (+`fs.upload`, +`fs.download`, +1 from the
+  fine-grained registration shape).
 
 ## 1.1 — Out-of-band power control
 
