@@ -2135,12 +2135,36 @@ def main(argv: list[str] | None = None) -> int:
         "--discover-timeout-ms", type=int, default=1500,
         help="Window to wait for discovery responses (default 1500).",
     )
+    parser.add_argument(
+        "--init", action="store_true",
+        help="Interactive setup: walk through every config block and "
+             "write a validated config.toml. Doesn't start MCP. Honours "
+             "--config for the destination path; otherwise writes to the "
+             "platform default (%%APPDATA%% / ~/.config).",
+    )
+    parser.add_argument(
+        "--non-interactive", action="store_true",
+        help="With --init: skip every prompt and write a stub config "
+             "(server block only, no targets). Useful for CI smoke.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="With --init: overwrite an existing config without asking.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+    if args.init:
+        from .setup_wizard import run_init
+        return run_init(
+            out_path=args.config,
+            force=args.force,
+            non_interactive=args.non_interactive,
+        )
 
     try:
         config = load_config(args.config)

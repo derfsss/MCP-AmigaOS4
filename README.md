@@ -52,6 +52,7 @@ will help you get going. If not, this probably isn't for you.
 | What you can do with it | [USAGE.md](USAGE.md) |
 | Full command / method / tool reference | [COMMANDS.md](COMMANDS.md) |
 | Installing pre-built artefacts | [INSTALL.md](INSTALL.md) |
+| Setup spec for AI agents | [AGENTS_SETUP.md](AGENTS_SETUP.md) |
 | Building from source | [BUILD.md](BUILD.md) |
 | Host server (Python) — quickstart | [host/README.md](host/README.md) |
 | Amiga daemon (C) — quickstart and source layout | [mcpd/README.md](mcpd/README.md) |

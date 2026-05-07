@@ -111,6 +111,25 @@ and pass overrides on the rare exceptions.
 The same precedent applies to the existing `[server] default_target`
 key: a single-target setup can omit `target=...` from every call.
 
+## Helper paths (`[paths]`)
+
+The optional `[paths]` block points at external host-side checkouts
+and binaries. Every entry is **only required by a specific tool
+surface** — leave the others unset (or comment them out) and the
+remaining tools work fine. None of these are needed to talk to an
+already-running target via `fs.*` / `exec.*` / `sys.*` / `wb.*` /
+`power.*`.
+
+| `[paths]` key      | Required by                                                                                                                        | What to point it at |
+|---|---|---|
+| `qemu_runner`      | `qemu.*` lifecycle tools (`start` / `stop` / `reset` / `screenshot` / `savevm` / `loadvm` / `list_snapshots` / `delete_snapshot`) and the QMP transport. | An absolute path to a checkout of `derfsss/qemu-runner`. |
+| `amiga_qemu_tests` | `tests.*` orchestration (`tests.list_suites`, `tests.run_suite`, `tests.run_standard_dos_tests`, `tests.parse_output`).             | An absolute path to a checkout of `derfsss/AmigaQemuTests`. |
+| `qemu_binary`      | `qemu.start` only.                                                                                                                  | An absolute path to `qemu-system-ppc` (`qemu-system-ppc.exe` on Windows). |
+
+When a tool needs one of these and it's missing, the call returns
+an `InvalidParams` error naming the missing key, e.g.
+*`paths.amiga_qemu_tests not set in config — see USAGE.md#helper-paths-paths or run amiga-fleet-mcp --init`*.
+
 ## Discovering targets without prior IP knowledge
 
 ```sh

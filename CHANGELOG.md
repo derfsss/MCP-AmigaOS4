@@ -4,6 +4,33 @@
 
 ### Added
 
+- **`amiga-fleet-mcp --init`** — guided setup wizard. Walks
+  through `[server]`, `[paths]`, `[targets.*]` (one or more), and
+  `[defaults]`, then validates the generated TOML through the same
+  Pydantic schema the server uses at startup before writing it to
+  the platform default location (or wherever `--config` points).
+  Supports `--force` to overwrite without prompting and
+  `--non-interactive` for CI smoke tests. 10 new unit tests cover
+  the TOML emitter (round-trips through `tomllib`, handles
+  backslashes / quotes / quoted keys) plus four scripted-prompt
+  flows (QEMU target, remote + FTDI MCU cable, abort-on-overwrite,
+  zero-targets).
+- **`[paths]` documentation** — new "Helper paths" subsection in
+  USAGE.md explains which tool surface needs each `[paths]` entry
+  (`qemu_runner` → `qemu.*` + QMP, `amiga_qemu_tests` → `tests.*`,
+  `qemu_binary` → `qemu.start`). Error messages from those tool
+  surfaces now point at this section and at `--init`.
+- **AGENTS_SETUP.md** — deterministic setup spec for AI agents.
+  Decision tree, detection commands, minimal config templates per
+  scenario, validation steps, and what each common error means.
+- **INSTALL.md venv command** — split `python` into `python3` /
+  `py -3` to match modern Linux/macOS defaults and the Windows
+  launcher convention.
+- **`host/config.example.toml`** — `[paths]` entries are now
+  commented-out by default with per-key "required by tool surface
+  X" notes (the un-commented `<placeholder>` form previously made
+  them look mandatory).
+
 - **`fs.upload` and `fs.download`** — whole-file transfer
   wrappers that hide the chunking + base64 + zlib mechanics.
   Point at a single file in either direction; works for any
