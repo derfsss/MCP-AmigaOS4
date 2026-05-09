@@ -45,6 +45,7 @@ def test_x5000_sequence_step_order():
         "quarantine_devs_monitors",
         "install_mcpd",
         "unmount_iso",
+        "dismount_combi_device",
         "cleanup_tmp",
     ]
 

@@ -1750,10 +1750,9 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     ) -> Any:
         """Run the AmigaOne X5000 install sequence. Default dry_run=True
         returns the planned step list; pass dry_run=False, confirm=True
-        to actually execute. Caller must stage ISO + LHAs +
-        diskimage-bootstrap/ into <dest>:tmp/ before calling.
-        dest_volume / sources_dir / iso_filename fall back to
-        `[defaults]`."""
+        to actually execute. Caller must stage ISO + LHAs into
+        <dest>:tmp/ before calling. dest_volume / sources_dir /
+        iso_filename fall back to `[defaults]`."""
         dest_volume = _default(dest_volume, "dest_volume", "dest_volume")
         if sources_dir is None:
             sources_dir = fleet.config.defaults.sources_dir
@@ -1805,27 +1804,29 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         machine: str | None = None,
         iso_filename: str | None = None,
         iso_lha_path: str | None = None,
-        bootstrap_dir: str | None = None,
         confirm: bool = False,
     ) -> Any:
-        """Upload ISO + LHAs + diskimage-bootstrap/ into <dest>:tmp/.
-        Mutating; requires confirm=True (multi-GB upload).
+        """Upload ISO + Update LHAs + Enhancer + extras + MCPd +
+        AmiDock prefs into <dest>:tmp/. Mutating; requires confirm=True
+        (multi-GB upload).
 
         Auto-detects iso_filename from sources_dir scan if omitted.
-        bootstrap_dir defaults to a search of standard host paths.
+
+        AOS 4.1 diskimage tools (MountDiskImage / diskimage.device /
+        CDFileSystem) are NOT staged from the host -- they're sourced
+        from the running AmigaOS at install time and from the install
+        ISO into the dest drive via copy_base_os.
 
         If `iso_lha_path` is provided (or `<iso>.lha` exists next to
         the iso in sources_dir), the LHA-of-ISO form is uploaded
         instead of the raw ISO -- saves ~60% bandwidth on incompressible
         ISO data. The install sequence's `extract_iso_lha` step
         recovers the .iso file on the target before mount.
-        dest_volume / sources_dir / machine / bootstrap_dir /
-        iso_filename fall back to `[defaults]`."""
+        dest_volume / sources_dir / machine / iso_filename fall back
+        to `[defaults]`."""
         dest_volume = _default(dest_volume, "dest_volume", "dest_volume")
         sources_dir = _default(sources_dir, "sources_dir", "sources_dir")
         machine = _default(machine, "machine", "machine")
-        if bootstrap_dir is None:
-            bootstrap_dir = fleet.config.defaults.bootstrap_dir
         if iso_filename is None:
             iso_filename = fleet.config.defaults.iso_filename
         return await installer_tool.installer_stage(
@@ -1835,7 +1836,6 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             machine=machine,
             iso_filename=iso_filename,
             iso_lha_path=iso_lha_path,
-            bootstrap_dir=bootstrap_dir,
             confirm=confirm,
         )
 

@@ -115,25 +115,39 @@ async def _maybe_rename(mcpd, src_path: str, dst_path: str) -> None:
 
 
 def stage_diskimage_tools() -> Step:
-    """Copy MountDiskImage / diskimage.device / CDFileSystem onto the
-    running system + write COMBI: DOSDriver mountfile. Idempotent."""
+    """Verify the running AmigaOS has the diskimage tools needed to
+    mount the install ISO + write the COMBI: DOSDriver mountfile.
+
+    AOS 4.1 ships C:MountDiskImage, DEVS:diskimage.device, and
+    L:CDFileSystem out of the box. We don't stage them from the host
+    -- if the running system is missing any of them, the install
+    can't go ahead and we fail loudly here rather than mounting
+    later with a confusing error.
+
+    The COMBI: DOSDriver mountfile is generated inline by this step
+    (no separate file shipped) and removed at end-of-install by
+    dismount_combi_device."""
     async def fn(ctx):
         mcpd = ctx["mcpd"]
-        dest = ctx["dest_volume"]
-        bootstrap = f"{dest}tmp/diskimage-bootstrap/"
-        for src_name, sys_path in (
-            ("MountDiskImage", "C:MountDiskImage"),
-            ("diskimage.device", "DEVS:diskimage.device"),
-            ("CDFileSystem", "L:CDFileSystem"),
-        ):
+        required = (
+            ("C:MountDiskImage", "MountDiskImage tool"),
+            ("DEVS:diskimage.device", "diskimage.device kernel module"),
+            ("L:CDFileSystem", "CDFileSystem handler"),
+        )
+        missing: list[str] = []
+        for path, _desc in required:
             try:
-                await mcpd.request("fs.stat", {"path": sys_path})
-                continue
+                await mcpd.request("fs.stat", {"path": path})
             except Exception:
-                pass
-            await mcpd.request("fs.copy", {
-                "src": bootstrap + src_name, "dst": sys_path,
-            })
+                missing.append(path)
+        if missing:
+            raise RuntimeError(
+                "running AmigaOS is missing required diskimage tool(s): "
+                + ", ".join(missing)
+                + ". These ship with AOS 4.1 -- the install host "
+                "needs a working AOS 4.1 install before it can install "
+                "to a fresh dest drive."
+            )
         drv_path = "DEVS:DOSDrivers/COMBI"
         try:
             await mcpd.request("fs.stat", {"path": drv_path})
@@ -169,12 +183,13 @@ def stage_diskimage_tools() -> Step:
                     mountfile.encode("ascii")
                 ).decode("ascii"),
             })
-        return {"installed": ["C:MountDiskImage", "DEVS:diskimage.device",
-                              "L:CDFileSystem", drv_path]}
+        return {"verified": ["C:MountDiskImage", "DEVS:diskimage.device",
+                             "L:CDFileSystem"],
+                "wrote": [drv_path]}
     return Step(
         name="stage_diskimage_tools",
-        doc="Copy MountDiskImage/diskimage.device/CDFileSystem onto "
-            "the running system + write COMBI: DOSDriver mountfile.",
+        doc="Verify running AmigaOS has the diskimage tools + write "
+            "COMBI: DOSDriver mountfile inline.",
         fn=fn,
     )
 
@@ -880,6 +895,76 @@ def unmount_iso() -> Step:
     return Step(
         name="unmount_iso",
         doc="Eject the install ISO from the COMBI: device.",
+        fn=fn,
+    )
+
+
+_COMBI_MARKER = "written by amiga-fleet-mcp installer"
+
+
+def dismount_combi_device() -> Step:
+    """Remove the COMBI: DOSDriver mountfile from the running system.
+
+    `unmount_iso` ejects the media but leaves the DOS device entry in
+    place + leaves DEVS:DOSDrivers/COMBI on disk so it auto-mounts on
+    next reboot. After an install, that's pollution: the device only
+    existed to host the install ISO.
+
+    Deletes the mountfile if it carries the installer's comment marker
+    (so the cleanup also catches files left behind by an earlier
+    install run, not just this one). A user-owned COMBI: with no
+    marker is left untouched.
+
+    Issues `c:Dismount COMBI: FORCE` to drop the live DOS entry from
+    the running system. (`Assign COMBI: REMOVE` doesn't apply to
+    Mount-style DOS devices on AOS4 -- only true assigns.)
+
+    The ISO MUST be ejected before Dismount runs, otherwise AOS4 has
+    been observed to wedge / leave the device in a half-state. The
+    install sequence puts `unmount_iso` (MountDiskImage EJECT) before
+    this step; we additionally fire an idempotent `EJECT` here as a
+    belt-and-braces guard in case the step is called standalone.
+    """
+    async def fn(ctx):
+        from ...tools import installer as it
+        mcpd = ctx["mcpd"]
+        drv_path = "DEVS:DOSDrivers/COMBI"
+        actions: list[str] = []
+        # Belt-and-braces eject -- idempotent on an already-empty
+        # unit, so safe to issue even when unmount_iso ran first.
+        try:
+            await it.installer_unmount_iso(
+                ctx["fleet"], ctx["target"], unit=COMBI_UNIT,
+            )
+            actions.append(f"ejected unit {COMBI_UNIT} (pre-dismount guard)")
+        except Exception as e:
+            actions.append(f"eject-failed: {str(e)[:80]}")
+        try:
+            raw = await mcpd.request("fs.read", {"path": drv_path})
+            content = base64.b64decode(
+                raw.get("content_b64", "")
+            ).decode("ascii", errors="replace")
+            if _COMBI_MARKER in content:
+                await mcpd.request("fs.delete", {"path": drv_path})
+                actions.append(f"deleted {drv_path}")
+            else:
+                actions.append(f"kept {drv_path} (no installer marker)")
+        except Exception as e:
+            actions.append(f"read-failed {drv_path}: {str(e)[:80]}")
+        try:
+            await mcpd.request("exec.cmd", {
+                "command": "C:Dismount >NIL: COMBI: FORCE",
+                "timeout_ms": 10000,
+            }, timeout_s=15.0)
+            actions.append("Dismount COMBI: FORCE issued")
+        except Exception as e:
+            actions.append(f"dismount-failed: {str(e)[:80]}")
+        return {"actions": actions}
+    return Step(
+        name="dismount_combi_device",
+        doc=("Remove the running system's COMBI: DOS device + its "
+             "DEVS:DOSDrivers/COMBI mountfile so the install ISO "
+             "scaffolding doesn't persist after reboot."),
         fn=fn,
     )
 

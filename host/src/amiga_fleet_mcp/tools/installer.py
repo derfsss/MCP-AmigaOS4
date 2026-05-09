@@ -336,10 +336,11 @@ async def installer_preflight(
             add("required_files", "ok",
                 f"all {len(manifest) - 1} non-ISO files present")
 
-        # Mandatory binaries: MCPd + diskimage-bootstrap files.
-        # Auto-resolves from sources_dir / repo / known host paths.
+        # Mandatory host-side binaries: just MCPd. The AOS 4.1
+        # diskimage tools come from the running AmigaOS / the install
+        # ISO at install time -- no host-side dependency.
         src_path = Path(scan["sources_dir"])
-        mand = _mandatory_binaries(src_path, None)
+        mand = _mandatory_binaries(src_path)
         missing_mand = [m["name"] for m in mand if m["path"] is None]
         if missing_mand:
             add("mandatory_binaries", "fail",
@@ -919,9 +920,9 @@ async def installer_run(
     omitted and `sources_dir` is given, we auto-detect from a host-side
     scan_sources of `sources_dir`.
 
-    The caller is responsible for having already staged ISO + LHAs +
-    diskimage-bootstrap/ into `<dest>:tmp/` before this runs (use
-    `installer.stage` to do that).
+    The caller is responsible for having already staged ISO + LHAs
+    into `<dest>:tmp/` before this runs (use `installer.stage` to do
+    that).
     """
     canonical = _resolve_sequence_machine(machine)
 
@@ -1020,8 +1021,8 @@ class InstallerStageResult(BaseModel):
 
 def _install_support_root() -> Path | None:
     """Resolve the host-side install-support root (a directory that
-    holds diskimage-bootstrap/, AmiDock prefs XML, and other small
-    files that ship with the install pipeline).
+    holds AmiDock prefs XML and any other small files a user wants to
+    override the bundled defaults with).
 
     Lookup order:
       1. $AMIGA_INSTALL_SUPPORT_DIR if set and exists.
@@ -1044,36 +1045,6 @@ def _install_support_root() -> Path | None:
     return None
 
 
-def _candidate_bootstrap_dirs(
-    sources_dir: Path | None = None,
-) -> list[Path]:
-    """Where to look for the diskimage-bootstrap files on the host."""
-    out: list[Path] = []
-    if sources_dir is not None:
-        out.append(sources_dir / "diskimage-bootstrap")
-    root = _install_support_root()
-    if root is not None:
-        out.append(root / "diskimage-bootstrap")
-    out.extend([
-        Path.cwd() / "diskimage-bootstrap",
-        Path.home() / "diskimage-bootstrap",
-    ])
-    return out
-
-
-def _resolve_bootstrap_dir(
-    explicit: str | None,
-    sources_dir: Path | None = None,
-) -> Path | None:
-    if explicit:
-        p = Path(explicit).expanduser().resolve()
-        return p if p.is_dir() else None
-    for cand in _candidate_bootstrap_dirs(sources_dir):
-        if cand.is_dir():
-            return cand
-    return None
-
-
 def _candidate_install_support_dirs() -> list[Path]:
     """Where to look for AmiDock.amiga.com.xml + other host-side
     install-support files. Each install copies them to <dest>:tmp/
@@ -1086,13 +1057,18 @@ def _candidate_install_support_dirs() -> list[Path]:
         Path.cwd(),
         Path.home(),
     ])
+    # Bundled package resources ship a default AmiDock.amiga.com.xml
+    # so the install pipeline doesn't depend on the user staging a copy
+    # by hand. Other resources can sit alongside it.
+    out.append(Path(__file__).resolve().parent.parent
+               / "installer" / "resources")
     return out
 
 
 def _find_in_sources_or_support(filename: str,
                                 sources_dir: Path) -> Path | None:
     """Look for `filename` in sources_dir first, then in the host-side
-    install-support directories."""
+    install-support directories (including bundled package resources)."""
     cand = sources_dir / filename
     if cand.is_file():
         return cand
@@ -1127,35 +1103,24 @@ def _resolve_mcpd_binary(sources_dir: Path) -> Path | None:
 # What the preflight + stage need to find before allowing an install.
 # Each entry has: name, friendly description, and a resolver function
 # returning a Path or None.
-def _mandatory_binaries(sources_dir: Path,
-                        bootstrap_dir_arg: str | None = None) -> list[dict]:
-    """Build the list of mandatory binaries + bootstrap files for an
-    install, with their resolved location (or None if missing).
+def _mandatory_binaries(sources_dir: Path) -> list[dict]:
+    """Build the list of mandatory host-side binaries for an install
+    with each resolved location (or None if missing).
+
+    Currently MCPd is the only host-side binary required: AOS 4.1's
+    diskimage tools (MountDiskImage / diskimage.device / CDFileSystem)
+    are sourced from the running AmigaOS at install time and from the
+    install ISO into the dest drive via copy_base_os, so they don't
+    need to be staged from the host.
 
     This list MUST be all-found before installer_stage runs. preflight
     cross-checks the same list and reports them in `missing_files`."""
     mcpd = _resolve_mcpd_binary(sources_dir)
-    bootstrap = _resolve_bootstrap_dir(bootstrap_dir_arg, sources_dir)
-    bootstrap_files: dict[str, Path | None] = {}
-    if bootstrap is not None:
-        for fname in ("MountDiskImage", "diskimage.device", "CDFileSystem"):
-            f = bootstrap / fname
-            bootstrap_files[fname] = f if f.is_file() else None
-    else:
-        for fname in ("MountDiskImage", "diskimage.device", "CDFileSystem"):
-            bootstrap_files[fname] = None
-    out = [
+    return [
         {"name": "MCPd",
          "desc": "MCPd daemon binary (auto-starts on first boot)",
          "path": mcpd},
     ]
-    for fname, p in bootstrap_files.items():
-        out.append({
-            "name": f"diskimage-bootstrap/{fname}",
-            "desc": "diskimage-bootstrap file (mount_iso step)",
-            "path": p,
-        })
-    return out
 
 
 async def installer_stage(
@@ -1165,20 +1130,22 @@ async def installer_stage(
     machine: str,
     iso_filename: str | None = None,
     iso_lha_path: str | None = None,
-    bootstrap_dir: str | None = None,
     confirm: bool = False,
 ) -> InstallerStageResult:
-    """Upload ISO + LHAs + diskimage-bootstrap/ into `<dest>:tmp/`.
+    """Upload ISO + Update LHAs + Enhancer + extras + MCPd + AmiDock
+    prefs into `<dest>:tmp/`.
 
     Mutating; requires `confirm=True` (a multi-GB upload is not
-    something to fire by accident). Composes:
-      - chunked_upload (zlib auto, 16 MiB chunks) for the ISO + LHAs
-      - chunked_upload for each of the 3 diskimage-bootstrap files
+    something to fire by accident).
+
+    The AOS 4.1 diskimage tools (MountDiskImage / diskimage.device /
+    CDFileSystem) are NOT staged from the host -- the running
+    AmigaOS uses its own copies at mount time, and the dest drive
+    receives them via copy_base_os from the install ISO's System/
+    tree. No host-side `diskimage-bootstrap/` directory is needed.
 
     `iso_filename` may be omitted; we detect from `sources_dir` via
-    scan_sources. `bootstrap_dir` defaults to a search of standard
-    host paths; pass explicitly if your install-support tree is
-    elsewhere.
+    scan_sources.
 
     `iso_lha_path` (optional): path to a `<iso>.iso.lha` file (an LHA
     archive containing the bare .iso file as a single member). When
@@ -1233,29 +1200,18 @@ async def installer_stage(
             f"found in sources_dir, and no iso_lha_path given",
         )
 
-    bootstrap = _resolve_bootstrap_dir(bootstrap_dir)
-    if bootstrap is None:
-        raise InvalidParams(
-            "diskimage-bootstrap directory not found; pass "
-            "bootstrap_dir explicitly. Looked in: "
-            f"{[str(p) for p in _candidate_bootstrap_dirs()]}",
-        )
-
-    # Mandatory-binaries check: MCPd + bootstrap files.
-    # Fail loudly if any are missing -- previously these were silently
-    # skipped which left installs without auto-starting MCPd / unable
-    # to mount the ISO.
-    mand = _mandatory_binaries(src, bootstrap_dir)
+    # Mandatory-binaries check: just MCPd. Fail loudly if missing --
+    # previously this was silently skipped, which left installs
+    # without auto-starting MCPd.
+    mand = _mandatory_binaries(src)
     missing_mand = [m for m in mand if m["path"] is None]
     if missing_mand:
         raise InvalidParams(
             "installer.stage cannot proceed: mandatory file(s) missing.\n"
             + "\n".join(
                 f"  - {m['name']}: {m['desc']}" for m in missing_mand
-            ) + "\nPut MCPd in sources_dir or build it with `make -C mcpd "
-            "docker-build`. Bootstrap files come from the install-"
-            "support tree (set $AMIGA_INSTALL_SUPPORT_DIR or pass "
-            "bootstrap_dir).",
+            ) + "\nPut MCPd in sources_dir or build it with "
+            "`make -C mcpd docker-build`.",
             data={"missing": [m["name"] for m in missing_mand]},
         )
 
@@ -1311,12 +1267,6 @@ async def installer_stage(
             continue
         items.append((entry["role"], local, staging + entry["filename"]))
 
-    # diskimage-bootstrap files (mandatory; presence already verified
-    # above via _mandatory_binaries).
-    bootstrap_dst = staging + "diskimage-bootstrap/"
-    for fname in ("MountDiskImage", "diskimage.device", "CDFileSystem"):
-        items.append(("bootstrap", bootstrap / fname, bootstrap_dst + fname))
-
     # MCPd binary (mandatory; presence already verified above).
     mcpd_local = _resolve_mcpd_binary(src)
     assert mcpd_local is not None  # _mandatory_binaries enforced this
@@ -1352,10 +1302,9 @@ async def installer_stage(
             "step will be a no-op (dock will use stock layout)"
         )
 
-    # Ensure tmp/ + tmp/diskimage-bootstrap/ exist on the target
+    # Ensure tmp/ exists on the target
     mcpd = fleet.mcpd(target)
     await amiga_makedir(mcpd, staging)
-    await amiga_makedir(mcpd, bootstrap_dst)
 
     # 24 MiB raw + base64 (1.33x) lands at ~32 MiB which exceeds the
     # MCPD_FRAME_MAX_PAYLOAD cap once envelope overhead is included.

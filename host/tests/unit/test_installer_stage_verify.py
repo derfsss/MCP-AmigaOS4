@@ -120,23 +120,26 @@ async def test_stage_uploads_full_x5000_bundle(fleet_with_fake, tmp_path):
             dest_volume="BootTest:",
             sources_dir=str(tmp_path),
             machine="X5000",
-            bootstrap_dir=str(bootstrap),
             confirm=True,
         )
 
-    # ISO + 2 updates + enhancer + 2 extras + 3 bootstrap + MCPd
-    # + SerialShell + AmiDock XML = 12 (when all auto-detect succeeds)
-    assert len(uploaded) == 12
+    # ISO + 2 updates + enhancer + 2 extras + MCPd + SerialShell +
+    # AmiDock XML = 9 (no bootstrap upload -- diskimage tools come
+    # from the running AmigaOS / install ISO).
+    assert len(uploaded) == 9
     assert res.machine == "X5000"
     assert res.iso_filename == "AmigaOneX5000InstallCD-53.42.iso"
     assert res.skipped == []
 
-    # Spot check: ISO landed under tmp/, bootstrap files under tmp/diskimage-bootstrap/
+    # Spot check: ISO landed under tmp/, no bootstrap files staged.
     iso_dst = next(dst for src, dst in uploaded if src.endswith(".iso"))
     assert iso_dst == "BootTest:tmp/AmigaOneX5000InstallCD-53.42.iso"
     bootstrap_dsts = [dst for src, dst in uploaded
                       if "diskimage-bootstrap" in dst]
-    assert len(bootstrap_dsts) == 3
+    assert bootstrap_dsts == []
+    # Make sure pyflakes doesn't complain about the unused fixture
+    # output (kept so future tests can assert on it).
+    assert bootstrap is not None
 
 
 @pytest.mark.asyncio
@@ -169,7 +172,6 @@ async def test_stage_records_skipped_files(fleet_with_fake, tmp_path):
             dest_volume="BootTest:",
             sources_dir=str(tmp_path),
             machine="X5000",
-            bootstrap_dir=str(bs),
             confirm=True,
         )
     assert len(res.skipped) > 0

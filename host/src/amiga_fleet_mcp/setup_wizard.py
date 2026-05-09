@@ -294,7 +294,6 @@ def _wizard_defaults(prompt: Prompt, cfg: dict[str, Any]) -> None:
     for key, hint in [
         ("dest_volume", 'AmigaDOS volume to install into (e.g. "BootTest:")'),
         ("sources_dir", "host directory holding source ISOs / LHAs"),
-        ("bootstrap_dir", "diskimage-bootstrap directory"),
         ("machine", 'canonical machine identifier (e.g. "X5000")'),
     ]:
         v = _ask_optional(prompt, f"{key} — {hint}")

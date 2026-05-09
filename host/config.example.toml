@@ -49,8 +49,6 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  (the AmigaDOS volume to install into).
 #   sources_dir    Default for installer.scan_sources / preflight /
 #                  stage / install_x5000 / run.
-#   bootstrap_dir  Default for installer.stage's diskimage-bootstrap/
-#                  directory.
 #   machine        Default for installer.required_files / preflight /
 #                  stage / run / verify (e.g. "X5000", "A1222").
 #   iso_filename   Default ISO filename inside sources_dir; rarely
@@ -58,7 +56,6 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #
 # dest_volume   = "BootTest:"
 # sources_dir   = "<absolute path to your AmigaOS source tree>"
-# bootstrap_dir = "<absolute path to a diskimage-bootstrap directory>"
 # machine       = "X5000"
 
 # ---- Example: QEMU Pegasos2 target -------------------------------

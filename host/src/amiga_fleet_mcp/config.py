@@ -203,7 +203,6 @@ class DefaultsConfig(BaseModel):
     # installer.* defaults
     dest_volume: str | None = None
     sources_dir: str | None = None
-    bootstrap_dir: str | None = None
     machine: str | None = None
     # installer_run / installer_install_x5000
     iso_filename: str | None = None
