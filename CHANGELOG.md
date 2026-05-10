@@ -1,5 +1,79 @@
 # Change log
 
+## Unreleased
+
+### Added
+
+- **`sandbox.*` namespace** — driver- and program-iteration loop on
+  top of [SandboxVM](https://github.com/derfsss/SandboxVM), an AOS4
+  in-process sandbox host that survives guest crashes (DSI / ISI /
+  alignment / privilege traps). Five tools plus one shared primitive:
+  - `sandbox.probe` — path resolution + executability +
+    Pegasos II refusal. Three typed error codes
+    (`SANDBOXVM_MISSING` / `SANDBOXVM_BROKEN` /
+    `SANDBOXVM_INCOMPATIBLE_TARGET`). Probe cache (60 s TTL) for
+    chatty workflows; eager re-probe via the tool itself.
+  - `sandbox.deploy` — wraps `fs.upload` with SHA-256 verify +
+    cache invalidation + path-pinned post-deploy probe.
+  - `sandbox.run_guest` — runs one guest ELF, slurps
+    `T:sandboxvm-<name>.{out,err}` captures, decodes SandboxVM's
+    exit-code convention into `trap_kind` (DSI / ISI / alignment /
+    program / fp_unavailable) and the documented kmod-libcall
+    NULL+4 fingerprint.
+  - `sandbox.run_driver` — resident-driver mode (`-r`) with
+    optional `-t` follow-on test guest. Loads the driver via
+    `RTF_AUTOINIT` Resident + `CLT_InitFunc` so a test program in
+    the same Guest can `OpenLibrary` the driver by name.
+  - `sandbox.run_batch` — up to 16 guests sequentially in one
+    sandboxvm invocation. Per-guest exit codes recovered from the
+    kernel debug ring; aggregate exit follows SandboxVM's
+    `last_nonzero` convention. Multi-target fan-out via
+    `fleet.run_on_all`.
+  - `sandbox.last_trap` — filter-on-top of `sys.debug_ring` for
+    SandboxVM trap signatures. 3-attempt × 200 ms retry handles
+    the kernel-ring write race after a crashed `run_guest`.
+- **`sys.debug_ring`** — new primitive that reads the kernel debug
+  ring via `c:DumpDebugBuffer`. Lifted out of `sandbox.last_trap`
+  during the namespace-overlap review so the rest of the project
+  (post-install forensics, hardware bring-up) can use it too.
+- **`[paths] sandboxvm`** — host-side path to a built
+  `bin/sandboxvm`, used by `sandbox.deploy` source resolution.
+- **`[targets.<name>.sandbox]` block** — per-target SandboxVM
+  overrides: AOS path, default `-m` extmem MB, default `-w`
+  window MB, always-on `-x` deny-libs.
+- **Bundled `AmiDock.amiga.com.xml`** as a package resource. The
+  installer's `patch_amidock_prefs` step previously skipped
+  silently when no XML was staged; it now uses the bundled prefs
+  by default, so a fresh install ships with Filer / Ranger /
+  IBrowse / DiskImageGUI in the dock subdrawers.
+- **`installer.dismount_combi_device`** — new step at the end of
+  the install pipeline. Ejects the install ISO from
+  `diskimage.device` unit 50 (defensive, even though `unmount_iso`
+  ran), deletes the installer-written `DEVS:DOSDrivers/COMBI`
+  mountfile (only when it carries the installer's marker so a
+  user-owned COMBI: is left alone), and issues
+  `c:Dismount COMBI: FORCE` to drop the live DOS entry.
+
+### Changed
+
+- **`installer.*` no longer requires a host-side
+  `diskimage-bootstrap/` directory.** The AOS 4.1 diskimage tools
+  (`MountDiskImage` / `diskimage.device` / `CDFileSystem`) ship
+  with AOS 4.1 itself; `stage_diskimage_tools` is now a probe
+  that fails loudly if the running system is missing any of them
+  (which would mean the install host isn't a working AOS 4.1
+  install). The dest drive picks up fresh copies via the normal
+  `copy_base_os` pull from `<ISO>:System/`. Drops `bootstrap_dir`
+  from `installer.preflight` / `installer.stage` /
+  `[defaults] bootstrap_dir`; the `--init` wizard no longer
+  prompts for it.
+- **`sandbox.probe` doesn't gate on banner content.** Real-X5000
+  testing showed sandboxvm's printf-based usage banner is
+  occasionally captured as empty by MCPd's exec.cmd (clib4 /
+  newlib stdio buffering not flushed before the process detaches
+  from its inherited Output() handle). The probe now treats any
+  structured `exec.cmd` exit as proof the binary started.
+
 ## 1.2 — Guided setup and whole-file transfers
 
 ### Added

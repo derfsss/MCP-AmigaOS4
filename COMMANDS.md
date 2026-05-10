@@ -82,6 +82,7 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.read_pa` | DANGEROUS supervisor-mode read at any 36-bit physical address. No range checking; misuse can crash the connection-handling task (the daemon listener stays up by design). |
 | `sys.tlb_dump` | Dump all 64 TLB1 entries from a P5020 / P1022 target via `tlbre` / MAS registers. |
 | `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1). Documented commands `t` / `v` / `f` / `s` plus build-info `b`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
+| `sys.debug_ring` | Read the kernel debug ring via `c:DumpDebugBuffer`. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). |
 
 ### `fs.*`
 
@@ -217,9 +218,9 @@ The captured QEMU serial output is exposed as the read-only resource
 End-to-end AmigaOS 4.1 FE install pipeline.
 
 The frequently-repeated parameters (`dest_volume`, `sources_dir`,
-`bootstrap_dir`, `machine`, `iso_filename`) can be defaulted in
-`config.toml` under `[defaults]` so a typical session does not have
-to repeat them on every call — see [USAGE.md § Per-tool
+`machine`, `iso_filename`) can be defaulted in `config.toml`
+under `[defaults]` so a typical session does not have to repeat
+them on every call — see [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults).
 
 | Tool | Description |
@@ -228,7 +229,7 @@ defaults](USAGE.md#per-tool-defaults).
 | `installer_required_files` | For a given machine, the file manifest the installer expects under `sources_dir`. Honours `[defaults] machine`. |
 | `installer_scan_sources` | Walk a host-side directory and report which install files are present, ambiguous, or unsupported. Honours `[defaults] sources_dir`. |
 | `installer_preflight` | Composite pre-install safety check: `sources_dir` validity, machine resolution, dest-volume mount + cleanliness, mandatory-binaries availability. Read-only. Honours `[defaults] dest_volume / sources_dir / machine`. |
-| `installer_stage` | Upload ISO + LHAs + `diskimage-bootstrap/` into `<dest>:tmp/`. Multi-GB upload; requires `confirm: true`. Honours `[defaults] dest_volume / sources_dir / bootstrap_dir / machine / iso_filename`. |
+| `installer_stage` | Upload ISO + Update LHAs + Enhancer + extras + MCPd + bundled AmiDock prefs into `<dest>:tmp/`. Multi-GB upload; requires `confirm: true`. The AOS 4.1 diskimage tools are sourced from the running AmigaOS / install ISO, not staged from the host. Honours `[defaults] dest_volume / sources_dir / machine / iso_filename`. |
 | `installer_mount_iso` | Mount an ISO via `diskimage.device` + `MountDiskImage`. Reversible via `installer_unmount_iso`. |
 | `installer_unmount_iso` | Eject an ISO from a `diskimage.device` unit. Idempotent. |
 | `installer_copy_tree` | Recursive AmigaDOS `Copy ALL CLONE QUIET` between paths on a target. |
@@ -278,6 +279,38 @@ serial port + 38400 baud. Honours `[server] default_target`.
 | `power_off` | **yes** | Shut down all supplies (`s`). |
 | `power_shell` | **yes** | Generic shell-command passthrough (escape hatch). |
 
+### Sandbox harness (`sandbox.*`)
+
+Driver- and program-iteration loop on top of
+[SandboxVM](https://github.com/derfsss/SandboxVM) — a PPC AOS4 binary
+that runs guest ELFs inside a sandboxed `IExec` clone with a
+`tc_TrapCode` trampoline that catches DSI / ISI / illegal /
+alignment / privilege traps so the host process survives. Lets an
+agent edit-compile-deploy-run a binary without power-cycling on
+every crash.
+
+Every `sandbox.*` call probes the target up front. The probe
+fails fast with a typed code (`SANDBOXVM_MISSING`,
+`SANDBOXVM_BROKEN`, `SANDBOXVM_INCOMPATIBLE_TARGET`) so a
+misconfigured target raises an obvious error rather than
+half-running.
+
+Pegasos II is refused at probe time — SandboxVM requires ExtMem
+(X5000 / X1000 / A1222 / QEMU AmigaOne).
+
+| Tool | Confirm | Description |
+|---|---|---|
+| `sandbox_probe` | — | Path resolution + executability + machine compatibility. Returns a structured `SandboxProbeResult`. Bypasses the in-process probe cache (60 s TTL). |
+| `sandbox_deploy` | **yes** | Upload sandboxvm to the target. Convenience wrapper around `fs.upload`: source from `[paths] sandboxvm` (or explicit `source` arg), dest from `[targets.<name>.sandbox.path]` (defaults to `SYS:Tools/sandboxvm`). Verifies via SHA-256 and re-probes the just-uploaded path so the cache can't be shadowed by a legacy default-path binary. |
+| `sandbox_run_guest` | — | Run one guest ELF. Probe-gated, lock-serialised, `T:capture` files slurped + classified. Returns `exit_code` (signed: 0 clean, positive guest rc, negative trap), `trap_kind` (`DSI`/`ISI`/`alignment`/`program`/`fp_unavailable` when matched), `trap_fingerprint` (`kmod_libcall_null4` for the documented `HD_SCSICMD via DoIO` limitation), `stdout` / `stderr` / `capture_paths`. |
+| `sandbox_run_driver` | — | Load a driver via SandboxVM resident-driver mode (`-r`). Scans the driver's `RTF_AUTOINIT` Resident, applies PPC ELF relocations, and calls `CLT_InitFunc` with the sandboxed `IExec`. With `test=` set, runs the test ELF as a follow-on guest in the same Guest context so `OpenLibrary(<driver-name>)` resolves through the resident-lib registry. Same return shape as `run_guest`. |
+| `sandbox_run_batch` | — | Run up to 16 guests sequentially in a single SandboxVM invocation. Returns a `BatchRunResult` with per-entry classification + the aggregate (last non-zero rc, mirrors SandboxVM's own convention). Per-guest argv and per-guest deny-lists are NOT supported (SandboxVM constraint); use `sandbox.run_guest` per-binary if you need either. |
+| `sandbox_last_trap` | — | Filter the kernel debug ring for SandboxVM trap signatures. Wraps `sys.debug_ring` with a 3-attempt × 200 ms retry loop so a `last_trap` call immediately after a crashed `run_guest` doesn't race the kernel ring write. Returns the matched trap block plus structured `trap_kind` / `fingerprint` / `traptype_hex`. `found=False` is the legitimate "no trap to report" outcome. |
+
+For arbitrary AmigaDOS commands without the SandboxVM harness, use
+`exec.cmd`. For JSON-config-driven multi-step test bundles without
+SandboxVM, use `tests.run_suite`.
+
 ### Namespace dispatchers
 
 Each major namespace also has a single dispatcher tool that takes a
@@ -299,6 +332,7 @@ to script an operation by method name rather than by tool name.
 | `installer` | `installer.*` |
 | `serial` | `serial.*` |
 | `power` | `power.*` |
+| `sandbox` | `sandbox.*` |
 
 ## MCP resources
 
@@ -343,7 +377,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 | Script | Description |
 |---|---|
 | `run_installer_x5000.py` | Drive an end-to-end X5000 install via `installer_run` (defaults to dry-run). |
-| `run_installer_stage.py` | Drive `installer_stage` to upload an ISO + LHAs + `diskimage-bootstrap/` to a target. |
+| `run_installer_stage.py` | Drive `installer_stage` to upload the ISO + Update LHAs + Enhancer + extras + MCPd to a target. |
 | `deploy_mcpd_x5000.py` | One-shot deploy of a freshly built MCPd to a running X5000 (auto-start install + watchdog). |
 
 ### Diagnostics and probes

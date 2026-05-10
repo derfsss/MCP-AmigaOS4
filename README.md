@@ -38,8 +38,15 @@ can:
   `power.toggle_stream` drive the MCU debug shell directly from
   MCP. Works regardless of AOS / MCPd state; the only software
   path to boot a fully-off X5000.
+- **Iterate on programs and drivers without power-cycling** —
+  `sandbox.*` wraps [SandboxVM](https://github.com/derfsss/SandboxVM)
+  so a guest segfault no longer takes down the daemon. Edit →
+  upload → run → read structured exit code + trap classification +
+  captured stdout/stderr; load `.device` / `.library` drivers in
+  resident-init mode and chain a test program against them, all in
+  a single tool call.
 
-118 typed MCP tools, 8 live resources, validated end-to-end on QEMU
+128 typed MCP tools, 8 live resources, validated end-to-end on QEMU
 pegasos2 and real AmigaOne X5000 hardware.
 
 If that sounds useful, the rest of this README and the docs below
@@ -86,13 +93,13 @@ A summary follows; the full list of tools, resources, methods, and
 helper scripts lives in [COMMANDS.md](COMMANDS.md), with narrative
 context in [USAGE.md](USAGE.md).
 
-- More than 100 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`,
+- More than 120 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`,
   `wb.*`, `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
-  `app.notify`, `notify.*`, `installer.*`, `serial.*`, and
-  `power.*`, plus a namespace dispatcher per group. (`events.subscribe`,
-  `events.unsubscribe`, and `events.test_emit` are exposed only as
-  daemon RPC methods, not MCP tools — clients call them directly
-  through the transport.)
+  `app.notify`, `notify.*`, `installer.*`, `serial.*`, `power.*`,
+  and `sandbox.*`, plus a namespace dispatcher per group.
+  (`events.subscribe`, `events.unsubscribe`, and `events.test_emit`
+  are exposed only as daemon RPC methods, not MCP tools — clients
+  call them directly through the transport.)
 - Eight live MCP resources for fleet status, per-target system
   snapshots, capability reports, and serial logs.
 - Parallel multi-target operations (`fleet.run_on_all`,
@@ -112,8 +119,8 @@ context in [USAGE.md](USAGE.md).
   `S:Network-Startup`. Boot-to-bind is approximately eleven seconds on
   an AmigaOne X5000.
 - Per-tool parameter defaults via a `[defaults]` block in
-  `config.toml` (`dest_volume`, `sources_dir`, `bootstrap_dir`,
-  `machine`, ...). Set frequently-repeated values once and skip
+  `config.toml` (`dest_volume`, `sources_dir`, `machine`,
+  `iso_filename`). Set frequently-repeated values once and skip
   them in subsequent tool calls; explicit per-call values always
   override. See [USAGE.md § Per-tool
   defaults](USAGE.md#per-tool-defaults).
