@@ -121,7 +121,8 @@ class SandboxProbeResult(BaseModel):
     code: str | None = None
     """Error code when ``available is False``. One of
     ``SANDBOXVM_MISSING``, ``SANDBOXVM_BROKEN``,
-    ``SANDBOXVM_INCOMPATIBLE_TARGET``. ``None`` when available."""
+    ``SANDBOXVM_INCOMPATIBLE_TARGET``, ``SANDBOXVM_TARGET_UNREACHABLE``.
+    ``None`` when available."""
     path: str | None = None
     """Resolved on-target AOS path when available."""
     searched: list[str] = Field(default_factory=list)
@@ -301,13 +302,38 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
     candidates = _candidate_target_paths(fleet, target)
     found: str | None = None
     mcpd = fleet.mcpd(target)
+    transport_error: Exception | None = None
     for path in candidates:
         try:
             await mcpd.request("fs.stat", {"path": path})
             found = path
             break
-        except Exception:
+        except TargetError:
+            # Path doesn't exist (or isn't stat-able) on the target.
+            # Try the next candidate.
             continue
+        except Exception as e:
+            # Anything that isn't a TargetError is a transport-level
+            # failure (target unreachable, connection refused,
+            # asyncio.TimeoutError, etc.). Stop probing and surface
+            # it as a distinct error code -- a missing binary needs
+            # `sandbox.deploy`, an unreachable target needs power /
+            # network attention first.
+            transport_error = e
+            break
+
+    if transport_error is not None:
+        return SandboxProbeResult(
+            target=target, available=False,
+            code="SANDBOXVM_TARGET_UNREACHABLE",
+            searched=candidates,
+            machine=machine, machine_ok=machine_ok,
+            hint=(f"target {target!r} did not respond to fs.stat "
+                  f"({type(transport_error).__name__}: "
+                  f"{str(transport_error)[:120]}). Confirm the "
+                  "target is powered on and MCPd is reachable "
+                  "(`fleet.target_status`) before deploying."),
+        )
 
     if found is None:
         result = SandboxProbeResult(
@@ -375,12 +401,21 @@ async def _probe_specific_path(fleet: Fleet, target: str,
     mcpd = fleet.mcpd(target)
     try:
         await mcpd.request("fs.stat", {"path": path})
-    except Exception:
+    except TargetError:
         return SandboxProbeResult(
             target=target, available=False,
             code="SANDBOXVM_MISSING",
             searched=[path],
             machine=machine, machine_ok=machine_ok,
+        )
+    except Exception as e:
+        return SandboxProbeResult(
+            target=target, available=False,
+            code="SANDBOXVM_TARGET_UNREACHABLE",
+            searched=[path],
+            machine=machine, machine_ok=machine_ok,
+            hint=(f"target {target!r} did not respond to fs.stat "
+                  f"({type(e).__name__}: {str(e)[:120]})."),
         )
 
     ran, banner = await _execute_banner_probe(fleet, target, path)
@@ -418,6 +453,11 @@ async def _ensure_available(fleet: Fleet, target: str) -> SandboxProbeResult:
                 res.hint or "target incompatible with SandboxVM",
                 data={"code": res.code, "target": target,
                       "machine": res.machine},
+            )
+        if res.code == "SANDBOXVM_TARGET_UNREACHABLE":
+            raise NotCapable(
+                res.hint or "target unreachable",
+                data={"code": res.code, "target": target},
             )
         raise InvalidParams(
             res.hint or "sandboxvm not available on target",

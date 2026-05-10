@@ -230,6 +230,49 @@ async def test_probe_empty_banner_still_available(fleet_with_fake):
 
 
 @pytest.mark.asyncio
+async def test_probe_unreachable_target_returns_typed_code(fleet_with_fake):
+    """When fs.stat raises a non-TargetError exception (transport
+    failure, target offline), the probe should distinguish that
+    from a genuine "binary not found" miss. The user fixes the two
+    cases differently — power on the target vs run sandbox.deploy."""
+    fleet, fake = fleet_with_fake
+
+    # Patch FakeMcpd.request to raise a non-TargetError on every
+    # call, simulating an unreachable target.
+    async def unreachable(method, params=None, timeout_s=30.0):
+        raise ConnectionRefusedError("simulated offline target")
+    fake.request = unreachable  # type: ignore[method-assign]
+
+    res = await sb.sandbox_probe(fleet, "tgt")
+
+    assert res.available is False
+    assert res.code == "SANDBOXVM_TARGET_UNREACHABLE"
+    assert "ConnectionRefusedError" in (res.hint or "")
+    assert "fleet.target_status" in (res.hint or "")
+    # Unreachable result is NOT cached (next call should re-probe
+    # in case the target came back).
+    assert "tgt" not in sb._PROBE_CACHE
+
+
+@pytest.mark.asyncio
+async def test_run_guest_unreachable_raises_not_capable(fleet_with_fake):
+    """An unreachable target should raise NotCapable so the caller
+    can distinguish it from a missing-binary case (which raises
+    InvalidParams)."""
+    fleet, fake = fleet_with_fake
+
+    async def unreachable(method, params=None, timeout_s=30.0):
+        raise ConnectionRefusedError("simulated offline target")
+    fake.request = unreachable  # type: ignore[method-assign]
+
+    with pytest.raises(NotCapable) as exc:
+        await sb.sandbox_run_guest(
+            fleet, "tgt", guest="Tools:hello",
+        )
+    assert "SANDBOXVM_TARGET_UNREACHABLE" in str(exc.value.data)
+
+
+@pytest.mark.asyncio
 async def test_probe_pegasos2_refused_via_machine_field():
     fleet = Fleet(_make_config(machine="pegasos2"))
     fleet._mcpd["tgt"] = FakeMcpd()  # type: ignore[assignment]
