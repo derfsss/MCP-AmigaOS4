@@ -24,6 +24,7 @@ from amiga_fleet_mcp.config import (
 from amiga_fleet_mcp.errors import InvalidParams, NotCapable, TargetError
 from amiga_fleet_mcp.fleet import Fleet
 from amiga_fleet_mcp.tools import sandbox as sb
+from amiga_fleet_mcp.tools import sys as sys_tool
 
 # ---- fake transport ------------------------------------------------
 
@@ -596,3 +597,244 @@ async def test_run_guest_serialises_per_target():
     # Second guest only starts after first finishes — proves the
     # per-target lock did its job.
     assert started[1] >= finished[0] - 1e-6
+
+
+# ---- run_driver ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_driver_init_only_sets_resident_flag():
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    captured: dict[str, str] = {}
+
+    def cap(p):
+        if "virtioscsi.device" in p["command"]:
+            captured["cmd"] = p["command"]
+            return True
+        return False
+
+    fake.queue_exec(cap, {"output": "init ok", "exit_code": 0})
+
+    res = await sb.sandbox_run_driver(
+        fleet, "tgt", driver="Tools:virtioscsi.device",
+    )
+
+    cmd = captured["cmd"]
+    # -r flag present, no -t flag.
+    assert " -r " in cmd
+    assert " -t " not in cmd
+    # Driver path quoted as the positional guest argument.
+    assert '"Tools:virtioscsi.device"' in cmd
+    # Result mirrors run_guest's shape; `guest` field carries the
+    # driver path so the caller has consistent telemetry across the
+    # two entry points.
+    assert res.guest == "Tools:virtioscsi.device"
+    assert res.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_run_driver_with_test_chains_followon_guest():
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    captured: dict[str, str] = {}
+
+    def cap(p):
+        if "virtioscsi" in p["command"]:
+            captured["cmd"] = p["command"]
+            return True
+        return False
+
+    fake.queue_exec(cap, {"output": "test ok", "exit_code": 0})
+
+    await sb.sandbox_run_driver(
+        fleet, "tgt",
+        driver="Tools:virtioscsi.device",
+        test="Tools:virtioscsi-test",
+    )
+
+    cmd = captured["cmd"]
+    assert " -r " in cmd
+    # -t comes immediately followed by the quoted test path.
+    assert ' -t "Tools:virtioscsi-test" ' in cmd or \
+        ' -t "Tools:virtioscsi-test"' in cmd
+    # Driver path remains the positional guest arg, AFTER the -t flag.
+    assert cmd.index('"Tools:virtioscsi-test"') < \
+        cmd.index('"Tools:virtioscsi.device"')
+
+
+@pytest.mark.asyncio
+async def test_run_driver_probe_gated():
+    """Missing sandboxvm should fail before any exec happens."""
+    fleet = Fleet(_make_config())
+    fleet._mcpd["tgt"] = FakeMcpd()  # type: ignore[assignment]
+    with pytest.raises(InvalidParams):
+        await sb.sandbox_run_driver(
+            fleet, "tgt", driver="Tools:foo.device",
+        )
+
+
+# ---- last_trap -----------------------------------------------------
+
+
+def _ring_with_dsi() -> list[str]:
+    """Synthetic ring contents containing a SandboxVM DSI dump."""
+    return [
+        "[unrelated] some earlier line",
+        "[graphics] driver opened display",
+        "[sandboxvm] guest 0: trap caught",
+        "[sandboxvm] Traptype=0x300 dar=0xdeadbeef dsisr=0x40000000",
+        "[sandboxvm] guest [0] returned -768",
+    ]
+
+
+def _ring_with_kmod_libcall() -> list[str]:
+    """Synthetic ring contents matching the documented kmod-libcall
+    NULL+4 fingerprint."""
+    return [
+        "[graphics] earlier",
+        "[sandboxvm] guest 0: trap caught",
+        "[sandboxvm] Traptype=0x300 dar=0x4 dsisr=0x00800000",
+        "[sandboxvm] cross-kmod libcall hit -- HD_SCSICMD via DoIO?",
+    ]
+
+
+def _ring_no_trap() -> list[str]:
+    return [
+        "[graphics] driver opened display",
+        "[sandboxvm] guest 0 ready",
+        "[unrelated] random line",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_last_trap_finds_dsi():
+    fleet, _ = _make_available_fleet()
+    canned = sys_tool.DebugRingResult(
+        target="tgt", lines=_ring_with_dsi(), truncated=False,
+        raw_size=200, captured_at="2026-05-10T12:00:00Z",
+    )
+    with mock.patch.object(
+        sb.sys_tool, "sys_debug_ring",
+        return_value=canned,
+    ):
+        res = await sb.sandbox_last_trap(fleet, "tgt")
+
+    assert res.found is True
+    assert res.trap_kind == "DSI"
+    assert res.traptype_hex == "0x300"
+    assert res.fingerprint is None
+    # Block contains the trap-related lines, not the unrelated graphics
+    # one before them.
+    assert any("Traptype=0x300" in line for line in res.raw_lines)
+    assert not any("graphics" in line for line in res.raw_lines)
+    assert res.captured_at == "2026-05-10T12:00:00Z"
+    assert res.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_last_trap_finds_kmod_libcall_fingerprint():
+    fleet, _ = _make_available_fleet()
+    canned = sys_tool.DebugRingResult(
+        target="tgt", lines=_ring_with_kmod_libcall(), truncated=False,
+        raw_size=300, captured_at="2026-05-10T12:00:00Z",
+    )
+    with mock.patch.object(
+        sb.sys_tool, "sys_debug_ring",
+        return_value=canned,
+    ):
+        res = await sb.sandbox_last_trap(fleet, "tgt")
+
+    assert res.found is True
+    assert res.trap_kind == "DSI"
+    assert res.fingerprint == "kmod_libcall_null4"
+
+
+@pytest.mark.asyncio
+async def test_last_trap_retries_when_ring_empty_then_finds():
+    """Tests the retry loop: first call returns empty ring, second
+    call has the trap. Should return found=True with attempts=2."""
+    fleet, _ = _make_available_fleet()
+    empty = sys_tool.DebugRingResult(
+        target="tgt", lines=[], truncated=False,
+        raw_size=0, captured_at="2026-05-10T12:00:00Z",
+    )
+    populated = sys_tool.DebugRingResult(
+        target="tgt", lines=_ring_with_dsi(), truncated=False,
+        raw_size=200, captured_at="2026-05-10T12:00:01Z",
+    )
+
+    call_log: list = []
+
+    async def staged(*a, **kw):
+        call_log.append(kw)
+        return empty if len(call_log) == 1 else populated
+
+    with mock.patch.object(sb.sys_tool, "sys_debug_ring", staged):
+        res = await sb.sandbox_last_trap(
+            fleet, "tgt",
+            retry_count=3, retry_delay_s=0.01,
+        )
+
+    assert res.found is True
+    assert res.attempts == 2
+    assert res.trap_kind == "DSI"
+
+
+@pytest.mark.asyncio
+async def test_last_trap_returns_found_false_after_retries():
+    """No trap line ever appears -> found=False, attempts==retry_count."""
+    fleet, _ = _make_available_fleet()
+    canned = sys_tool.DebugRingResult(
+        target="tgt", lines=_ring_no_trap(), truncated=False,
+        raw_size=80, captured_at="2026-05-10T12:00:00Z",
+    )
+    with mock.patch.object(
+        sb.sys_tool, "sys_debug_ring",
+        return_value=canned,
+    ):
+        res = await sb.sandbox_last_trap(
+            fleet, "tgt",
+            retry_count=3, retry_delay_s=0.01,
+        )
+
+    assert res.found is False
+    assert res.attempts == 3
+    assert res.trap_kind is None
+    assert res.fingerprint is None
+    assert res.raw_lines == []
+    # captured_at still populated from the last (empty-of-traps) call.
+    assert res.captured_at == "2026-05-10T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_last_trap_extract_helper_handles_non_traps():
+    """The block-extraction heuristic shouldn't grab unrelated noise
+    when no trap line is present."""
+    kind, fp, hex_str, block = sb._extract_trap([
+        "log line 1", "log line 2", "log line 3",
+    ])
+    assert kind is None
+    assert fp is None
+    assert hex_str is None
+    assert block == []
+
+
+@pytest.mark.asyncio
+async def test_last_trap_extract_helper_with_traptype_only():
+    """A trap line with no recognised kind hex still surfaces the raw
+    hex value so the caller can investigate."""
+    kind, fp, hex_str, block = sb._extract_trap([
+        "noise",
+        "[sandboxvm] Traptype=0x999 unknown trap kind",
+    ])
+    assert kind is None  # 0x999 not in _TRAP_KIND_BY_HEX
+    assert hex_str == "0x999"
+    assert fp is None
+    assert len(block) == 1

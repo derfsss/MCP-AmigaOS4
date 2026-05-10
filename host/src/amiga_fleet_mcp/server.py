@@ -365,6 +365,28 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         the four-word raw payload)."""
         return await sys_tool.sys_lastalert(fleet, fleet.resolve_target(target))
 
+    @mcp.tool(name="sys_debug_ring", title="sys.debug_ring")
+    @archived("sys.debug_ring", archive)
+    async def sys_debug_ring(
+        *, target: str | None = None,
+        since_s: float = 60.0,
+        max_lines: int = 500,
+    ) -> sys_tool.DebugRingResult:
+        """Read the kernel debug ring via `c:DumpDebugBuffer`.
+
+        Returns the most recent `max_lines` lines (oldest-first)
+        plus the raw byte size of the full capture and an
+        ISO-8601 host timestamp. Useful for post-install forensics,
+        hardware bring-up, and as the primitive that
+        `sandbox.last_trap` filters against. `since_s` is reserved
+        for a future timestamp-aware trim — accepted but not yet
+        used (DumpDebugBuffer lines have no per-line timestamps to
+        filter against)."""
+        return await sys_tool.sys_debug_ring(
+            fleet, fleet.resolve_target(target),
+            since_s=since_s, max_lines=max_lines,
+        )
+
     @mcp.tool(name="sys_uptime", title="sys.uptime")
     @archived("sys.uptime", archive)
     async def sys_uptime(*, target: str | None = None) -> sys_tool.UptimeResult:
@@ -1370,6 +1392,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "lastalert":             sys_tool.sys_lastalert,
             "alert_decode":          sys_tool.sys_alert_decode,
             "cold_reboot":           sys_tool.sys_cold_reboot,
+            "debug_ring":            sys_tool.sys_debug_ring,
             # memory introspection (PA / TLB / CCSR)
             "read_ccsr":             sys_tool.sys_read_ccsr,
             "read_pa":               sys_tool.sys_read_pa,
@@ -2164,6 +2187,62 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             deny_libs=deny_libs, name=name, timeout_s=timeout_s,
         )
 
+    @mcp.tool(name="sandbox_run_driver", title="sandbox.run_driver")
+    @archived("sandbox.run_driver", archive)
+    async def sandbox_run_driver(
+        *, target: str | None = None,
+        driver: str,
+        test: str | None = None,
+        args: list[str] | None = None,
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> sandbox_tool.GuestRunResult:
+        """Load a driver via SandboxVM resident-driver mode (`-r`).
+
+        Scans the driver's RTF_AUTOINIT Resident, applies PPC ELF
+        relocations, and calls CLT_InitFunc with the sandboxed
+        IExec. When `test` is set, runs that follow-on guest in the
+        same Guest context after a successful init so
+        OpenLibrary(<driver-name>) resolves through the resident-lib
+        registry.
+
+        Same return shape and lifecycle as `sandbox.run_guest`; the
+        result's `guest` field carries the driver path (the thing
+        being loaded). Probe-gated; lock-serialised; T:capture
+        files slurped + deleted."""
+        return await sandbox_tool.sandbox_run_driver(
+            fleet, fleet.resolve_target(target),
+            driver=driver, test=test, args=args,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
+    @mcp.tool(name="sandbox_last_trap", title="sandbox.last_trap")
+    @archived("sandbox.last_trap", archive)
+    async def sandbox_last_trap(
+        *, target: str | None = None,
+        since_s: float = 60.0,
+        max_lines: int = 500,
+        retry_count: int = 3,
+        retry_delay_s: float = 0.2,
+    ) -> sandbox_tool.LastTrapResult:
+        """Filter the kernel debug ring for SandboxVM trap signatures.
+
+        Wraps `sys.debug_ring` with a small retry loop (default 3
+        attempts, 200 ms apart) so a `last_trap` call immediately after a
+        crashed `run_guest` doesn't race the kernel ring write.
+        Returns the matched trap block plus a structured `trap_kind`
+        / `fingerprint` / `traptype_hex` summary. `found=False` is
+        the legitimate "no trap to report" outcome."""
+        return await sandbox_tool.sandbox_last_trap(
+            fleet, fleet.resolve_target(target),
+            since_s=since_s, max_lines=max_lines,
+            retry_count=retry_count, retry_delay_s=retry_delay_s,
+        )
+
     @mcp.tool(name="sandbox", title="sandbox.dispatch")
     @archived("sandbox.dispatch", archive)
     async def sandbox_ns(
@@ -2176,6 +2255,11 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
           run_guest(target=None, guest, args=None, extmem_mb=None,
                     window_mb=None, deny_libs=None, name=None,
                     timeout_s=120.0)
+          run_driver(target=None, driver, test=None, args=None,
+                     extmem_mb=None, window_mb=None, deny_libs=None,
+                     name=None, timeout_s=120.0)
+          last_trap(target=None, since_s=60.0, max_lines=500,
+                    retry_count=3, retry_delay_s=0.2)
 
         target falls back to ``[server] default_target``. Mutating
         methods need ``confirm=True``."""
@@ -2196,10 +2280,21 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             return await sandbox_tool.sandbox_run_guest(
                 fleet, fleet.resolve_target(p.get("target")), **kwargs,
             )
+        if method == "run_driver":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_driver(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        if method == "last_trap":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_last_trap(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
         raise MethodNotFound(
             f"unknown method: {method!r}",
             data={"namespace_methods": [
                 "probe", "deploy", "run_guest",
+                "run_driver", "last_trap",
             ]},
         )
 

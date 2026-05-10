@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import re
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -49,6 +50,7 @@ from pydantic import BaseModel, Field
 from ..errors import InvalidParams, NotCapable, TargetError
 from ..fleet import Fleet
 from . import fs as fs_tool
+from . import sys as sys_tool
 
 # ---------------------------------------------------------------------
 # Constants
@@ -591,11 +593,21 @@ def _build_command(sandboxvm_path: str, *,
                    extmem_mb: int,
                    window_mb: int,
                    deny_libs: Sequence[str],
-                   name: str) -> str:
+                   name: str,
+                   resident_driver: bool = False,
+                   test_elf: str | None = None) -> str:
     """Construct the AmigaDOS command line for one guest run.
 
-    Format:
+    Plain guest mode:
         "<sandboxvm>" -m <MB> -w <MB> -n <name> [-x lib]... <guest> [-- args...]
+
+    Resident-driver mode (`resident_driver=True`):
+        "<sandboxvm>" -m <MB> -w <MB> -n <name> [-x lib]...
+                      -r <guest> [-t <test>] [-- args...]
+
+    `test_elf` is only meaningful with `resident_driver=True`; the
+    caller is responsible for raising before this point if both
+    aren't set together.
 
     Quoting note: AmigaDOS quoting is conservative. We wrap the
     sandboxvm path and the guest path in double quotes so spaces /
@@ -608,6 +620,10 @@ def _build_command(sandboxvm_path: str, *,
     parts.extend(["-n", _shell_safe(name)])
     for lib in deny_libs:
         parts.extend(["-x", _shell_safe(lib)])
+    if resident_driver:
+        parts.append("-r")
+    if test_elf:
+        parts.extend(["-t", f'"{test_elf}"'])
     parts.append(f'"{guest}"')
     if args:
         parts.append("--")
@@ -682,34 +698,23 @@ async def _delete_capture(fleet: Fleet, target: str, path: str) -> None:
         pass
 
 
-async def sandbox_run_guest(
+async def _run_sandboxvm(
     fleet: Fleet, target: str, *,
     guest: str,
-    args: Sequence[str] | None = None,
-    extmem_mb: int | None = None,
-    window_mb: int | None = None,
-    deny_libs: Sequence[str] | None = None,
-    name: str | None = None,
-    timeout_s: float = 120.0,
+    args: Sequence[str] | None,
+    extmem_mb: int | None,
+    window_mb: int | None,
+    deny_libs: Sequence[str] | None,
+    name: str | None,
+    timeout_s: float,
+    resident_driver: bool = False,
+    test_elf: str | None = None,
 ) -> GuestRunResult:
-    """Run a single guest ELF inside SandboxVM on `target`.
+    """Shared core for `sandbox_run_guest` and `sandbox_run_driver`.
 
-    Probe-gated: a missing / broken / Pegasos2 target raises a typed
-    error before any work happens.
-
-    Args:
-        guest: AOS path to the guest ELF (e.g.
-            ``"Tools:tests/clib4hello"``).
-        args: Optional list of strings appended via ``--``.
-        extmem_mb / window_mb: SandboxVM ``-m`` / ``-w`` values.
-            Defaults come from
-            ``[targets.<target>.sandbox.default_*]`` (1024 / 256
-            when unset).
-        deny_libs: Per-call ``-x`` flags. Merged with any
-            ``[targets.<target>.sandbox.deny_libs]`` from config.
-        name: Used as ``-n`` (also drives the T:capture filenames).
-            Defaults to the basename of ``guest`` minus extension.
-        timeout_s: Host-side request timeout for the run."""
+    Performs the probe gate, resolves config-driven defaults, builds
+    the command, runs it under the per-target lock, and slurps +
+    classifies the T:capture files."""
     probe = await _ensure_available(fleet, target)
     assert probe.path is not None  # guaranteed by _ensure_available
 
@@ -740,6 +745,8 @@ async def sandbox_run_guest(
         window_mb=window_mb,
         deny_libs=merged_deny,
         name=run_name,
+        resident_driver=resident_driver,
+        test_elf=test_elf,
     )
 
     # Per-target lock so concurrent run_guest calls on the same
@@ -807,6 +814,268 @@ async def sandbox_run_guest(
         stderr=stderr,
         duration_s=time.monotonic() - t0,
         capture_paths=capture_paths,
+    )
+
+
+async def sandbox_run_guest(
+    fleet: Fleet, target: str, *,
+    guest: str,
+    args: Sequence[str] | None = None,
+    extmem_mb: int | None = None,
+    window_mb: int | None = None,
+    deny_libs: Sequence[str] | None = None,
+    name: str | None = None,
+    timeout_s: float = 120.0,
+) -> GuestRunResult:
+    """Run a single guest ELF inside SandboxVM on `target`.
+
+    Probe-gated: a missing / broken / Pegasos2 target raises a typed
+    error before any work happens.
+
+    Args:
+        guest: AOS path to the guest ELF (e.g.
+            ``"Tools:tests/clib4hello"``).
+        args: Optional list of strings appended via ``--``.
+        extmem_mb / window_mb: SandboxVM ``-m`` / ``-w`` values.
+            Defaults come from
+            ``[targets.<target>.sandbox.default_*]`` (1024 / 256
+            when unset).
+        deny_libs: Per-call ``-x`` flags. Merged with any
+            ``[targets.<target>.sandbox.deny_libs]`` from config.
+        name: Used as ``-n`` (also drives the T:capture filenames).
+            Defaults to the basename of ``guest`` minus extension.
+        timeout_s: Host-side request timeout for the run."""
+    return await _run_sandboxvm(
+        fleet, target,
+        guest=guest, args=args,
+        extmem_mb=extmem_mb, window_mb=window_mb,
+        deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        resident_driver=False, test_elf=None,
+    )
+
+
+async def sandbox_run_driver(
+    fleet: Fleet, target: str, *,
+    driver: str,
+    test: str | None = None,
+    args: Sequence[str] | None = None,
+    extmem_mb: int | None = None,
+    window_mb: int | None = None,
+    deny_libs: Sequence[str] | None = None,
+    name: str | None = None,
+    timeout_s: float = 120.0,
+) -> GuestRunResult:
+    """Load a driver via SandboxVM's resident-driver mode (`-r`).
+
+    SandboxVM scans the driver's RTF_AUTOINIT Resident, applies PPC
+    ELF relocations, and calls the CLT_InitFunc with the sandboxed
+    IExec. When `test` is set, after a successful init SandboxVM
+    runs `test` as a follow-on guest in the same Guest context so
+    `OpenLibrary(<driver-name>)` from the test resolves via the
+    resident-lib registry.
+
+    Probe-gated, lock-serialised, T:-capture-slurped — same shape as
+    `sandbox.run_guest`. The result's `guest` field carries the
+    driver path (the thing being loaded).
+
+    Args:
+        driver: AOS path to the .device or .library being loaded.
+        test: Optional AOS path to a follow-on guest ELF. Requires
+            the driver init to succeed first; SandboxVM aborts if
+            the resident-init returns non-zero.
+        args: Optional list of strings appended via ``--`` (only
+            meaningful with `test`).
+        extmem_mb / window_mb / deny_libs / name / timeout_s: Same
+            semantics as `sandbox.run_guest`."""
+    return await _run_sandboxvm(
+        fleet, target,
+        guest=driver, args=args,
+        extmem_mb=extmem_mb, window_mb=window_mb,
+        deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        resident_driver=True, test_elf=test,
+    )
+
+
+# ---------------------------------------------------------------------
+# last_trap — filter sys.debug_ring for SandboxVM trap signatures
+# ---------------------------------------------------------------------
+
+
+class LastTrapResult(BaseModel):
+    """Return shape for `sandbox.last_trap`."""
+
+    target: str
+    found: bool
+    trap_kind: str | None = None
+    """One of DSI / ISI / alignment / program / fp_unavailable when
+    the ring contained a recognised trap line."""
+    fingerprint: str | None = None
+    """Specific shape match — currently only ``kmod_libcall_null4``
+    (the documented HD_SCSICMD-via-DoIO limitation)."""
+    traptype_hex: str | None = None
+    """Raw trap_type as hex (e.g. ``"0x300"``) when extracted from
+    the ring text."""
+    raw_lines: list[str] = Field(default_factory=list)
+    """The matching ring lines, in order. Empty when ``found`` is
+    False."""
+    captured_at: str | None = None
+    """ISO-8601 host timestamp from the underlying sys.debug_ring
+    call. ``None`` when no debug ring was captured (e.g. retry
+    exhausted)."""
+    attempts: int = 0
+    """Number of sys.debug_ring calls made before finding a trap.
+    Useful for diagnosing the ring-write race."""
+
+
+# Lines emitted by SandboxVM's tc_TrapCode trampoline carry an
+# explicit trap-type prefix. We match a generous regex so upstream
+# can change the exact prose without breaking the filter.
+_RE_TRAPTYPE = re.compile(r"(?i)\btrap[_ ]?type\s*=\s*0x([0-9a-f]+)")
+_RE_SANDBOXVM_LINE = re.compile(r"(?i)\[sandbox(vm)?\]")
+_RE_TRAP_LINE = re.compile(
+    r"(?i)\b(trap|dsi|isi|alignment|illegal|privilege|fault)\b"
+)
+
+# Map raw traptype hex (lower, no 0x) to a kind string.
+_TRAP_KIND_BY_HEX: dict[str, str] = {
+    "300": "DSI",
+    "400": "ISI",
+    "600": "alignment",
+    "700": "program",
+    "800": "fp_unavailable",
+}
+
+# Kmod-libcall NULL+4 fingerprint hints — same set as `_classify_exit`
+# but applied to ring text rather than guest stderr. All three must
+# appear within the candidate trap window.
+_KMOD_HINTS = ("Traptype=0x300", "dar=0x4", "dsisr=0x00800000")
+
+
+def _extract_trap(lines: Sequence[str]) -> tuple[
+    str | None, str | None, str | None, list[str],
+]:
+    """Walk `lines` and return (trap_kind, fingerprint,
+    traptype_hex, matching_lines).
+
+    A trap is anchored by either a `traptype=` hex value or a hard
+    trap keyword (`dsi`, `isi`, `alignment`, `illegal`, `privilege`,
+    `fault`, `trap`). A bare `[sandboxvm]` prefix on its own is not
+    enough — SandboxVM emits routine status lines too, and we don't
+    want to count "guest 0 ready" as a trap.
+
+    Once an anchor is found we expand it backwards (and forwards)
+    over adjacent [sandboxvm]-prefixed or anchor-matching lines so
+    the caller gets the surrounding dump (registers, dsisr, dar,
+    callsite hints) rather than just the headline."""
+    if not lines:
+        return None, None, None, []
+
+    def _is_anchor(line: str) -> bool:
+        return bool(
+            _RE_TRAPTYPE.search(line) or _RE_TRAP_LINE.search(line),
+        )
+
+    def _is_block_member(line: str) -> bool:
+        return bool(
+            _is_anchor(line) or _RE_SANDBOXVM_LINE.search(line),
+        )
+
+    # Walk from the end backwards to find the last anchor.
+    last_trap_idx: int | None = None
+    for i in range(len(lines) - 1, -1, -1):
+        if _is_anchor(lines[i]):
+            last_trap_idx = i
+            break
+    if last_trap_idx is None:
+        return None, None, None, []
+
+    # Expand backwards over [sandboxvm] / anchor lines for context.
+    start = last_trap_idx
+    while start > 0 and _is_block_member(lines[start - 1]):
+        start -= 1
+
+    # Expand forwards similarly so a multi-line trap dump (registers,
+    # callsite, etc.) all lands in the block.
+    end = last_trap_idx
+    while end + 1 < len(lines) and _is_block_member(lines[end + 1]):
+        end += 1
+
+    block = list(lines[start:end + 1])
+    block_text = "\n".join(block)
+
+    # Extract first traptype hex in the block — the trampoline emits
+    # the trap_type field on the first line of its dump.
+    trap_kind: str | None = None
+    traptype_hex: str | None = None
+    m = _RE_TRAPTYPE.search(block_text)
+    if m:
+        hex_lower = m.group(1).lower().lstrip("0") or "0"
+        traptype_hex = f"0x{hex_lower}"
+        trap_kind = _TRAP_KIND_BY_HEX.get(hex_lower)
+
+    fingerprint: str | None = None
+    if all(h in block_text for h in _KMOD_HINTS):
+        fingerprint = "kmod_libcall_null4"
+
+    return trap_kind, fingerprint, traptype_hex, block
+
+
+async def sandbox_last_trap(
+    fleet: Fleet, target: str, *,
+    since_s: float = 60.0,
+    max_lines: int = 500,
+    retry_count: int = 3,
+    retry_delay_s: float = 0.2,
+) -> LastTrapResult:
+    """Filter the kernel debug ring for SandboxVM trap fingerprints.
+
+    Calls `sys.debug_ring` with a small retry loop (default 3 tries,
+    200 ms apart) because the kernel ring write is asynchronous to
+    SandboxVM exit — a `last_trap` immediately after `run_guest`
+    can race the trap line into the ring. Each retry re-reads the
+    full ring and re-scans for trap markers.
+
+    `since_s` and `max_lines` are forwarded to `sys.debug_ring`.
+
+    Returns an empty `found=False` result when no trap signature is
+    visible after all retries — that's the genuine "no trap to
+    report" case, not an error."""
+    if retry_count < 1:
+        retry_count = 1
+    if retry_delay_s < 0:
+        retry_delay_s = 0.0
+
+    last_lines: list[str] = []
+    last_captured_at: str | None = None
+    attempts = 0
+    for attempt in range(retry_count):
+        attempts = attempt + 1
+        ring = await sys_tool.sys_debug_ring(
+            fleet, target,
+            since_s=since_s, max_lines=max_lines,
+        )
+        last_lines = list(ring.lines)
+        last_captured_at = ring.captured_at
+        kind, fp, hex_str, block = _extract_trap(last_lines)
+        if block:
+            return LastTrapResult(
+                target=target,
+                found=True,
+                trap_kind=kind,
+                fingerprint=fp,
+                traptype_hex=hex_str,
+                raw_lines=block,
+                captured_at=ring.captured_at,
+                attempts=attempts,
+            )
+        if attempt + 1 < retry_count:
+            await asyncio.sleep(retry_delay_s)
+
+    return LastTrapResult(
+        target=target,
+        found=False,
+        captured_at=last_captured_at,
+        attempts=attempts,
     )
 
 

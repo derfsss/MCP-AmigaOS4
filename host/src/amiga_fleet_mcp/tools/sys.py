@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from pydantic import BaseModel
@@ -95,6 +96,86 @@ async def sys_ports(fleet: Fleet, target: str) -> PortsResult:
 async def sys_lastalert(fleet: Fleet, target: str) -> LastAlertResult:
     raw: dict[str, Any] = await fleet.mcpd(target).request("sys.lastalert")
     return LastAlertResult.model_validate(raw)
+
+
+# ---------- sys.debug_ring (Phase B for sandbox.last_trap) ---------
+
+
+class DebugRingResult(BaseModel):
+    """Return shape for `sys.debug_ring`."""
+
+    target: str
+    lines: list[str]
+    """Most recent ring entries, oldest-first. Trimmed to
+    `max_lines` if the full ring exceeded it."""
+    truncated: bool
+    """True when the underlying capture was longer than `max_lines`
+    and the head was dropped to keep the most recent entries."""
+    raw_size: int
+    """Size in bytes of the full DumpDebugBuffer capture before any
+    line-count trimming. Useful for sizing future calls."""
+    captured_at: str
+    """ISO-8601 host timestamp at the moment of capture."""
+
+
+async def sys_debug_ring(
+    fleet: Fleet, target: str, *,
+    since_s: float = 60.0,
+    max_lines: int = 500,
+) -> DebugRingResult:
+    """Read the kernel debug ring via ``c:DumpDebugBuffer``.
+
+    Returns the most recent ``max_lines`` lines of the ring contents.
+    `since_s` is currently a soft hint reserved for a future
+    timestamp-aware trim — DumpDebugBuffer entries don't carry their
+    own timestamps, so today we return raw line-count-bounded
+    output and the caller does any timing correlation against the
+    `captured_at` host timestamp.
+
+    Useful for: post-install forensics, hardware bring-up, and as
+    the primitive that ``sandbox.last_trap`` filters against. Pure
+    read-only — no daemon mutation, no `confirm` needed.
+
+    The call uses a generous 30 s timeout because rings can be
+    large on a long-running target (multi-MB on a busy X5000)."""
+    if max_lines < 1:
+        max_lines = 1
+
+    t = fleet.mcpd(target)
+    raw = await t.request(
+        "exec.cmd",
+        {
+            "command": "C:DumpDebugBuffer",
+            "timeout_ms": 30000,
+        },
+        timeout_s=35.0,
+    )
+    output = str(raw.get("output", ""))
+    raw_size = len(output)
+    # Split keeping no trailing empty line. Most rings end with a
+    # newline; splitlines() handles both \n and \r\n.
+    all_lines = output.splitlines()
+    truncated = len(all_lines) > max_lines
+    lines = all_lines[-max_lines:] if truncated else all_lines
+
+    from datetime import datetime
+    captured_at = datetime.now(UTC).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
+
+    # since_s is consumed (parameter accepted) but we don't filter
+    # on it yet -- DumpDebugBuffer output has no per-line timestamps
+    # to filter against. Documenting the contract and ignoring is
+    # better than silently widening behaviour later.
+    _ = since_s
+
+    return DebugRingResult(
+        target=target,
+        lines=lines,
+        truncated=truncated,
+        raw_size=raw_size,
+        captured_at=captured_at,
+    )
 
 
 # ---------- phase-7 surface (sys.uptime / memory / volumes / assigns) ----
