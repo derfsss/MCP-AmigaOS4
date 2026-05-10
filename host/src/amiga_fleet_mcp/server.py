@@ -31,6 +31,7 @@ from .tools import fs as fs_tool
 from .tools import installer as installer_tool
 from .tools import power as power_tool
 from .tools import qemu as qemu_tool
+from .tools import sandbox as sandbox_tool
 from .tools import serial as serial_tool
 from .tools import snapshots as snap_tool
 from .tools import sys as sys_tool
@@ -2084,6 +2085,123 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "tail":  serial_tool.serial_tail,
             "clear": serial_tool.serial_clear,
         }, method, p)
+
+    # ============================================================
+    # sandbox.* — SandboxVM-driven dev loop on AOS4 targets
+    # ============================================================
+
+    @mcp.tool(name="sandbox_probe", title="sandbox.probe")
+    @archived("sandbox.probe", archive)
+    async def sandbox_probe(
+        *, target: str | None = None,
+    ) -> sandbox_tool.SandboxProbeResult:
+        """Probe a target for SandboxVM availability.
+
+        Returns a structured result describing whether sandboxvm is
+        reachable, runnable, and on a compatible machine. Bypasses
+        the in-process probe cache (always re-checks). Other
+        ``sandbox.*`` tools call into the cached version internally
+        before doing work, so the typical caller never has to invoke
+        ``sandbox.probe`` directly — but it's exposed for diagnosis."""
+        return await sandbox_tool.sandbox_probe(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="sandbox_deploy", title="sandbox.deploy")
+    @archived("sandbox.deploy", archive)
+    async def sandbox_deploy(
+        *, target: str | None = None,
+        source: str | None = None,
+        dest_path: str | None = None,
+        confirm: bool = False,
+    ) -> sandbox_tool.DeployResult:
+        """Upload sandboxvm to a target. Convenience wrapper around
+        ``fs.upload``: resolves source path (`[paths] sandboxvm` or
+        explicit ``source`` arg), resolves dest path
+        (``[targets.<target>.sandbox.path]`` or default
+        ``SYS:Tools/sandboxvm``), runs the upload with SHA-256
+        verification, and invalidates the probe cache so the next
+        ``sandbox.*`` call re-validates against the fresh binary.
+
+        Mutating; requires ``confirm=True``."""
+        return await sandbox_tool.sandbox_deploy(
+            fleet, fleet.resolve_target(target),
+            source=source, dest_path=dest_path, confirm=confirm,
+        )
+
+    @mcp.tool(name="sandbox_run_guest", title="sandbox.run_guest")
+    @archived("sandbox.run_guest", archive)
+    async def sandbox_run_guest(
+        *, target: str | None = None,
+        guest: str,
+        args: list[str] | None = None,
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> sandbox_tool.GuestRunResult:
+        """Run one guest ELF inside SandboxVM and return a structured
+        result.
+
+        Probe-gated: a missing / broken / Pegasos2 target raises a
+        typed error before any work happens. Output goes to
+        ``T:sandboxvm-<name>.{out,err}`` on the target; the wrapper
+        slurps + decodes both files after the run and deletes them.
+
+        ``exit_code`` follows SandboxVM's convention: 0 on a clean
+        guest exit, positive for the guest's own rc, negative for
+        traps (-768 == DSI, -1024 == ISI, ...). When the exit code
+        matches a known trap shape, ``trap_kind`` is populated.
+
+        For arbitrary AmigaDOS commands without the SandboxVM
+        harness, use ``exec.cmd``. For JSON-config-driven multi-step
+        test bundles, use ``tests.run_suite``."""
+        return await sandbox_tool.sandbox_run_guest(
+            fleet, fleet.resolve_target(target),
+            guest=guest, args=args,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
+    @mcp.tool(name="sandbox", title="sandbox.dispatch")
+    @archived("sandbox.dispatch", archive)
+    async def sandbox_ns(
+        *, method: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        """sandbox.* dispatcher. ``method`` is one of:
+
+          probe(target=None)
+          deploy(target=None, source=None, dest_path=None, confirm=False)
+          run_guest(target=None, guest, args=None, extmem_mb=None,
+                    window_mb=None, deny_libs=None, name=None,
+                    timeout_s=120.0)
+
+        target falls back to ``[server] default_target``. Mutating
+        methods need ``confirm=True``."""
+        p = params or {}
+        if method == "probe":
+            return await sandbox_tool.sandbox_probe(
+                fleet, fleet.resolve_target(p.get("target")),
+            )
+        if method == "deploy":
+            return await sandbox_tool.sandbox_deploy(
+                fleet, fleet.resolve_target(p.get("target")),
+                source=p.get("source"),
+                dest_path=p.get("dest_path"),
+                confirm=p.get("confirm", False),
+            )
+        if method == "run_guest":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_guest(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        raise MethodNotFound(
+            f"unknown method: {method!r}",
+            data={"namespace_methods": [
+                "probe", "deploy", "run_guest",
+            ]},
+        )
 
 
 def _build_runtime(config: Config) -> tuple[Fleet, Archive]:

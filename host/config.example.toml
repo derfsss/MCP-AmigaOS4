@@ -34,10 +34,14 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  of derfsss/AmigaQemuTests.
 # qemu_binary      Required by `qemu.start`. Absolute path to
 #                  qemu-system-ppc (qemu-system-ppc.exe on Windows).
+# sandboxvm        Used by `sandbox.deploy` to resolve the upload source
+#                  when no explicit `source` arg is given. Absolute path
+#                  to a built `bin/sandboxvm` (PPC AOS4 binary).
 #
 # qemu_runner      = "<absolute path to qemu-runner checkout>"
 # amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
 # qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
+# sandboxvm        = "<absolute path to SandboxVM/VM-OS4/bin/sandboxvm>"
 
 [defaults]
 # Per-tool parameter defaults. When a tool is invoked without a
@@ -99,3 +103,15 @@ tags           = ["real-hw", "x5000"]
   # enabled = true
   # port    = "COM5"             # or /dev/ttyUSB1 on Linux/macOS
   # baud    = 38400
+
+  # Optional: SandboxVM overrides for this target. The `sandbox.*`
+  # namespace runs guest ELFs inside SandboxVM (an in-process
+  # sandbox host that survives guest crashes). When omitted,
+  # `sandbox.probe` searches SYS:Tools/sandboxvm,
+  # SYS:Utilities/sandboxvm, then C:sandboxvm; default extmem
+  # window is 1024 MB and default vmem window is 256 MB.
+  # [targets.x5000-real.sandbox]
+  # path              = "Tools:sandboxvm"
+  # default_extmem_mb = 1024
+  # default_window_mb = 256
+  # deny_libs         = ["intuition.library"]   # always denied

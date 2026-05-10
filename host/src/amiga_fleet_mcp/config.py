@@ -165,6 +165,31 @@ class TargetChannels(BaseModel):
     mcu: SerialChannel | None = None
 
 
+class SandboxTargetConfig(BaseModel):
+    """Per-target SandboxVM overrides.
+
+    Lives under `[targets.<name>.sandbox]` in config.toml. All fields
+    optional; the `sandbox.*` namespace falls back to built-in defaults
+    when an entry is omitted.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str | None = None
+    """AOS path to sandboxvm on this target (e.g. ``"Tools:sandboxvm"``).
+    When omitted, `sandbox.probe` searches a default list."""
+
+    default_extmem_mb: int = 1024
+    """Default ``-m <MB>`` for sandbox.run_guest."""
+
+    default_window_mb: int = 256
+    """Default ``-w <MB>`` for sandbox.run_guest."""
+
+    deny_libs: list[str] = Field(default_factory=list)
+    """Libraries always denied via ``-x`` for every guest run on this
+    target. Merged with per-call ``deny_libs``."""
+
+
 class TargetConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -177,6 +202,7 @@ class TargetConfig(BaseModel):
     headless: bool = False
     tags: list[str] = Field(default_factory=list)
     channels: TargetChannels = Field(default_factory=TargetChannels)
+    sandbox: SandboxTargetConfig | None = None
 
 
 class PathsConfig(BaseModel):
@@ -188,6 +214,10 @@ class PathsConfig(BaseModel):
     spe_tests: Path | None = None
     adtools_gdb: Path | None = None
     qemu_binary: Path | None = None
+    sandboxvm: Path | None = None
+    """Host-side path to a built ``bin/sandboxvm``. Used by
+    ``sandbox.deploy`` to resolve the upload source when no explicit
+    ``source`` is passed."""
 
 
 class DefaultsConfig(BaseModel):
