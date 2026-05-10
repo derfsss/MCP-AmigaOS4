@@ -117,6 +117,22 @@ async def test_list_targets_tag_filter() -> None:
     assert fleet.list_targets(tags=["qemu", "pegasos2"]) == ["qemu-1"]
 
 
+def test_fanout_registry_includes_sandbox_methods() -> None:
+    """The plan claims `fleet.run_on_all` works for `sandbox.*`. Pin
+    that in a test so the contract can't drift back to "not in
+    registry" silently."""
+    methods = set(fleet_tool.fanout_methods())
+    for required in (
+        "sandbox.probe", "sandbox.deploy",
+        "sandbox.run_guest", "sandbox.run_driver",
+        "sandbox.run_batch", "sandbox.last_trap",
+        "sys.debug_ring",
+    ):
+        assert required in methods, (
+            f"{required} missing from fleet.run_on_all registry"
+        )
+
+
 @pytest.mark.asyncio
 async def test_run_on_all_with_tag_filter() -> None:
     cfg = Config(targets={

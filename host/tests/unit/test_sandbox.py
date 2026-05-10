@@ -1066,3 +1066,60 @@ async def test_run_batch_handles_ring_loss_gracefully():
     assert res.entries[0].exit_code == 0
     assert res.entries[1].exit_code == 0
     assert res.entries[2].exit_code == 5
+
+
+# ---- exit-code classification edge cases ---------------------------
+
+
+def test_classify_exit_known_traps():
+    """Pin the upstream trap-code mapping so an upstream rename
+    (e.g. -0x300 -> something else) is caught by the test suite."""
+    assert sb._classify_exit(-0x300, "")[0] == "DSI"
+    assert sb._classify_exit(-0x400, "")[0] == "ISI"
+    assert sb._classify_exit(-0x600, "")[0] == "alignment"
+    assert sb._classify_exit(-0x700, "")[0] == "program"
+    assert sb._classify_exit(-0x800, "")[0] == "fp_unavailable"
+    # Clean exit / positive guest rc / unknown negative all
+    # classify as "no trap".
+    assert sb._classify_exit(0, "")[0] is None
+    assert sb._classify_exit(5, "")[0] is None
+    assert sb._classify_exit(-2, "")[0] is None
+
+
+def test_classify_exit_kmod_libcall_fingerprint_via_stderr():
+    """The fingerprint is best-effort string-match against
+    captured stderr; all three hints must be present together."""
+    err_full = (
+        "Trap caught\n"
+        "Traptype=0x300 dar=0x4 dsisr=0x00800000\n"
+    )
+    assert sb._classify_exit(-0x300, err_full) == (
+        "DSI", "kmod_libcall_null4",
+    )
+    # Missing one hint -> no fingerprint, just trap_kind.
+    err_partial = "Traptype=0x300 dar=0x4\n"  # no dsisr
+    assert sb._classify_exit(-0x300, err_partial) == ("DSI", None)
+
+
+# ---- AOS path helper edge cases -----------------------------------
+
+
+def test_aos_parent_dir_handles_assign_root():
+    assert sb._aos_parent_dir("SYS:") is None
+    assert sb._aos_parent_dir("SYS:foo") is None
+    assert sb._aos_parent_dir("SYS:Tools/sandboxvm") == "SYS:Tools"
+    assert sb._aos_parent_dir("Tools:bin/foo") == "Tools:bin"
+    assert sb._aos_parent_dir("DH0:nested/path/file") == "DH0:nested/path"
+    # Non-AOS-shaped path (no colon) returns None.
+    assert sb._aos_parent_dir("/unix/path") is None
+
+
+def test_derive_guest_name_strips_path_and_extension():
+    assert sb._derive_guest_name("RAM:hello") == "hello"
+    assert sb._derive_guest_name("Tools:tests/clib4hello") == "clib4hello"
+    assert sb._derive_guest_name("RAM:foo.elf") == "foo"
+    # No extension, no separators.
+    assert sb._derive_guest_name("bare") == "bare"
+    # Empty after stripping defaults to "guest" so we never produce
+    # an empty -n flag.
+    assert sb._derive_guest_name(":") == "guest"

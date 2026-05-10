@@ -24,6 +24,7 @@ from ..errors import InvalidParams, JsonRpcError
 from ..fleet import Fleet
 from . import exec as exec_tool
 from . import fs as fs_tool
+from . import sandbox as sandbox_tool
 from . import sys as sys_tool
 from . import wb as wb_tool
 
@@ -242,8 +243,19 @@ _FANOUT: dict[str, Callable[..., Awaitable[Any]]] = {
     "sys.devices": sys_tool.sys_devices,
     "sys.ports": sys_tool.sys_ports,
     "sys.lastalert": sys_tool.sys_lastalert,
+    "sys.debug_ring": sys_tool.sys_debug_ring,
     "wb.screens": wb_tool.wb_screens,
     "wb.windows": wb_tool.wb_windows,
+    # sandbox.* — read paths fan out per-target naturally; the
+    # mutating run_* / deploy methods can also fan out when the
+    # caller wants the same operation on every target (e.g. roll a
+    # new sandboxvm to all hosts in one call).
+    "sandbox.probe": sandbox_tool.sandbox_probe,
+    "sandbox.deploy": sandbox_tool.sandbox_deploy,
+    "sandbox.run_guest": sandbox_tool.sandbox_run_guest,
+    "sandbox.run_driver": sandbox_tool.sandbox_run_driver,
+    "sandbox.run_batch": sandbox_tool.sandbox_run_batch,
+    "sandbox.last_trap": sandbox_tool.sandbox_last_trap,
 }
 
 
