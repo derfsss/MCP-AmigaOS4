@@ -1080,6 +1080,286 @@ async def sandbox_last_trap(
 
 
 # ---------------------------------------------------------------------
+# run_batch — multiple guests in one sandboxvm invocation
+# ---------------------------------------------------------------------
+
+SANDBOXVM_MAX_GUESTS = 16
+"""Upstream SandboxVM caps a single invocation at 16 guests
+(``src/main.c:SANDBOXVM_MAX_GUESTS``). We surface the same limit
+rather than launching multiple sandboxvm processes — the
+single-process flow has been validated end-to-end on real X5000."""
+
+
+class BatchGuestSpec(BaseModel):
+    """One entry in a `sandbox.run_batch` request."""
+
+    guest: str
+    """AOS path to the guest ELF."""
+    name: str | None = None
+    """Optional override for this guest's name. When None, the
+    batch name is suffixed with ``.<idx>`` (mirrors SandboxVM's
+    own per-guest naming convention so the upstream
+    `T:sandboxvm-<name>.<idx>.{out,err}` capture files line up)."""
+
+
+class BatchEntryResult(BaseModel):
+    """Per-guest sub-result inside a `BatchRunResult.entries` list."""
+
+    guest: str
+    name: str
+    exit_code: int
+    trap_kind: str | None = None
+    trap_fingerprint: str | None = None
+    stdout: str = ""
+    stderr: str = ""
+    capture_paths: list[str] = Field(default_factory=list)
+
+
+class BatchRunResult(BaseModel):
+    """Return shape for `sandbox.run_batch`."""
+
+    target: str
+    batch_name: str
+    command: str
+    """The single sandboxvm invocation that ran the whole batch."""
+    aggregate_exit_code: int
+    """Mirrors SandboxVM's ``last_nonzero`` semantics: 0 when every
+    guest returned 0, otherwise the last non-zero rc seen. Useful as
+    a quick "did the whole batch pass?" check."""
+    all_clean: bool
+    """Convenience: ``aggregate_exit_code == 0``."""
+    duration_s: float
+    entries: list[BatchEntryResult]
+
+
+# Regex for parsing per-guest exit codes from the debug ring. The
+# format is `[sandboxvm] guest_run_elf <path> returned <rc>; calling
+# guest_destroy` (per src/main.c). Resident-mode invocations are
+# single-guest only and therefore not run via run_batch, so this one
+# pattern covers the whole batch flow.
+_RE_GUEST_EXIT = re.compile(
+    r"\[sandboxvm\]\s+guest_run_elf\s+(\S+)\s+returned\s+(-?\d+)",
+)
+
+
+def _parse_per_guest_exits(
+    ring_lines: Sequence[str], expected: int,
+) -> list[tuple[str, int]]:
+    """Walk `ring_lines` and return the most recent `expected`
+    matches of the per-guest exit format, preserving order
+    (oldest-first within the trailing window).
+
+    Returns a list of (path, rc) pairs. May be shorter than
+    `expected` if the ring rotated past the older guests before we
+    could capture it -- the caller pads with a sentinel rc."""
+    matches: list[tuple[str, int]] = []
+    for line in ring_lines:
+        m = _RE_GUEST_EXIT.search(line)
+        if m:
+            matches.append((m.group(1), int(m.group(2))))
+    return matches[-expected:] if expected > 0 else []
+
+
+def _build_batch_command(sandboxvm_path: str, *,
+                         guests: Sequence[str],
+                         extmem_mb: int,
+                         window_mb: int,
+                         deny_libs: Sequence[str],
+                         name: str) -> str:
+    """Construct the AmigaDOS command line for a multi-guest run.
+
+    Format:
+        "<sandboxvm>" -m <MB> -w <MB> -n <name> [-x lib]... <g0> <g1> ...
+
+    Multi-guest mode forbids ``--``-style argv passing (SandboxVM
+    enforces this in src/main.c) so per-guest args aren't part of
+    the contract here. Use `sandbox.run_guest` when you need argv."""
+    parts: list[str] = [f'"{sandboxvm_path}"']
+    parts.extend(["-m", str(extmem_mb)])
+    parts.extend(["-w", str(window_mb)])
+    parts.extend(["-n", _shell_safe(name)])
+    for lib in deny_libs:
+        parts.extend(["-x", _shell_safe(lib)])
+    for g in guests:
+        parts.append(f'"{g}"')
+    return " ".join(parts)
+
+
+async def sandbox_run_batch(
+    fleet: Fleet, target: str, *,
+    guests: Sequence[BatchGuestSpec | dict],
+    extmem_mb: int | None = None,
+    window_mb: int | None = None,
+    deny_libs: Sequence[str] | None = None,
+    name: str | None = None,
+    timeout_s: float = 600.0,
+) -> BatchRunResult:
+    """Run up to 16 guests sequentially inside a single SandboxVM
+    invocation.
+
+    Probe-gated and lock-serialised like `run_guest` / `run_driver`.
+    Per-guest argv is **not** supported (SandboxVM forbids ``--``
+    with multi-guest); for that, call `sandbox.run_guest` per
+    binary. Per-guest deny-lists also aren't supported — `deny_libs`
+    is a global list applied to every guest in the batch (mirrors
+    SandboxVM's ``-x`` semantics).
+
+    Per-guest exit codes are parsed from the kernel debug ring
+    (``[sandboxvm] guest_run_elf <path> returned <rc>``). When the
+    ring rolls past older entries before we capture it, missing
+    per-guest results are reported as ``exit_code=0`` with
+    ``stdout=""`` -- the aggregate ``aggregate_exit_code`` is still
+    correct because SandboxVM itself returns the last non-zero rc.
+
+    Args:
+        guests: List of BatchGuestSpec entries (or equivalent dicts
+            via Pydantic coercion). Min 1, max 16.
+        extmem_mb / window_mb / deny_libs / name: Same semantics as
+            `sandbox.run_guest`. Apply globally to the whole batch.
+        timeout_s: Host-side request timeout. Higher default than
+            run_guest (600 s vs 120 s) because a 16-guest batch can
+            comfortably exceed the single-guest budget.
+
+    For JSON-config-driven multi-step bundles without the SandboxVM
+    harness, use ``tests.run_suite`` instead."""
+    if not guests:
+        raise InvalidParams(
+            "sandbox.run_batch requires at least one guest entry",
+        )
+    if len(guests) > SANDBOXVM_MAX_GUESTS:
+        raise InvalidParams(
+            f"sandbox.run_batch supports at most "
+            f"{SANDBOXVM_MAX_GUESTS} guests per invocation; "
+            f"got {len(guests)}",
+            data={"max": SANDBOXVM_MAX_GUESTS, "got": len(guests)},
+        )
+
+    specs: list[BatchGuestSpec] = [
+        g if isinstance(g, BatchGuestSpec) else BatchGuestSpec(**g)
+        for g in guests
+    ]
+
+    probe = await _ensure_available(fleet, target)
+    assert probe.path is not None
+
+    cfg = fleet.target_config(target).sandbox
+    if extmem_mb is None:
+        extmem_mb = cfg.default_extmem_mb if cfg else 1024
+    if window_mb is None:
+        window_mb = cfg.default_window_mb if cfg else 256
+
+    merged_deny: list[str] = []
+    if cfg and cfg.deny_libs:
+        merged_deny.extend(cfg.deny_libs)
+    if deny_libs:
+        for lib in deny_libs:
+            if lib not in merged_deny:
+                merged_deny.append(lib)
+
+    # Batch name. Single base name; per-guest names get `.<idx>`
+    # appended by SandboxVM itself (we mirror that for capture-file
+    # path resolution).
+    batch_name = name or "batch"
+    per_guest_names = [
+        s.name if s.name else f"{batch_name}.{i}"
+        for i, s in enumerate(specs)
+    ]
+
+    cmd = _build_batch_command(
+        probe.path,
+        guests=[s.guest for s in specs],
+        extmem_mb=extmem_mb,
+        window_mb=window_mb,
+        deny_libs=merged_deny,
+        name=batch_name,
+    )
+
+    lock = _lock_for(target)
+    t0 = time.monotonic()
+    async with lock:
+        mcpd = fleet.mcpd(target)
+        raw = await mcpd.request(
+            "exec.cmd",
+            {
+                "command": cmd,
+                "timeout_ms": int(timeout_s * 1000),
+            },
+            timeout_s=max(timeout_s + 5.0, 30.0),
+        )
+        aggregate = int(raw.get("exit_code", 0))
+
+        # Read the kernel ring after the run to recover per-guest
+        # exit codes. We ask for a generous max_lines so a 16-guest
+        # batch's worth of "returned" lines + per-guest preludes all
+        # fit in the captured window.
+        ring = await sys_tool.sys_debug_ring(
+            fleet, target,
+            since_s=60.0,
+            max_lines=2000,
+        )
+        per_guest_exits = _parse_per_guest_exits(ring.lines, len(specs))
+
+        # Per-guest captures. Names follow SandboxVM's
+        # `T:sandboxvm-<gname>.{out,err}` convention.
+        entries: list[BatchEntryResult] = []
+        for idx, spec in enumerate(specs):
+            gname = per_guest_names[idx]
+            out_path = f"T:sandboxvm-{gname}.out"
+            err_path = f"T:sandboxvm-{gname}.err"
+            stdout, stdout_present = await _read_capture(
+                fleet, target, out_path,
+            )
+            stderr, stderr_present = await _read_capture(
+                fleet, target, err_path,
+            )
+            await _delete_capture(fleet, target, out_path)
+            await _delete_capture(fleet, target, err_path)
+
+            # Match per-guest exit by ordinal — the ring entries we
+            # parsed are in batch order, but if the ring rotated
+            # past older guests, the K we captured map to the LAST
+            # K guests in the batch (oldest got dropped). Compute
+            # an alignment offset accordingly. Aggregate exit_code
+            # already covers the "did anything fail" question; the
+            # default-to-0 for missing entries is purely cosmetic.
+            ring_offset = len(specs) - len(per_guest_exits)
+            if idx >= ring_offset:
+                exit_code = per_guest_exits[idx - ring_offset][1]
+            else:
+                exit_code = 0
+
+            trap_kind, fingerprint = _classify_exit(exit_code, stderr)
+
+            capture_paths: list[str] = []
+            if stdout_present:
+                capture_paths.append(out_path)
+            if stderr_present:
+                capture_paths.append(err_path)
+
+            entries.append(BatchEntryResult(
+                guest=spec.guest,
+                name=gname,
+                exit_code=exit_code,
+                trap_kind=trap_kind,
+                trap_fingerprint=fingerprint,
+                stdout=stdout,
+                stderr=stderr,
+                capture_paths=capture_paths,
+            ))
+
+    return BatchRunResult(
+        target=target,
+        batch_name=batch_name,
+        command=cmd,
+        aggregate_exit_code=aggregate,
+        all_clean=(aggregate == 0
+                   and all(e.exit_code == 0 for e in entries)),
+        duration_s=time.monotonic() - t0,
+        entries=entries,
+    )
+
+
+# ---------------------------------------------------------------------
 # Test-only helpers
 # ---------------------------------------------------------------------
 

@@ -2243,6 +2243,35 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             retry_count=retry_count, retry_delay_s=retry_delay_s,
         )
 
+    @mcp.tool(name="sandbox_run_batch", title="sandbox.run_batch")
+    @archived("sandbox.run_batch", archive)
+    async def sandbox_run_batch(
+        *, target: str | None = None,
+        guests: list[dict[str, Any]],
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 600.0,
+    ) -> sandbox_tool.BatchRunResult:
+        """Run up to 16 guests sequentially in a single SandboxVM
+        invocation.
+
+        `guests` is a list of `{guest: <aos-path>, name?: <override>}`
+        objects. Per-guest argv and per-guest deny-lists are NOT
+        supported (SandboxVM constraint); use `sandbox.run_guest`
+        per-binary if you need either. Per-guest exit codes are
+        parsed from the kernel debug ring after the batch completes.
+
+        For JSON-config-driven multi-step bundles without the
+        SandboxVM harness, use `tests.run_suite`."""
+        return await sandbox_tool.sandbox_run_batch(
+            fleet, fleet.resolve_target(target),
+            guests=guests,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
     @mcp.tool(name="sandbox", title="sandbox.dispatch")
     @archived("sandbox.dispatch", archive)
     async def sandbox_ns(
@@ -2258,6 +2287,9 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
           run_driver(target=None, driver, test=None, args=None,
                      extmem_mb=None, window_mb=None, deny_libs=None,
                      name=None, timeout_s=120.0)
+          run_batch(target=None, guests=[{guest, name?}, ...],
+                    extmem_mb=None, window_mb=None, deny_libs=None,
+                    name=None, timeout_s=600.0)
           last_trap(target=None, since_s=60.0, max_lines=500,
                     retry_count=3, retry_delay_s=0.2)
 
@@ -2285,6 +2317,11 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             return await sandbox_tool.sandbox_run_driver(
                 fleet, fleet.resolve_target(p.get("target")), **kwargs,
             )
+        if method == "run_batch":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_batch(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
         if method == "last_trap":
             kwargs = {k: v for k, v in p.items() if k != "target"}
             return await sandbox_tool.sandbox_last_trap(
@@ -2294,7 +2331,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             f"unknown method: {method!r}",
             data={"namespace_methods": [
                 "probe", "deploy", "run_guest",
-                "run_driver", "last_trap",
+                "run_driver", "run_batch", "last_trap",
             ]},
         )
 

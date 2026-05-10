@@ -838,3 +838,231 @@ async def test_last_trap_extract_helper_with_traptype_only():
     assert hex_str == "0x999"
     assert fp is None
     assert len(block) == 1
+
+
+# ---- run_batch -----------------------------------------------------
+
+
+def _ring_for_batch(per_guest_exits: list[tuple[str, int]]) -> list[str]:
+    """Synthesise a ring containing per-guest "returned" lines in
+    order, the way SandboxVM emits them via DebugPrintF."""
+    return [
+        f"[sandboxvm] guest_run_elf {path} returned {rc}; calling guest_destroy"
+        for path, rc in per_guest_exits
+    ]
+
+
+def _stub_debug_ring(lines: list[str]) -> mock._patch:
+    """Convenience: return a mock.patch context that stubs
+    sys.debug_ring with the canned `lines`."""
+    canned = sys_tool.DebugRingResult(
+        target="tgt", lines=lines, truncated=False,
+        raw_size=sum(len(line) for line in lines) + len(lines),
+        captured_at="2026-05-10T15:00:00Z",
+    )
+    return mock.patch.object(
+        sb.sys_tool, "sys_debug_ring", return_value=canned,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_batch_three_guests_all_clean():
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    captured: dict[str, str] = {}
+
+    def cap(p):
+        if "guest0" in p["command"]:
+            captured["cmd"] = p["command"]
+            return True
+        return False
+
+    # Aggregate exit_code=0 since all guests cleaned up.
+    fake.queue_exec(cap, {"output": "", "exit_code": 0})
+    fake.add_path("T:sandboxvm-batch.0.out", b"out0\n")
+    fake.add_path("T:sandboxvm-batch.1.out", b"out1\n")
+    fake.add_path("T:sandboxvm-batch.2.out", b"out2\n")
+
+    ring = _ring_for_batch([
+        ("Tools:guest0", 0),
+        ("Tools:guest1", 0),
+        ("Tools:guest2", 0),
+    ])
+    with _stub_debug_ring(ring):
+        res = await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[
+                {"guest": "Tools:guest0"},
+                {"guest": "Tools:guest1"},
+                {"guest": "Tools:guest2"},
+            ],
+        )
+
+    cmd = captured["cmd"]
+    # Three positional guest paths in batch order, all quoted.
+    assert '"Tools:guest0"' in cmd
+    assert '"Tools:guest1"' in cmd
+    assert '"Tools:guest2"' in cmd
+    # No `--` (multi-guest disallows argv).
+    assert " -- " not in cmd
+
+    assert res.aggregate_exit_code == 0
+    assert res.all_clean is True
+    assert len(res.entries) == 3
+    assert [e.guest for e in res.entries] == [
+        "Tools:guest0", "Tools:guest1", "Tools:guest2",
+    ]
+    # Default per-guest names: <batch>.<idx> (0/1/2).
+    assert [e.name for e in res.entries] == [
+        "batch.0", "batch.1", "batch.2",
+    ]
+    # Capture stdouts decoded.
+    assert res.entries[0].stdout == "out0\n"
+    assert res.entries[1].stdout == "out1\n"
+    assert res.entries[2].stdout == "out2\n"
+    # All entry exit codes parsed from ring.
+    assert all(e.exit_code == 0 for e in res.entries)
+
+
+@pytest.mark.asyncio
+async def test_run_batch_mixed_clean_and_trap():
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    fake.queue_exec(
+        lambda p: "guest" in p["command"],
+        # SandboxVM aggregate: last non-zero rc seen across the
+        # batch. Guest #1 trapped (-768), guest #2 returned 0.
+        {"output": "", "exit_code": -768},
+    )
+
+    ring = _ring_for_batch([
+        ("Tools:guestA", 0),
+        ("Tools:guestB", -768),
+        ("Tools:guestC", 0),
+    ])
+    with _stub_debug_ring(ring):
+        res = await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[
+                {"guest": "Tools:guestA"},
+                {"guest": "Tools:guestB"},
+                {"guest": "Tools:guestC"},
+            ],
+        )
+
+    assert res.aggregate_exit_code == -768
+    assert res.all_clean is False
+    assert res.entries[0].exit_code == 0
+    assert res.entries[0].trap_kind is None
+    assert res.entries[1].exit_code == -768
+    # Trap classified per-entry from its own exit code.
+    assert res.entries[1].trap_kind == "DSI"
+    assert res.entries[2].exit_code == 0
+    assert res.entries[2].trap_kind is None
+
+
+@pytest.mark.asyncio
+async def test_run_batch_explicit_per_guest_names():
+    """Caller supplies a name override per entry; we honour it
+    instead of synthesising <batch>.<idx>."""
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    fake.queue_exec(
+        lambda p: "guest" in p["command"],
+        {"output": "", "exit_code": 0},
+    )
+
+    ring = _ring_for_batch([
+        ("Tools:a", 0),
+        ("Tools:b", 0),
+    ])
+    with _stub_debug_ring(ring):
+        res = await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[
+                {"guest": "Tools:a", "name": "alpha"},
+                {"guest": "Tools:b", "name": "beta"},
+            ],
+        )
+
+    assert [e.name for e in res.entries] == ["alpha", "beta"]
+
+
+@pytest.mark.asyncio
+async def test_run_batch_rejects_empty_list():
+    fleet, _ = _make_available_fleet()
+    with pytest.raises(InvalidParams, match="at least one"):
+        await sb.sandbox_run_batch(fleet, "tgt", guests=[])
+
+
+@pytest.mark.asyncio
+async def test_run_batch_rejects_over_16_guests():
+    fleet, _ = _make_available_fleet()
+    with pytest.raises(InvalidParams, match="at most"):
+        await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[{"guest": f"Tools:g{i}"} for i in range(17)],
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_batch_probe_gated():
+    """No sandboxvm -> the validation runs first then the probe
+    gate fires before any exec.cmd is issued."""
+    fleet = Fleet(_make_config())
+    fleet._mcpd["tgt"] = FakeMcpd()  # type: ignore[assignment]
+    with pytest.raises(InvalidParams):
+        await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[{"guest": "Tools:hello"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_batch_handles_ring_loss_gracefully():
+    """If the kernel ring rolled past older "returned" lines before
+    we read it, missing per-guest exits default to 0 -- the
+    aggregate stays correct and we don't blow up."""
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    fake.queue_exec(
+        lambda p: "Tools:" in p["command"],
+        {"output": "", "exit_code": 5},
+    )
+
+    # Ring has only two of the three guests' returned lines.
+    ring = _ring_for_batch([
+        ("Tools:second", 0),
+        ("Tools:third", 5),
+    ])
+    with _stub_debug_ring(ring):
+        res = await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[
+                {"guest": "Tools:first"},
+                {"guest": "Tools:second"},
+                {"guest": "Tools:third"},
+            ],
+        )
+
+    assert res.aggregate_exit_code == 5
+    assert len(res.entries) == 3
+    # First entry got the rc=0 default since its "returned" line
+    # rolled out of the ring before we read it. The two captured
+    # ring entries align with entries[1] (Tools:second / rc=0) and
+    # entries[2] (Tools:third / rc=5).
+    assert res.entries[0].exit_code == 0
+    assert res.entries[1].exit_code == 0
+    assert res.entries[2].exit_code == 5
