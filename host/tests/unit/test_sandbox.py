@@ -49,10 +49,11 @@ class FakeMcpd:
         if content:
             self.file_contents[p] = content
 
-    def queue_exec(self, matcher, response: dict) -> None:
+    def queue_exec(self, matcher, response) -> None:
         """Add a one-shot canned response for the next exec.cmd call
         whose params satisfy `matcher` (callable taking the params
-        dict, returns bool)."""
+        dict, returns bool). `response` is either a dict (returned
+        verbatim) or an Exception (raised when the matcher fires)."""
         self.exec_responses.append((matcher, response))
 
     async def request(self, method, params=None, timeout_s=30.0):
@@ -84,6 +85,8 @@ class FakeMcpd:
             for i, (matcher, resp) in enumerate(self.exec_responses):
                 if matcher(params):
                     self.exec_responses.pop(i)
+                    if isinstance(resp, Exception):
+                        raise resp
                     return resp
             return self.exec_default
         # Tests should never reach this; surface clearly.
@@ -186,15 +189,39 @@ async def test_probe_missing_returns_typed_code(fleet_with_fake):
 async def test_probe_broken_binary_returns_typed_code(fleet_with_fake):
     fleet, fake = fleet_with_fake
     fake.add_path("SYS:Tools/sandboxvm")
+    # Make exec.cmd against the binary raise — that's what
+    # "binary won't start" looks like to the probe (vs empty
+    # captured output, which is benign and just means the
+    # daemon's stdout pipe didn't catch anything).
+    fake.queue_exec(
+        lambda p: '"SYS:Tools/sandboxvm"' == p["command"],
+        Exception("simulated load failure"),
+    )
 
-    # Default exec response has empty output → banner probe returns
-    # None → SANDBOXVM_BROKEN.
     res = await sb.sandbox_probe(fleet, "tgt")
 
     assert res.available is False
     assert res.code == "SANDBOXVM_BROKEN"
     assert res.path == "SYS:Tools/sandboxvm"
     assert "Re-deploy" in (res.hint or "")
+
+
+@pytest.mark.asyncio
+async def test_probe_empty_banner_still_available(fleet_with_fake):
+    """Reaching exec.cmd with a structured exit code is sufficient
+    proof the binary works — the daemon's stdout pipe sometimes
+    captures nothing for clib4/newlib-linked binaries (buffering
+    quirk) and that should NOT mark the binary as broken."""
+    fleet, fake = fleet_with_fake
+    fake.add_path("SYS:Tools/sandboxvm")
+    # Default exec response: empty output, exit_code 0.
+    res = await sb.sandbox_probe(fleet, "tgt")
+
+    assert res.available is True
+    assert res.code is None
+    assert res.path == "SYS:Tools/sandboxvm"
+    # Empty banner is acceptable.
+    assert res.version_banner is None
 
 
 @pytest.mark.asyncio

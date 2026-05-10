@@ -217,18 +217,28 @@ def _candidate_target_paths(fleet: Fleet, target: str) -> list[str]:
 
 
 async def _execute_banner_probe(fleet: Fleet, target: str,
-                                path: str) -> str | None:
-    """Run sandboxvm with no args and capture the usage banner.
+                                path: str) -> tuple[bool, str | None]:
+    """Run sandboxvm with no args and confirm the binary actually
+    starts.
 
-    Returns the first non-empty line of output when the binary
-    started and produced something. Returns ``None`` (caller treats
-    as broken) when invocation failed entirely.
+    Returns ``(ran, banner_first_line)``:
 
-    SandboxVM exits non-zero with a usage banner when called with no
-    args (per `src/main.c:usage()`); we therefore *expect* a non-zero
-    exit and don't treat it as failure. We pin to "binary started +
-    produced a short banner" rather than a specific exit code so an
-    upstream change to the exit value doesn't break the probe."""
+      - ``ran=True`` when exec.cmd returned successfully, meaning
+        the binary loaded and exited (with whatever rc). Banner
+        text is best-effort: it'll be the first line of stdout when
+        captured, otherwise None.
+      - ``ran=False`` when exec.cmd raised (target unreachable,
+        path not executable, hard timeout etc) -- treated as
+        ``SANDBOXVM_BROKEN``.
+
+    We deliberately don't gate on banner content. SandboxVM's usage
+    banner is emitted via stdio (printf) but the daemon's exec.cmd
+    capture pipe sometimes returns empty + truncated=true for
+    clib4/newlib-linked binaries (stdio buffering not flushed before
+    the process detaches from its Output() handle). Pinning the
+    probe to "exec.cmd returned a structured exit code" rather than
+    "exec.cmd captured non-empty output" makes the probe robust
+    across that quirk."""
     mcpd = fleet.mcpd(target)
     try:
         raw = await mcpd.request(
@@ -240,13 +250,10 @@ async def _execute_banner_probe(fleet: Fleet, target: str,
             timeout_s=10.0,
         )
     except Exception:
-        return None
+        return False, None
     output = str(raw.get("output", "")).strip()
-    if not output:
-        return None
-    # Take the first line; safer than returning multi-line garbage in
-    # the probe result.
-    return output.splitlines()[0]
+    banner = output.splitlines()[0] if output else None
+    return True, banner
 
 
 async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
@@ -305,8 +312,8 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
         # invalidate before subsequent calls work.
         return result
 
-    banner = await _execute_banner_probe(fleet, target, found)
-    if banner is None:
+    ran, banner = await _execute_banner_probe(fleet, target, found)
+    if not ran:
         result = SandboxProbeResult(
             target=target, available=False,
             code="SANDBOXVM_BROKEN",
@@ -358,8 +365,8 @@ async def _probe_specific_path(fleet: Fleet, target: str,
             machine=machine, machine_ok=machine_ok,
         )
 
-    banner = await _execute_banner_probe(fleet, target, path)
-    if banner is None:
+    ran, banner = await _execute_banner_probe(fleet, target, path)
+    if not ran:
         return SandboxProbeResult(
             target=target, available=False,
             code="SANDBOXVM_BROKEN",
