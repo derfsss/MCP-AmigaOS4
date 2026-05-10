@@ -73,6 +73,13 @@ SANDBOXVM_UPSTREAM_URL = "https://github.com/derfsss/SandboxVM"
 """Upstream repo for SandboxVM. Surfaced in the SANDBOXVM_MISSING
 hint so a fresh user has somewhere to go without grepping docs."""
 
+SANDBOXVM_RELEASES_URL = (
+    "https://github.com/derfsss/SandboxVM/releases/latest"
+)
+"""Pre-built sandboxvm binary download. Mentioned in the
+SANDBOXVM_MISSING hint as the easy alternative to a from-source
+build. Always points at the latest tagged release."""
+
 # Machine identifiers that explicitly lack ExtMem and therefore can't
 # host SandboxVM. Both `targets.<name>.machine` (QEMU) and
 # `targets.<name>.tags` (real-hw) are checked.
@@ -306,12 +313,14 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
             code="SANDBOXVM_MISSING",
             searched=candidates,
             machine=machine, machine_ok=machine_ok,
-            hint=("sandboxvm binary not found on target. Build it "
-                  f"from {SANDBOXVM_UPSTREAM_URL} (see its README.md "
-                  "for the docker-cc cross-compile flow), then run "
-                  "`sandbox.deploy` to upload to the target -- or "
-                  "set `[targets.<target>.sandbox.path]` in "
-                  "config.toml if it's already installed at a "
+            hint=("sandboxvm binary not found on target. Get it "
+                  f"from {SANDBOXVM_RELEASES_URL} (pre-built PPC "
+                  "AOS4 binary -- the fast path), or build from "
+                  f"source at {SANDBOXVM_UPSTREAM_URL} (see its "
+                  "README.md for the docker-cc cross-compile flow). "
+                  "Then run `sandbox.deploy` to upload to the "
+                  "target -- or set `[targets.<target>.sandbox.path]` "
+                  "in config.toml if it's already installed at a "
                   "non-default location."),
         )
         # Negative result deliberately NOT cached — a follow-up

@@ -180,8 +180,9 @@ async def test_probe_missing_returns_typed_code(fleet_with_fake):
     assert res.code == "SANDBOXVM_MISSING"
     assert res.path is None
     assert "sandbox.deploy" in (res.hint or "")
-    # GitHub URL surfaced so a fresh user has a build target
-    # without grepping docs.
+    # Both download paths surfaced: pre-built release (fast path)
+    # and from-source repo. Saves a fresh user from grepping docs.
+    assert sb.SANDBOXVM_RELEASES_URL in (res.hint or "")
     assert sb.SANDBOXVM_UPSTREAM_URL in (res.hint or "")
     # Negative result NOT cached -- a follow-up deploy must work
     # without an explicit invalidate.
