@@ -69,6 +69,10 @@ DEFAULT_DEPLOY_PATH = "SYS:Tools/sandboxvm"
 """Where `sandbox.deploy` writes when no explicit `dest_path` is set
 and no per-target `[targets.<name>.sandbox.path]` is configured."""
 
+SANDBOXVM_UPSTREAM_URL = "https://github.com/derfsss/SandboxVM"
+"""Upstream repo for SandboxVM. Surfaced in the SANDBOXVM_MISSING
+hint so a fresh user has somewhere to go without grepping docs."""
+
 # Machine identifiers that explicitly lack ExtMem and therefore can't
 # host SandboxVM. Both `targets.<name>.machine` (QEMU) and
 # `targets.<name>.tags` (real-hw) are checked.
@@ -302,10 +306,13 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
             code="SANDBOXVM_MISSING",
             searched=candidates,
             machine=machine, machine_ok=machine_ok,
-            hint=("sandboxvm binary not found on target. Run "
-                  "`sandbox.deploy` to upload it, or set "
-                  "`[targets.<target>.sandbox.path]` in config.toml "
-                  "if it's installed at a non-default location."),
+            hint=("sandboxvm binary not found on target. Build it "
+                  f"from {SANDBOXVM_UPSTREAM_URL} (see its README.md "
+                  "for the docker-cc cross-compile flow), then run "
+                  "`sandbox.deploy` to upload to the target -- or "
+                  "set `[targets.<target>.sandbox.path]` in "
+                  "config.toml if it's already installed at a "
+                  "non-default location."),
         )
         # Negative result deliberately NOT cached — a follow-up
         # `sandbox.deploy` would otherwise have to explicitly
