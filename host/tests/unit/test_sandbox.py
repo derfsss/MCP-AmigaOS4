@@ -231,27 +231,50 @@ async def test_probe_empty_banner_still_available(fleet_with_fake):
 
 @pytest.mark.asyncio
 async def test_probe_unreachable_target_returns_typed_code(fleet_with_fake):
-    """When fs.stat raises a non-TargetError exception (transport
-    failure, target offline), the probe should distinguish that
-    from a genuine "binary not found" miss. The user fixes the two
+    """When the transport raises a TargetError tagged with an
+    `endpoint` data key (the upstream marker for "MCPd not
+    reachable"), the probe should distinguish that from a
+    genuine "binary not found" miss. The user fixes the two
     cases differently — power on the target vs run sandbox.deploy."""
     fleet, fake = fleet_with_fake
 
-    # Patch FakeMcpd.request to raise a non-TargetError on every
-    # call, simulating an unreachable target.
+    # Mirror exactly what `transports/mcpd.py` raises when its
+    # asyncio.open_connection fails: TargetError with a data dict
+    # carrying the endpoint marker.
     async def unreachable(method, params=None, timeout_s=30.0):
-        raise ConnectionRefusedError("simulated offline target")
+        raise TargetError(
+            "MCPd not reachable at 192.168.0.99:4322",
+            data={"endpoint": "192.168.0.99:4322",
+                  "error": "[Errno 111] Connection refused"},
+        )
     fake.request = unreachable  # type: ignore[method-assign]
 
     res = await sb.sandbox_probe(fleet, "tgt")
 
     assert res.available is False
     assert res.code == "SANDBOXVM_TARGET_UNREACHABLE"
-    assert "ConnectionRefusedError" in (res.hint or "")
+    assert "TargetError" in (res.hint or "")
     assert "fleet.target_status" in (res.hint or "")
     # Unreachable result is NOT cached (next call should re-probe
     # in case the target came back).
     assert "tgt" not in sb._PROBE_CACHE
+
+
+@pytest.mark.asyncio
+async def test_probe_unreachable_via_non_target_error(fleet_with_fake):
+    """Non-TargetError exceptions also count as transport failures.
+    Belt-and-braces in case a future transport leaks something past
+    the TargetError wrap."""
+    fleet, fake = fleet_with_fake
+
+    async def unreachable(method, params=None, timeout_s=30.0):
+        raise ConnectionRefusedError("simulated leak")
+    fake.request = unreachable  # type: ignore[method-assign]
+
+    res = await sb.sandbox_probe(fleet, "tgt")
+
+    assert res.available is False
+    assert res.code == "SANDBOXVM_TARGET_UNREACHABLE"
 
 
 @pytest.mark.asyncio
@@ -262,7 +285,11 @@ async def test_run_guest_unreachable_raises_not_capable(fleet_with_fake):
     fleet, fake = fleet_with_fake
 
     async def unreachable(method, params=None, timeout_s=30.0):
-        raise ConnectionRefusedError("simulated offline target")
+        raise TargetError(
+            "MCPd not reachable at 192.168.0.99:4322",
+            data={"endpoint": "192.168.0.99:4322",
+                  "error": "[Errno 111] Connection refused"},
+        )
     fake.request = unreachable  # type: ignore[method-assign]
 
     with pytest.raises(NotCapable) as exc:
@@ -270,6 +297,34 @@ async def test_run_guest_unreachable_raises_not_capable(fleet_with_fake):
             fleet, "tgt", guest="Tools:hello",
         )
     assert "SANDBOXVM_TARGET_UNREACHABLE" in str(exc.value.data)
+
+
+def test_is_transport_error_disambiguates():
+    """Pin the transport-vs-AOS-error discriminator so a future
+    refactor of the transport's data shape can't silently regress
+    sandbox.probe back to "missing means unreachable too"."""
+    # Transport-level failure: TargetError carrying the endpoint
+    # marker.
+    assert sb._is_transport_error(
+        TargetError("MCPd not reachable at host:4322",
+                    data={"endpoint": "host:4322"}),
+    ) is True
+    # AOS-level failure: TargetError carrying the path marker.
+    assert sb._is_transport_error(
+        TargetError("not found", data={"path": "SYS:foo"}),
+    ) is False
+    # AOS-level failure with no data dict at all -- must default
+    # to "not transport" so we don't false-positive.
+    assert sb._is_transport_error(
+        TargetError("not found"),
+    ) is False
+    # Non-TargetError -> always transport.
+    assert sb._is_transport_error(
+        ConnectionRefusedError("offline"),
+    ) is True
+    assert sb._is_transport_error(
+        TimeoutError("slow"),
+    ) is True
 
 
 @pytest.mark.asyncio

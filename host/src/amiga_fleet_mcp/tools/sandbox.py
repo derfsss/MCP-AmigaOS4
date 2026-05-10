@@ -215,6 +215,29 @@ def _resolve_target_machine(fleet: Fleet, target: str) -> str | None:
     return None
 
 
+def _is_transport_error(exc: BaseException) -> bool:
+    """Disambiguate transport-level failures from AOS-side TargetErrors.
+
+    The MCPd transport (`transports/mcpd.py`) wraps connection failures
+    as ``TargetError("MCPd not reachable at <endpoint>",
+    data={"endpoint": ..., "error": ...})``. AOS-side failures carry a
+    different data shape (typically ``data={"path": ...}`` from
+    `fs.stat: Object not found`). We use the ``endpoint`` key as a
+    discriminator -- it's the load-bearing upstream marker for
+    transport-level failures.
+
+    Non-TargetError exceptions are always treated as transport-level
+    (asyncio.TimeoutError, OSError if it leaks past the transport,
+    etc.).
+    """
+    if not isinstance(exc, TargetError):
+        return True
+    data = getattr(exc, "data", None)
+    if isinstance(data, dict) and "endpoint" in data:
+        return True
+    return False
+
+
 def _candidate_target_paths(fleet: Fleet, target: str) -> list[str]:
     """Where to look for sandboxvm on the target."""
     out: list[str] = []
@@ -308,17 +331,21 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
             await mcpd.request("fs.stat", {"path": path})
             found = path
             break
-        except TargetError:
-            # Path doesn't exist (or isn't stat-able) on the target.
-            # Try the next candidate.
+        except TargetError as e:
+            # The MCPd transport raises TargetError BOTH for
+            # AOS-side failures ("fs.stat: Object not found",
+            # data={"path": ...}) AND for transport-level failures
+            # ("MCPd not reachable at <ep>", data={"endpoint": ...}).
+            # Use the data shape to disambiguate -- the endpoint key
+            # is the upstream's load-bearing marker.
+            if _is_transport_error(e):
+                transport_error = e
+                break
+            # Otherwise: AOS-side path-not-found, try next candidate.
             continue
         except Exception as e:
-            # Anything that isn't a TargetError is a transport-level
-            # failure (target unreachable, connection refused,
-            # asyncio.TimeoutError, etc.). Stop probing and surface
-            # it as a distinct error code -- a missing binary needs
-            # `sandbox.deploy`, an unreachable target needs power /
-            # network attention first.
+            # Non-TargetError exception (asyncio.TimeoutError,
+            # OSError if it ever leaks past the transport, etc.).
             transport_error = e
             break
 
@@ -401,21 +428,21 @@ async def _probe_specific_path(fleet: Fleet, target: str,
     mcpd = fleet.mcpd(target)
     try:
         await mcpd.request("fs.stat", {"path": path})
-    except TargetError:
+    except Exception as e:
+        if _is_transport_error(e):
+            return SandboxProbeResult(
+                target=target, available=False,
+                code="SANDBOXVM_TARGET_UNREACHABLE",
+                searched=[path],
+                machine=machine, machine_ok=machine_ok,
+                hint=(f"target {target!r} did not respond to fs.stat "
+                      f"({type(e).__name__}: {str(e)[:120]})."),
+            )
         return SandboxProbeResult(
             target=target, available=False,
             code="SANDBOXVM_MISSING",
             searched=[path],
             machine=machine, machine_ok=machine_ok,
-        )
-    except Exception as e:
-        return SandboxProbeResult(
-            target=target, available=False,
-            code="SANDBOXVM_TARGET_UNREACHABLE",
-            searched=[path],
-            machine=machine, machine_ok=machine_ok,
-            hint=(f"target {target!r} did not respond to fs.stat "
-                  f"({type(e).__name__}: {str(e)[:120]})."),
         )
 
     ran, banner = await _execute_banner_probe(fleet, target, path)
