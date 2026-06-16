@@ -124,6 +124,7 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `wb.windows` | List windows across all screens. |
 | `wb.publicscreens` | Public-screens registry via `LockPubScreenList`. |
 | `wb.frontmost` | Frontmost screen, active screen, and active window. |
+| `wb.screenshot` | Capture a screen (frontmost or by `screen_index`) to a PNG on the target via `graphics.library` ReadPixelArray + `z.library` encode; the host tool downloads it. Works on real hardware **and** QEMU (unlike `qemu.screenshot`, which is QMP-only). |
 
 ### `debug.*`
 

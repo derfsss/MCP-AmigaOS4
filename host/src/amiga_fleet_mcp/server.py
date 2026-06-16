@@ -767,6 +767,32 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         """Frontmost screen + active screen + active window."""
         return await wb_tool.wb_frontmost(fleet, fleet.resolve_target(target))
 
+    @mcp.tool(name="wb_screenshot", title="wb.screenshot")
+    @archived("wb.screenshot", archive)
+    async def wb_screenshot(
+        *,
+        target: str | None = None,
+        screen_index: int = 0,
+        save_path: str | None = None,
+        keep_remote: bool = False,
+        inline: bool = True,
+    ) -> wb_tool.ScreenshotResult:
+        """Capture a screen to a PNG on the Amiga and download it.
+
+        Works on real X5000 / A1222 hardware as well as QEMU (unlike
+        qemu.screenshot, which is QMP-only). `screen_index` 0 = frontmost.
+        `save_path` keeps the PNG at a host path; otherwise a tempfile is
+        used. `inline=False` omits the base64 PNG from the result.
+        """
+        return await wb_tool.wb_screenshot(
+            fleet,
+            fleet.resolve_target(target),
+            screen_index=screen_index,
+            save_path=save_path,
+            keep_remote=keep_remote,
+            inline=inline,
+        )
+
     # ---------- phase 5c (partial): GDB-stub debug --------------------
 
     @mcp.tool(name="debug_read_registers", title="debug.read_registers")
@@ -1433,13 +1459,14 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def wb_ns(*, method: str, params: dict[str, Any] | None = None) -> Any:
         """wb.* (Workbench) dispatcher. `method` is one of:
 
-          screens, windows, publicscreens, frontmost
+          screens, windows, publicscreens, frontmost, screenshot
         """
         return await _ns({
             "screens":       wb_tool.wb_screens,
             "windows":       wb_tool.wb_windows,
             "publicscreens": wb_tool.wb_publicscreens,
             "frontmost":     wb_tool.wb_frontmost,
+            "screenshot":    wb_tool.wb_screenshot,
         }, method, params or {})
 
     @mcp.tool(name="debug", title="debug.dispatch")

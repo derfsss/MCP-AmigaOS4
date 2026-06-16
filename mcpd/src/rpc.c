@@ -154,6 +154,7 @@ const method_entry mcpd_methods[] = {
     { "wb.windows",         wb_windows,         "List windows across all screens" },
     { "wb.publicscreens",   wb_publicscreens,   "Public screens registry (LockPubScreenList)" },
     { "wb.frontmost",       wb_frontmost,       "Frontmost screen + active screen + active window" },
+    { "wb.screenshot",      wb_screenshot,      "Capture a screen (frontmost or by screen_index) to a PNG file on the target. params: screen_index (default 0), path (default T:mcpd-shot.png). Captures via graphics.library ReadPixelArray + encodes PNG via z.library; works on real hardware AND QEMU (unlike qemu.screenshot which is QMP-only). Returns path/format/width/height/depth/bytes." },
     { "debug.task_snapshot", debug_task_snapshot,
       "Snapshot a named task: registers + backtrace via IDebug->ReadTaskContext" },
     { "debug.symbol",       debug_symbol,

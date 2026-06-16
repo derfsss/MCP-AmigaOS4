@@ -79,6 +79,7 @@ MCPD_HANDLER(wb_screens);
 MCPD_HANDLER(wb_windows);
 MCPD_HANDLER(wb_publicscreens);
 MCPD_HANDLER(wb_frontmost);
+MCPD_HANDLER(wb_screenshot);
 
 MCPD_HANDLER(debug_task_snapshot);
 MCPD_HANDLER(debug_symbol);

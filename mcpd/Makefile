@@ -49,6 +49,7 @@ SRCS = \
   $(METHODS_DIR)/exec.c \
   $(METHODS_DIR)/sys.c \
   $(METHODS_DIR)/wb.c \
+  $(METHODS_DIR)/screen.c \
   $(METHODS_DIR)/debug.c \
   $(METHODS_DIR)/events.c \
   $(METHODS_DIR)/hwres.c \

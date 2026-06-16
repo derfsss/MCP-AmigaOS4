@@ -46,7 +46,7 @@ can:
   resident-init mode and chain a test program against them, all in
   a single tool call.
 
-128 typed MCP tools, 8 live resources, validated end-to-end on QEMU
+129 typed MCP tools, 8 live resources, validated end-to-end on QEMU
 pegasos2 and real AmigaOne X5000 hardware.
 
 If that sounds useful, the rest of this README and the docs below

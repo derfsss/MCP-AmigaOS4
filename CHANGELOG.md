@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`wb.screenshot`** — capture an AmigaOS screen to a PNG on the
+  target and bring it back to the host. The daemon grabs the chosen
+  screen (frontmost, or by `screen_index`) with `graphics.library`
+  ReadPixelArray and PNG-encodes it using the already-linked
+  `z.library` (deflate + CRC32); AmigaOS 4.1 ships no PNG *writer*
+  datatype, so the encoding is done directly rather than via
+  `datatypes.library`. The host tool downloads the file (`fs.download`)
+  and optionally inlines it as base64. Unlike `qemu.screenshot` (QMP
+  `screendump`, QEMU-only), this works on real X5000 / A1222 hardware
+  too, and fans out via `fleet.run_on_all`.
+
 - **`sandbox.*` namespace** — driver- and program-iteration loop on
   top of [SandboxVM](https://github.com/derfsss/SandboxVM), an AOS4
   in-process sandbox host that survives guest crashes (DSI / ISI /

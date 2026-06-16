@@ -246,6 +246,10 @@ _FANOUT: dict[str, Callable[..., Awaitable[Any]]] = {
     "sys.debug_ring": sys_tool.sys_debug_ring,
     "wb.screens": wb_tool.wb_screens,
     "wb.windows": wb_tool.wb_windows,
+    # wb.screenshot fans out per-target; with the default save_path
+    # each target downloads to its own host tempfile, so concurrent
+    # captures don't collide.
+    "wb.screenshot": wb_tool.wb_screenshot,
     # sandbox.* — read paths fan out per-target naturally; the
     # mutating run_* / deploy methods can also fan out when the
     # caller wants the same operation on every target (e.g. roll a
