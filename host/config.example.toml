@@ -102,3 +102,25 @@ tags           = ["real-hw", "x5000"]
   # enabled = true
   # port    = "COM5"             # or /dev/ttyUSB1 on Linux/macOS
   # baud    = 38400
+
+  # Optional: keyboard / mouse injection (the `input.*` namespace).
+  #
+  # DISABLED BY DEFAULT, and this block alone is NOT enough. There
+  # are two gates and both must be open:
+  #
+  #   1. This block (a wrong-target guard, host-side).
+  #   2. MCPd on the target, started with --enable-input or with
+  #      SYS:System/MCPd/ENABLE-INPUT present. Run MCPd-Enable-Input
+  #      on the Amiga and restart MCPd. THIS is the real control --
+  #      anything that can reach TCP 4322 bypasses the host entirely.
+  #
+  # Once both are open, any client that can reach the daemon can
+  # type and click on this machine as the logged-in user. Do not
+  # enable it on a target reachable from an untrusted network.
+  # See SECURITY.md.
+  # [targets.x5000-real.input]
+  # enabled          = true
+  # max_text_len     = 512   # chars per input.type
+  # max_events       = 256   # events per call
+  # default_delay_ms = 15    # inter-event pacing
+  # allow_drag       = true  # false disables input.drag only

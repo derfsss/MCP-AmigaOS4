@@ -277,6 +277,100 @@ arbitrary address to module / function / source.
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
 
+## Driving the target's UI (`input.*`)
+
+The `wb.*` tools only *look* at Intuition. `input.*` writes to it —
+synthesising keyboard and mouse events through `input.device` so an
+agent can dismiss a requester, click Proceed in a GUI installer, or
+drive Workbench itself.
+
+This is the most dangerous surface in the project, and it is **off by
+default behind two independent gates**.
+
+### Opening the gates
+
+**1. On the Amiga (the real control).** Either start the daemon with
+`--enable-input`, or — better — create the sentinel file:
+
+```
+Execute SYS:System/MCPd/MCPd-Enable-Input
+```
+
+then restart MCPd. The flag does *not* survive a restart, because
+`MCPd-Watchdog` relaunches with no arguments; the sentinel does.
+MCPd prints `*** INPUT INJECTION ENABLED ***` at startup when the
+gate is open — if you don't see that line, it isn't.
+
+The gate is read once at startup, so **no RPC method can turn it
+on**. Enabling requires filesystem access to the target.
+
+**2. In the host config (a wrong-target guard).**
+
+```toml
+[targets.x5000-real.input]
+enabled = true
+```
+
+Absent or `false` raises `NotCapable` before anything reaches the
+wire. This exists to stop an agent firing input at a target you never
+meant to drive; it is *not* access control, since anything that can
+reach TCP 4322 bypasses the host entirely.
+
+To revoke: `Execute SYS:System/MCPd/MCPd-Disable-Input`, restart MCPd.
+
+### Look before you click
+
+You are typing blind unless you check first. The idiom is:
+
+```
+input.state                    -> pointer position, active window
+wb.windows                     -> where everything is
+input.mouse_move  x=.. y=..    -> returns the position ACHIEVED
+input.state                    -> confirm before committing
+input.click       confirm=true
+wb.frontmost                   -> confirm activation changed
+```
+
+`input.mouse_move` reports where the pointer actually ended up rather
+than where you asked it to go, so the move is self-verifying. Absolute
+coordinates are clamped to the frontmost screen.
+
+### Typing
+
+```
+input.type  text="Hello" confirm=true
+input.key   keys=["lamiga","q"] confirm=true      # or chord="lamiga+q"
+```
+
+For `input.key`, every entry but the last must be a modifier. The
+`ctrl+lamiga+ramiga` reset chord additionally requires
+`confirm_reset=true`.
+
+`input.type` is layout-correct: the daemon maps each character through
+the target's own `keymap.library` (`MapANSI`), including dead-key
+sequences for accented characters, so a German or French machine
+receives what you asked for. Pass `keymap="us"` to force the built-in
+US table; that table is also the automatic fallback if
+`keymap.library` cannot be opened, and the result's `keymap` field
+tells you which path ran. Characters that cannot be produced on the
+active layout come back in `unmapped[]` rather than being silently
+dropped, so check that field if the result matters.
+
+⚠️ Everything typed through `input.type` is recorded **in cleartext**
+in the run archive. That is deliberate — it is an audit log — but it
+means you must not type credentials through it.
+
+### Limits
+
+Each call is capped at 256 events, 20 s of wall clock, 512 characters
+of text, and 64 drag steps. A call that hits a cap stops cleanly and
+returns `truncated: true`. The daemon always releases held modifiers
+and mouse buttons before returning, including on the abort path, so a
+truncated `input.drag` cannot leave the machine with a stuck button.
+
+`[targets.<n>.input] allow_drag = false` disables `input.drag` alone
+while leaving the rest of the surface available.
+
 ## Out-of-band power control (`power.*`)
 
 For real-hardware targets with the FTDI USB-TTL cable wired to the

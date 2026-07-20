@@ -260,6 +260,24 @@ def _wizard_target(prompt: Prompt) -> tuple[str, dict[str, Any]] | None:
                 "port": _ask(prompt, "MCU serial port", default_port),
                 "baud": 38400,
             }
+
+    # Input injection. Default NO, and only written when the operator
+    # says yes -- an absent [input] block is the disabled state, so a
+    # wizard run should never produce one by accident.
+    if _ask_bool(
+        prompt,
+        "enable keyboard/mouse injection (input.*) for this target? "
+        "This lets an MCP client type and click on it",
+        False,
+    ):
+        t["input"] = {"enabled": True}
+        print(
+            "  NOTE: this only opens the host-side gate. MCPd on the\n"
+            "  target must ALSO be started with --enable-input, or have\n"
+            "  SYS:System/MCPd/ENABLE-INPUT present (run\n"
+            "  MCPd-Enable-Input there, then restart MCPd). Until then\n"
+            "  input.* returns -32003."
+        )
     return name, t
 
 

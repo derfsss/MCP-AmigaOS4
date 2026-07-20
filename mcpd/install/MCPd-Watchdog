@@ -13,6 +13,13 @@
 ; To stop the watchdog: Break the process (Status FULL to find pid,
 ; then Break <pid> C). The Break interrupts the Wait or the running
 ; MCPd, the script exits cleanly.
+;
+; NOTE: MCPd is relaunched below with NO ARGUMENTS. Any command-line
+; flag -- notably --enable-input -- is therefore LOST on the first
+; restart. For settings that must persist, use the file-based gate
+; instead: SYS:System/MCPd/ENABLE-INPUT (see MCPd-Enable-Input).
+; Do not "fix" this by adding flags here; the sentinel file is the
+; supported mechanism and it keeps one source of truth.
 
 FailAt 99999
 

@@ -1,0 +1,58 @@
+; MCPd-Enable-Input - allow remote keyboard / mouse injection.
+;
+; Usage from a Shell on the target:
+;     Execute SYS:System/MCPd/MCPd-Enable-Input
+;
+; Creates the sentinel file SYS:System/MCPd/ENABLE-INPUT. MCPd reads
+; it ONCE at startup, so you must restart MCPd afterwards. That is
+; deliberate: because the gate is only ever read at startup, no RPC
+; method can turn input injection on at runtime. Turning it on
+; requires filesystem access to this machine.
+;
+; The --enable-input command-line flag does the same thing, but does
+; NOT survive a restart: MCPd-Watchdog relaunches MCPd with no
+; arguments, and the S:Network-Startup line added by MCPd-Install has
+; none either. Use this script for a persistent setting.
+;
+; To turn it back off: Execute SYS:System/MCPd/MCPd-Disable-Input
+
+FailAt 21
+
+If NOT EXISTS SYS:System/MCPd
+  Echo "MCPd-Enable-Input: SYS:System/MCPd not found - run MCPd-Install first"
+  Quit 20
+EndIf
+
+; NOTE: in AmigaDOS Echo, '*' is the ESCAPE character -- a literal
+; asterisk must be written '**'. Using '=' for the rules avoids the
+; whole problem and prints identically on every locale.
+Echo ""
+Echo "========================= WARNING ========================="
+Echo "Enabling input injection lets ANY client that can reach this"
+Echo "machine on TCP port 4322 type on the keyboard and move and"
+Echo "click the mouse, as the logged-in user, in whatever window"
+Echo "happens to be focused."
+Echo ""
+Echo "MCPd has NO authentication. The only thing protecting this"
+Echo "machine is who can reach the port. Do not enable this on a"
+Echo "target reachable from an untrusted network."
+Echo "==========================================================="
+Echo ""
+
+Echo >SYS:System/MCPd/ENABLE-INPUT "input injection enabled by MCPd-Enable-Input"
+
+If NOT EXISTS SYS:System/MCPd/ENABLE-INPUT
+  Echo "MCPd-Enable-Input: FAILED to create the sentinel file"
+  Quit 20
+EndIf
+
+Echo "MCPd-Enable-Input: sentinel created at SYS:System/MCPd/ENABLE-INPUT"
+Echo ""
+Echo "NOW RESTART MCPd - the gate is only read at startup."
+Echo "  If running under the watchdog:  Break <its pid> C, it relaunches."
+Echo "  Otherwise: Break the MCPd process and run it again."
+Echo ""
+; '******' renders as '***' -- see the escaping note above.
+Echo "MCPd prints '****** INPUT INJECTION ENABLED ******' at startup when"
+Echo "the gate is open. If you do not see that line, it is still off."
+Quit 0

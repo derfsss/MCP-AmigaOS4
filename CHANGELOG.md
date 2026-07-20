@@ -1,5 +1,81 @@
 # Change log
 
+## 1.3 — Keyboard and mouse injection
+
+Wire protocol stays at 1.0: `input.*` is purely additive, and
+`proto.capabilities` derives its method list dynamically, so framing,
+error codes, and notification shape are unchanged. An older host talks
+to a 1.3 daemon fine; an older daemon reports no `input` capability.
+
+### Added
+
+- **`input.*` — keyboard and mouse injection**, via `input.device`
+  `IND_WRITEEVENT` on the Amiga side. Seven methods: `input.state`
+  (read-only pointer / focus / geometry), `input.type`, `input.key`,
+  `input.mouse_move`, `input.click`, `input.drag`, `input.scroll`.
+  Works on real hardware and QEMU alike since it goes through MCPd
+  rather than QMP. Registered as seven fine-grained MCP tools plus an
+  `input` namespace dispatcher.
+- **Disabled by default at both layers.** The daemon gate is the real
+  control: `input.*` returns `-32003` unless MCPd was started with the
+  new `--enable-input` flag *or* the sentinel file
+  `SYS:System/MCPd/ENABLE-INPUT` exists. The gate is read once at
+  startup, so no RPC method can switch it on — enabling requires
+  filesystem access to the target and a daemon restart. The sentinel
+  is the primary mechanism because `MCPd-Watchdog` relaunches MCPd
+  with no arguments, so a CLI-flag-only gate would be silently lost on
+  the first restart. `proto.capabilities` now reports
+  `input.enabled`, and the methods stay advertised when off so clients
+  can distinguish "switched off" from "old daemon".
+- **Host-side gate**: new `[targets.<name>.input]` config block
+  (`enabled`, `max_text_len`, `max_events`, `default_delay_ms`,
+  `allow_drag`), defaulting to absent. Raises `NotCapable` naming both
+  gates. The `--init` wizard asks about it, defaulting to no.
+- **New install scripts** `MCPd-Enable-Input` / `MCPd-Disable-Input`,
+  copied by `MCPd-Install` but never run by it.
+- `confirm: true` required on the committing operations (`type`,
+  `key`, `click`, `drag`); not on `mouse_move`, `scroll`, `state`.
+  `ctrl+lamiga+ramiga` additionally requires `confirm_reset: true`
+  because it reboots the machine.
+- Per-call caps enforced daemon-side: 256 events, 20 s wall clock, 512
+  characters, 64 drag steps, `delay_ms` 0–1000. Held modifiers and
+  mouse buttons are always released before returning, including on the
+  abort path, so a truncated drag cannot leave a stuck mouse button.
+- `CLAUDE.md` — repo orientation notes for AI assistants.
+
+- **Layout-correct typing.** `input.type` maps characters through the
+  target's `keymap.library` (`MapANSI`), including dead-key sequences,
+  so non-US keymaps receive the intended characters. Verified
+  end-to-end on a German (QWERTZ) AmigaOS 4.1 FE guest: typing
+  `Echo TYPED-OK >T:typed.txt` into a Shell produced exactly that
+  file. `keymap="us"` forces the built-in table, which is also the
+  automatic fallback; the result reports which path ran.
+
+### Verified on hardware
+
+Exercised against a QEMU Pegasos2 guest running AmigaOS 4.1 FE
+Update 3 (Kickstart 54.57):
+
+- gate closed by default — all 7 methods return `-32003`,
+  `proto.capabilities` reports `input.enabled: false`
+- `MCPd-Enable-Input` → restart → gate open; `MCPd-Disable-Input` →
+  restart → closed again
+- absolute pointer moves land exactly on target; relative moves and
+  wheel scroll confirmed
+- keyboard injection confirmed end-to-end through a Shell
+- daemon-side `confirm` gates and the `ctrl+lamiga+ramiga`
+  `confirm_reset` guard all reject as designed
+
+### Known limitations
+
+- F11/F12 rawkey codes and the NewMouse wheel constants are still
+  flagged in `mcpd/src/methods/input.c` as unverified.
+  `input.mouse_move` defaults to a read-position-then-relative-delta
+  strategy (verified accurate); `absolute_mode="raw"` remains
+  available to A/B the true-absolute event form.
+- `input.click` does not report the achieved pointer position the way
+  `input.mouse_move` and `input.drag` do.
+
 ## 1.2 — Guided setup and whole-file transfers
 
 ### Added

@@ -28,6 +28,7 @@ from .tools import exec as exec_tool
 from .tools import fleet as fleet_tool
 from .tools import fleet_discover as discover_tool
 from .tools import fs as fs_tool
+from .tools import input as input_tool
 from .tools import installer as installer_tool
 from .tools import power as power_tool
 from .tools import qemu as qemu_tool
@@ -744,6 +745,150 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         """Frontmost screen + active screen + active window."""
         return await wb_tool.wb_frontmost(fleet, fleet.resolve_target(target))
 
+    # ---------- input.* : keyboard / mouse injection -------------------
+    #
+    # DISABLED BY DEFAULT behind two gates. The daemon one is the real
+    # control (MCPd --enable-input or SYS:System/MCPd/ENABLE-INPUT);
+    # the host one ([targets.<n>.input] enabled) is a wrong-target
+    # guard. See tools/input.py and SECURITY.md.
+
+    @mcp.tool(name="input_state", title="input.state")
+    @archived("input.state", archive)
+    async def input_state(*, target: str | None = None) -> input_tool.InputState:
+        """Pointer position, focused window, and screen geometry.
+        Requires input injection to be enabled on both the target's host
+        config and the daemon. Call this BEFORE input.click so you know
+        what you are about to click on."""
+        return await input_tool.input_state(fleet, fleet.resolve_target(target))
+
+    @mcp.tool(name="input_type", title="input.type")
+    @archived("input.type", archive)
+    async def input_type(
+        *,
+        text: str,
+        keymap: str = "system",
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.TypeResult:
+        """Type a string as keystrokes. Requires input injection enabled
+        on both host config and daemon, plus confirm=True. Layout-correct
+        by default (mapped through the target's keymap.library); pass
+        keymap="us" to force the built-in US table. The text is recorded
+        in cleartext in the run archive; do not type credentials through
+        this tool."""
+        return await input_tool.input_type(
+            fleet, fleet.resolve_target(target),
+            text=text, keymap=keymap, delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_key", title="input.key")
+    @archived("input.key", archive)
+    async def input_key(
+        *,
+        keys: list[str] | None = None,
+        chord: str | None = None,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        confirm_reset: bool = False,
+        target: str | None = None,
+    ) -> input_tool.KeyResult:
+        """Press a key or chord, e.g. keys=["lamiga","q"] or
+        chord="lamiga+q". All entries but the last must be modifiers.
+        Requires input injection enabled on both host config and daemon,
+        plus confirm=True. ctrl+lamiga+ramiga REBOOTS the machine and
+        also needs confirm_reset=True."""
+        return await input_tool.input_key(
+            fleet, fleet.resolve_target(target),
+            keys=keys, chord=chord, delay_ms=delay_ms,
+            confirm=confirm, confirm_reset=confirm_reset,
+        )
+
+    @mcp.tool(name="input_mouse_move", title="input.mouse_move")
+    @archived("input.mouse_move", archive)
+    async def input_mouse_move(
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        dx: int | None = None,
+        dy: int | None = None,
+        absolute_mode: str = "delta",
+        steps: int = 1,
+        delay_ms: int | None = None,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Move the pointer -- x+y absolute, or dx/dy relative. Requires
+        input injection enabled on both host config and daemon. No
+        confirm: motion commits nothing. Absolute targets are clamped to
+        the frontmost screen and the achieved position is returned."""
+        return await input_tool.input_mouse_move(
+            fleet, fleet.resolve_target(target),
+            x=x, y=y, dx=dx, dy=dy, absolute_mode=absolute_mode,
+            steps=steps, delay_ms=delay_ms,
+        )
+
+    @mcp.tool(name="input_click", title="input.click")
+    @archived("input.click", archive)
+    async def input_click(
+        *,
+        button: str = "left",
+        count: int = 1,
+        x: int | None = None,
+        y: int | None = None,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Click at the pointer, or at x/y if given. Requires input
+        injection enabled on both host config and daemon, plus
+        confirm=True -- the click lands on whatever is under the
+        pointer, so call input.state first."""
+        return await input_tool.input_click(
+            fleet, fleet.resolve_target(target),
+            button=button, count=count, x=x, y=y,
+            delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_drag", title="input.drag")
+    @archived("input.drag", archive)
+    async def input_drag(
+        *,
+        from_x: int,
+        from_y: int,
+        to_x: int,
+        to_y: int,
+        button: str = "left",
+        steps: int = 16,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Press at from_x/from_y, move to to_x/to_y, release. Requires
+        input injection enabled on both host config and daemon, plus
+        confirm=True. Can move, resize or drag-to-trash. The daemon
+        always releases the button, even on an aborted call."""
+        return await input_tool.input_drag(
+            fleet, fleet.resolve_target(target),
+            from_x=from_x, from_y=from_y, to_x=to_x, to_y=to_y,
+            button=button, steps=steps, delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_scroll", title="input.scroll")
+    @archived("input.scroll", archive)
+    async def input_scroll(
+        *,
+        clicks: int = 1,
+        direction: str = "down",
+        delay_ms: int | None = None,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Mouse wheel. Requires input injection enabled on both host
+        config and daemon. No confirm: scrolling commits nothing."""
+        return await input_tool.input_scroll(
+            fleet, fleet.resolve_target(target),
+            clicks=clicks, direction=direction, delay_ms=delay_ms,
+        )
+
     # ---------- phase 5c (partial): GDB-stub debug --------------------
 
     @mcp.tool(name="debug_read_registers", title="debug.read_registers")
@@ -1416,6 +1561,30 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "windows":       wb_tool.wb_windows,
             "publicscreens": wb_tool.wb_publicscreens,
             "frontmost":     wb_tool.wb_frontmost,
+        }, method, params or {})
+
+    @mcp.tool(name="input", title="input.dispatch")
+    @archived("input.dispatch", archive)
+    async def input_ns(*, method: str, params: dict[str, Any] | None = None) -> Any:
+        """input.* (keyboard / mouse injection) dispatcher. `method` is
+        one of:
+
+          state, type, key, mouse_move, click, drag, scroll
+
+        DISABLED BY DEFAULT behind two gates: the target's host config
+        ([targets.<name>.input] enabled = true) and the daemon itself
+        (MCPd --enable-input, or SYS:System/MCPd/ENABLE-INPUT on the
+        target). The daemon gate is the real control. type/key/click/
+        drag additionally require confirm=True.
+        """
+        return await _ns({
+            "state":      input_tool.input_state,
+            "type":       input_tool.input_type,
+            "key":        input_tool.input_key,
+            "mouse_move": input_tool.input_mouse_move,
+            "click":      input_tool.input_click,
+            "drag":       input_tool.input_drag,
+            "scroll":     input_tool.input_scroll,
         }, method, params or {})
 
     @mcp.tool(name="debug", title="debug.dispatch")

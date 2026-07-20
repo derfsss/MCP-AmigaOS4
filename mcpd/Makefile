@@ -30,7 +30,7 @@ SDK_VERSION ?= AmigaOS 4.1 FE SDK 54.16 + GCC 11.5 (walkero/amigagccondocker:os4
 MCPD_CFLAGS += -DMCPD_SDK_VERSION="\"$(SDK_VERSION)\""
 
 # Distribution
-VERSION = 1.1
+VERSION = 1.3
 
 SRC_DIR = src
 METHODS_DIR = $(SRC_DIR)/methods
@@ -49,6 +49,7 @@ SRCS = \
   $(METHODS_DIR)/exec.c \
   $(METHODS_DIR)/sys.c \
   $(METHODS_DIR)/wb.c \
+  $(METHODS_DIR)/input.c \
   $(METHODS_DIR)/debug.c \
   $(METHODS_DIR)/events.c \
   $(METHODS_DIR)/hwres.c \
