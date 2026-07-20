@@ -38,12 +38,29 @@ operator. In particular:
   and works regardless of AOS state. Treat the host workstation
   running `amiga-fleet-mcp` with cable attached as having physical
   power-button access to the target.
+- **Keyboard / mouse injection is off by default**: the `input.*`
+  methods (`input.type`, `input.key`, `input.click`, `input.drag`,
+  `input.mouse_move`, `input.scroll`, `input.state`) let a remote
+  client type and click on the target as the logged-in user, in
+  whatever window happens to be focused. They are **disabled at the
+  daemon** and return `-32003` until the operator either starts
+  `MCPd` with `--enable-input` or creates the sentinel file
+  `SYS:System/MCPd/ENABLE-INPUT` (see `MCPd-Enable-Input`) and
+  restarts the daemon. The gate is read once at startup, so **no RPC
+  method can switch it on** — enabling it needs filesystem access to
+  the target. The host-side `[targets.<name>.input] enabled` flag is
+  a wrong-target guard for the operator's convenience, **not** an
+  access control: anything that can reach TCP 4322 bypasses the host
+  entirely. Once the daemon gate is open, treat the machine as one
+  whose keyboard and mouse are on the network. Do not enable it on a
+  target reachable from an untrusted network.
 - **Confirm-gated destructive operations**: `sys.cold_reboot`,
   `sys.mcu_cmd cmd="s"`, the mutating `installer.*` /
-  `debug.write_*` tools, and the destructive `power.*` tools
+  `debug.write_*` tools, the destructive `power.*` tools
   (`power.on` / `power.off` / `power.toggle_stream` /
-  `power.shell`) all require an explicit `confirm: true`
-  parameter. This is a guardrail against accidental fire, **not**
+  `power.shell`), and the committing `input.*` tools
+  (`input.type` / `input.key` / `input.click` / `input.drag`) all
+  require an explicit `confirm: true` parameter. This is a guardrail against accidental fire, **not**
   an authentication mechanism. A connected client can always pass
   `confirm: true`.
 - **Per-connection fault isolation is not a security boundary**:
@@ -54,7 +71,14 @@ operator. In particular:
 - **Sensitive material**: do not rely on the project for secrets
   hygiene. Anything readable on the target Amiga is reachable via
   `fs.read`. Do not store credentials, keys, or other sensitive
-  material on a volume `MCPd` can see.
+  material on a volume `MCPd` can see. This extends to the host-side
+  run archive: every tool call is recorded with its parameters, so
+  **any string typed through `input.type` is written to the archive
+  JSONL in cleartext**. That is intended — it is an audit log, and
+  silently redacting one is worse than not keeping it — but it means
+  you must not type passwords through `input.type`. The
+  `text_sha256` field in the result exists so a reviewer can confirm
+  what was typed without re-reading the plaintext.
 
 ## Design limits worth knowing
 
@@ -70,6 +94,16 @@ These are documented behaviours, not vulnerabilities:
 - The MCP framing layer caps individual frames at 32 MiB. Larger
   payloads must use `fs.write_chunk` (resumable, optionally
   zlib-compressed).
+- `input.type` maps characters through the target's own
+  `keymap.library`, so it is layout-correct. If `keymap.library`
+  cannot be opened it silently falls back to a built-in US table;
+  the result's `keymap` field reports which path ran, and callers
+  who care should check it.
+- `input.*` calls are capped per call (256 events, 20 s wall clock,
+  512 characters of text) and the daemon always releases any held
+  modifier or mouse button before returning, including on the abort
+  path — a truncated `input.drag` cannot leave the target with a
+  stuck mouse button.
 
 ## Supported versions
 

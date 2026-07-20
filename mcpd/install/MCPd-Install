@@ -22,6 +22,17 @@ Copy MCPd SYS:System/MCPd/MCPd CLONE
 ; bits 0..3 (read/write/execute/delete = all allowed).
 Protect SYS:System/MCPd/MCPd +rwed
 
+; Input-injection helper scripts. Copied but NOT run -- input
+; injection stays off until the operator explicitly enables it.
+If EXISTS MCPd-Enable-Input
+  Copy MCPd-Enable-Input SYS:System/MCPd/MCPd-Enable-Input CLONE
+  Protect SYS:System/MCPd/MCPd-Enable-Input +rwed
+EndIf
+If EXISTS MCPd-Disable-Input
+  Copy MCPd-Disable-Input SYS:System/MCPd/MCPd-Disable-Input CLONE
+  Protect SYS:System/MCPd/MCPd-Disable-Input +rwed
+EndIf
+
 If NOT EXISTS S:Network-Startup.before-mcpd
   Echo "MCPd-Install: backing up S:Network-Startup -> S:Network-Startup.before-mcpd"
   Copy S:Network-Startup S:Network-Startup.before-mcpd
@@ -44,4 +55,8 @@ EndIf
 Echo ""
 Echo "MCPd-Install: done. Reboot to auto-launch MCPd on :4322."
 Echo "             Or launch immediately:  Run >NIL: <NIL: SYS:System/MCPd/MCPd"
+Echo ""
+Echo "Note: keyboard/mouse injection (input.*) is DISABLED. Clients"
+Echo "      get -32003 until you run MCPd-Enable-Input and restart"
+Echo "      MCPd. Read the warning in that script before you do."
 Quit 0

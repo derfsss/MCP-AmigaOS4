@@ -33,6 +33,7 @@ auto-start watchdog.
 | `--port N` | Listen on TCP port `N` instead of the default 4322. |
 | `--version` | Print the daemon version and exit. |
 | `--help`, `-h` | Print usage and exit. |
+| `--enable-input` | Allow the `input.*` methods (keyboard / mouse injection). **Off by default.** Does *not* survive a restart — the watchdog relaunches without arguments — so for a persistent setting create `SYS:System/MCPd/ENABLE-INPUT` instead (`MCPd-Enable-Input`). See [SECURITY.md](SECURITY.md). |
 
 ## RPC methods (daemon side)
 
@@ -126,6 +127,39 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `wb.frontmost` | Frontmost screen, active screen, and active window. |
 | `wb.screenshot` | Capture a screen (frontmost or by `screen_index`) to a PNG on the target via `graphics.library` ReadPixelArray + `z.library` encode; the host tool downloads it. Works on real hardware **and** QEMU (unlike `qemu.screenshot`, which is QMP-only). |
 
+### `input.*` (keyboard / mouse injection)
+
+> ⚠️ **Disabled by default.** Every method here returns `-32003`
+> unless `MCPd` was started with `--enable-input` *or* the sentinel
+> file `SYS:System/MCPd/ENABLE-INPUT` exists (run `MCPd-Enable-Input`
+> on the target, then restart the daemon). The gate is read once at
+> startup, so no RPC can turn it on. Enabling it lets any client that
+> can reach port 4322 type and click on the machine as the logged-in
+> user. Read [SECURITY.md](SECURITY.md) first.
+>
+> The host side has a second, independent gate:
+> `[targets.<name>.input] enabled = true`. Both must be open.
+
+| Method | Confirm | Description |
+|---|---|---|
+| `input.state` | — | Pointer position, frontmost/active screen, active window + geometry. **Call this before `input.click`** so you know what you are about to click on. |
+| `input.type` | ✅ | Type a string as keystrokes. `text` (≤512 chars), `keymap` (`system` default / `us`), `delay_ms`. Layout-correct: characters are mapped through the target's `keymap.library` (`MapANSI`), including dead-key sequences. Unmappable characters are returned in `unmapped[]`, never silently dropped. |
+| `input.key` | ✅ | Press a key or chord: `keys: ["lamiga","q"]`. All but the last entry must be modifiers. `ctrl+lamiga+ramiga` **reboots the machine** and additionally requires `confirm_reset: true`. |
+| `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
+| `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). |
+| `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
+| `input.scroll` | — | Mouse wheel via NewMouse codes. `clicks` (1–32), `direction`. |
+
+Per-call caps enforced by the daemon: 256 events, 20 s wall clock,
+512 characters of text, 64 drag steps, `delay_ms` 0–1000. A call that
+hits a cap stops cleanly and returns `truncated: true`.
+
+Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
+`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f10`; `esc`
+`return` `tab` `backspace` `del` `help` `space` `up` `down` `left`
+`right`; `kp0`–`kp9` `kpdot` `kpenter` `kpminus` `kpplus` `kpmul`
+`kpdiv`. A single printable character (`"q"`) also works.
+
 ### `debug.*`
 
 | Method | Description |
@@ -167,6 +201,7 @@ prints the live list.
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` |
+| `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
 | `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub) |
 | `events_wait` | `events.wait` (long-poll only). The other three `events.*` methods are exposed only as daemon RPC; clients invoke them via the transport directly. |
 | `app_notify` | `app.notify` |
@@ -324,6 +359,7 @@ to script an operation by method name rather than by tool name.
 | `fs` | `fs.*` |
 | `sys` | `sys.*` |
 | `wb` | `wb.*` |
+| `input` | `input.*` (disabled by default) |
 | `debug` | `debug.*` |
 | `qemu` | `qemu.*` |
 | `fleet` | `fleet.*` |

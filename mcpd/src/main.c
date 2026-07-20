@@ -27,7 +27,13 @@
 extern void applib_register(void);
 extern void applib_shutdown(void);
 
-#define MCPD_VERSION "1.3"
+/* In methods/input.c. Reads the input-injection gate (--enable-input
+ * or the SYS:System/MCPd/ENABLE-INPUT sentinel) exactly once, before
+ * any connection Process exists, and prints the startup banner. */
+extern void input_init_gate(int cli_flag);
+
+/* Derived from rpc.h so there is exactly one place to bump. */
+#define MCPD_VERSION MCPD_VERSION_STR
 #define DEFAULT_PORT 4322
 #define BACKLOG 4
 
@@ -374,14 +380,23 @@ static int spawn_client_worker(int client_fd) {
 
 static void usage(void) {
     IDOS->Printf(
-        "Usage: MCPd [--version] [--port N]\n"
-        "  --version    print version and exit\n"
-        "  --port N     listen on TCP port N (default %lu)\n",
+        "Usage: MCPd [--version] [--port N] [--enable-input]\n"
+        "  --version       print version and exit\n"
+        "  --port N        listen on TCP port N (default %lu)\n"
+        "  --enable-input  allow input.* (keyboard/mouse injection).\n"
+        "                  OFF by default. Anyone who can reach the\n"
+        "                  listener can then type and click on this\n"
+        "                  machine. NOTE: MCPd-Watchdog relaunches\n"
+        "                  without arguments, so this flag does NOT\n"
+        "                  survive a restart -- for a persistent\n"
+        "                  setting create SYS:System/MCPd/ENABLE-INPUT\n"
+        "                  (see MCPd-Enable-Input).\n",
         (unsigned long)DEFAULT_PORT);
 }
 
 int main(int argc, char **argv) {
     uint16_t port = DEFAULT_PORT;
+    int enable_input = 0;
 
     /* Suppress system requesters in the parent process too. The
      * listener loop itself doesn't usually touch DOS, but Discovery
@@ -408,6 +423,10 @@ int main(int argc, char **argv) {
                 return 64;
             }
             port = (uint16_t)p;
+            continue;
+        }
+        if (strcmp(argv[i], "--enable-input") == 0) {
+            enable_input = 1;
             continue;
         }
         IDOS->Printf("MCPd: unknown argument: %s\n", argv[i]);
@@ -466,6 +485,12 @@ int main(int argc, char **argv) {
         IDOS->Printf("MCPd: crash hook registration failed "
                      "(non-fatal)\n");
     }
+
+    /* Resolve the input-injection gate ONCE, here, before the accept
+     * loop spawns any child Process. g_input_enabled is read-only
+     * from this point on, so the children see it without locking and
+     * no RPC can flip it at runtime. Prints its own banner. */
+    input_init_gate(enable_input);
 
     IDOS->Printf("MCPd %s listening on :%lu (Ctrl-C to stop)\n",
                  MCPD_VERSION, (unsigned long)port);

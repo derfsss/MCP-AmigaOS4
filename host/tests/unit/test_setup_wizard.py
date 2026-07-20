@@ -111,6 +111,7 @@ def test_interactive_qemu_target_round_trip(tmp_path):
         "4422",        # mcpd port
         "y", "14422",  # qmp on, port
         "n",           # gdb off
+        "n",           # enable input injection? -> no
         "n",           # add another?
         # default_target picker is auto-set when only one target exists
         # defaults block
@@ -151,6 +152,7 @@ def test_interactive_remote_with_mcu_cable(tmp_path):
         "4322",
         "y",                  # FTDI cable wired?
         "COM5",               # MCU port
+        "n",                  # enable input injection? -> no
         "n",                  # add another?
         "n",                  # configure defaults
     ]
@@ -164,6 +166,46 @@ def test_interactive_remote_with_mcu_cable(tmp_path):
     assert t.channels.mcu is not None
     assert t.channels.mcu.port == "COM5"
     assert t.channels.mcu.baud == 38400
+
+
+def test_wizard_declining_input_emits_no_input_block(tmp_path):
+    """Saying no must leave the key out entirely -- an absent block is
+    the disabled state, so the wizard must never write one by accident."""
+    answers = [
+        "", "", "info", "stdio",
+        "", "", "",
+        "y", "x5000", "remote", "X5000", "real-hw",
+        "192.168.1.50", "4322",
+        "n",                  # FTDI cable? -> no
+        "n",                  # enable input injection? -> no
+        "n",                  # add another?
+        "n",                  # configure defaults
+    ]
+    out = tmp_path / "config.toml"
+    rc = run_init(out_path=out, force=True, prompt=ScriptedPrompt(answers))
+    assert rc == 0
+    raw = tomllib.loads(out.read_text(encoding="utf-8"))
+    assert "input" not in raw["targets"]["x5000"]
+    assert load_config(out).targets["x5000"].input is None
+
+
+def test_wizard_accepting_input_emits_enabled_block(tmp_path):
+    answers = [
+        "", "", "info", "stdio",
+        "", "", "",
+        "y", "x5000", "remote", "X5000", "real-hw",
+        "192.168.1.50", "4322",
+        "n",                  # FTDI cable? -> no
+        "y",                  # enable input injection? -> yes
+        "n",                  # add another?
+        "n",                  # configure defaults
+    ]
+    out = tmp_path / "config.toml"
+    rc = run_init(out_path=out, force=True, prompt=ScriptedPrompt(answers))
+    assert rc == 0
+    t = load_config(out).targets["x5000"]
+    assert t.input is not None
+    assert t.input.enabled is True
 
 
 def test_interactive_aborts_when_user_says_no_to_overwrite(tmp_path):
