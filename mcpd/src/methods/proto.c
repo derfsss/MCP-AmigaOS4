@@ -13,6 +13,10 @@
 #define MCPD_DATE "00.00.0000"
 #endif
 
+#ifndef MCPD_TIME
+#define MCPD_TIME "00:00:00"
+#endif
+
 #ifndef MCPD_SDK_VERSION
 #define MCPD_SDK_VERSION "AmigaOS 4 SDK (unknown revision)"
 #endif
@@ -48,6 +52,7 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     /* Build info. */
     cJSON *build = cJSON_AddObjectToObject(r, "build");
     cJSON_AddStringToObject(build, "date", MCPD_DATE);
+    cJSON_AddStringToObject(build, "time", MCPD_TIME);
     cJSON_AddStringToObject(build, "compiler", "ppc-amigaos-gcc");
     cJSON_AddStringToObject(build, "sdk", MCPD_SDK_VERSION);
 
@@ -106,6 +111,7 @@ int proto_version(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddStringToObject(r, "server", MCPD_SERVER_VERSION);
     cJSON_AddStringToObject(r, "protocol", MCPD_PROTOCOL_VERSION);
     cJSON_AddStringToObject(r, "build_date", MCPD_DATE);
+    cJSON_AddStringToObject(r, "build_time", MCPD_TIME);
     cJSON_AddStringToObject(r, "sdk", MCPD_SDK_VERSION);
     *out_result = r;
     return 0;

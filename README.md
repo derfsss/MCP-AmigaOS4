@@ -117,7 +117,12 @@ context in [USAGE.md](USAGE.md).
 - Auto-start install integration: a single command deploys MCPd to
   `SYS:System/MCPd/`, registers a watchdog wrapper, and patches
   `S:Network-Startup`. Boot-to-bind is approximately eleven seconds on
-  an AmigaOne X5000.
+  an AmigaOne X5000. On start the daemon writes a machine-readable
+  `[MCPd] ready name=… version=… build_date=… build_time=… port=…`
+  line to the kernel debug ring — readable via `sys.debug_ring` or a
+  `serial.*` capture — so a boot-time start is observable even though
+  the auto-start path sends stdout to `NIL:`. See
+  [mcpd/README.md](mcpd/README.md#startup-beacon).
 - Per-tool parameter defaults via a `[defaults]` block in
   `config.toml` (`dest_volume`, `sources_dir`, `machine`,
   `iso_filename`). Set frequently-repeated values once and skip

@@ -65,7 +65,62 @@
   user-owned COMBI: is left alone), and issues
   `c:Dismount COMBI: FORCE` to drop the live DOS entry.
 
+- **MCPd readiness beacon in the kernel debug ring.** MCPd now emits
+  a single machine-parseable line via `IExec->DebugPrintF` once the
+  listen socket is bound and accepting:
+
+  ```
+  [MCPd] ready name=MCPd version=1.3 build_date=02.08.2026 build_time=18:18:04 port=4322
+  ```
+
+  The pre-existing `Printf` banner goes to stdout, which is `NIL:` on
+  the auto-start path (`S:Network-Startup` -> `Run >NIL: <NIL: Execute
+  MCPd-Watchdog`), so it never landed anywhere observable. The debug
+  ring survives regardless of how MCPd was launched, so anything
+  reading `C:DumpDebugBuffer` (`sys.debug_ring`, a serial capture, a
+  boot watcher) can detect "MCPd is up" without opening a socket.
+  Because the line is emitted *after* bind+listen succeed, seeing it
+  means the port is genuinely accepting rather than merely that the
+  binary loaded. Two companion lines cover the other outcomes:
+  `[MCPd] startup_failed version=... reason=bsdsocket|listen ...` and
+  `[MCPd] shutdown version=...` (clean exit, so a reader can tell a
+  clean stop from a crash). The `[MCPd] ` prefix and the `key=value`
+  shape are a parsed interface — keep them stable.
+
+  Note that `sys.debug_ring` reaches `C:DumpDebugBuffer` *through*
+  MCPd, so it cannot detect a daemon that failed to start; for that,
+  read a serial capture (`serial.*`, or QEMU's `-serial stdio` log
+  with `debuglevel=1`), which does not depend on the daemon.
+
+  Validated on QEMU AmigaOne across two cold boots: the beacon
+  appears in both the serial log and `sys.debug_ring`, and the
+  shutdown line is emitted on a clean `Break`.
+
+- **Build time is now stamped into the binary.** New `MCPD_TIME`
+  macro (`BUILD_TIME := $(shell date +%H:%M:%S)` in `mcpd/Makefile`),
+  so two builds made on the same day are distinguishable. Surfaced in
+  the readiness beacon, `MCPd --version`, `proto.version.build_time`
+  and `proto.capabilities.build.time`. Deliberately *not* added to
+  the `$VER` cookie: AmigaDOS `Version` parses `(DD.MM.YYYY)` and a
+  time component would break it.
+
 ### Changed
+
+- **MCPd's listener process now runs at priority 1** (was: whatever
+  it inherited from the launching Shell, i.e. 0). The accept+spawn
+  loop burns almost no CPU, so running it just above Workbench keeps
+  the daemon responsive to new connections on a loaded machine. The
+  per-connection worker processes are unchanged at -1, so the actual
+  heavy RPC work (chunked uploads, recursive copies, `exec.cmd`
+  subprocesses) still yields to the user. Confirmed on QEMU
+  AmigaOne: `Status FULL` reports
+  `priority 1 ... SYS:System/MCPd/MCPd` after a cold boot, with
+  `exec.cmd` subprocesses still at -1.
+
+- **MCPd version bumped to 1.3.** `mcpd/src/main.c` `MCPD_VERSION`,
+  `mcpd/src/rpc.h` `MCPD_SERVER_VERSION` (`mcpd/1.3`), and
+  `mcpd/Makefile` `VERSION` — the last of which had drifted and was
+  still reading `1.1` while the shipped v1.2 binary reported `1.2`.
 
 - **`installer.*` no longer requires a host-side
   `diskimage-bootstrap/` directory.** The AOS 4.1 diskimage tools
