@@ -76,3 +76,70 @@ MCPd --version
 In production deployments the daemon is launched by the watchdog
 script (`MCPd-Watchdog`) from `S:Network-Startup`. See
 [INSTALL.md](../INSTALL.md) for the auto-start install procedure.
+
+## Startup beacon
+
+On a successful start MCPd writes one line to the kernel debug ring
+via `IExec->DebugPrintF`:
+
+```
+[MCPd] ready name=MCPd version=1.3 build_date=02.08.2026 build_time=18:18:04 port=4322 input=off
+```
+
+`input=on|off` reports the keyboard / mouse injection gate, which is
+resolved once at startup; a companion `[MCPd] input_gate state=...
+source=...` line says where the setting came from.
+
+The line is emitted **after** `bind` + `listen` succeed, so its
+presence means the port is accepting connections — not merely that
+the binary loaded. Two companion lines cover the other outcomes:
+
+```
+[MCPd] startup_failed version=1.3 reason=bsdsocket
+[MCPd] startup_failed version=1.3 reason=listen port=4322
+[MCPd] shutdown version=1.3
+```
+
+`shutdown` marks a clean exit, so a reader can distinguish a normal
+stop from a crash (which produces no line at all).
+
+The `[MCPd] ` prefix and the `key=value` shape are a parsed
+interface — keep them stable.
+
+The daemon also prints a banner to stdout, but on the auto-start
+path stdout is `NIL:` (`Run >NIL: <NIL: Execute MCPd-Watchdog`), so
+the debug ring is the only place a boot-time start is observable.
+
+Read the beacon with any of:
+
+- `C:DumpDebugBuffer` on the target (or the `sys.debug_ring` MCP
+  tool, which wraps it)
+- a serial capture of the debug UART — `serial.*` on real hardware,
+  or QEMU's `-serial stdio` log with `debuglevel=1`
+
+Note that `sys.debug_ring` reaches `DumpDebugBuffer` *through* MCPd,
+so it cannot be used to detect a daemon that failed to start. For
+that, read the serial capture, which does not depend on the daemon.
+
+Build date comes from the `$VER` cookie; build time is a separate
+`MCPD_TIME` macro. Time is deliberately excluded from `$VER` because
+AmigaDOS `Version` parses the `(DD.MM.YYYY)` form. Both are also
+available from `MCPd --version`, `proto.version`, and
+`proto.capabilities`.
+
+## Process priorities
+
+| Process | Priority |
+|---|---|
+| Listener (`main`) | **1** — above Workbench |
+| `MCPd Client` (one per connection) | **-1** |
+| `MCPd Discovery` | 0 |
+
+The accept + spawn loop costs almost nothing, so running it above
+Workbench keeps the daemon responsive to new connections on a loaded
+machine. The per-connection workers sit below Workbench so the actual
+RPC work — chunked uploads, recursive copies, `exec.cmd` subprocesses
+— yields to the user.
+
+The listener sets its own priority at startup, so it does not matter
+what priority the launching Shell had.

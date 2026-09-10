@@ -27,12 +27,33 @@
 extern void applib_register(void);
 extern void applib_shutdown(void);
 
-#define MCPD_VERSION "1.2"
+/* In methods/input.c. Reads the input-injection gate (--enable-input
+ * or the SYS:System/MCPd/ENABLE-INPUT sentinel) exactly once, before
+ * any connection Process exists, and prints the startup banner. */
+extern void input_init_gate(int cli_flag);
+
+/* Also in methods/input.c. Reads the resolved gate, so the readiness
+ * beacon can say whether this daemon will accept injection. */
+extern int input_is_enabled(void);
+
+/* Derived from rpc.h so there is exactly one place to bump. */
+#define MCPD_VERSION MCPD_VERSION_STR
 #define DEFAULT_PORT 4322
 #define BACKLOG 4
 
+/* Priority of the listener process itself. The accept+spawn loop burns
+ * almost no CPU, so running it just above Workbench (0) keeps MCPd
+ * responsive to new connections even while the machine is loaded.
+ * The per-connection workers stay at -1 (see spawn_client_worker) so
+ * the actual heavy RPC work still yields to the user. */
+#define MCPD_LISTENER_PRI 1
+
 #ifndef MCPD_DATE
 #define MCPD_DATE "00.00.0000"
+#endif
+
+#ifndef MCPD_TIME
+#define MCPD_TIME "00:00:00"
 #endif
 
 /* AmigaOS 4 SDK identifier this build was compiled against. Set
@@ -363,14 +384,23 @@ static int spawn_client_worker(int client_fd) {
 
 static void usage(void) {
     IDOS->Printf(
-        "Usage: MCPd [--version] [--port N]\n"
-        "  --version    print version and exit\n"
-        "  --port N     listen on TCP port N (default %lu)\n",
+        "Usage: MCPd [--version] [--port N] [--enable-input]\n"
+        "  --version       print version and exit\n"
+        "  --port N        listen on TCP port N (default %lu)\n"
+        "  --enable-input  allow input.* (keyboard/mouse injection).\n"
+        "                  OFF by default. Anyone who can reach the\n"
+        "                  listener can then type and click on this\n"
+        "                  machine. NOTE: MCPd-Watchdog relaunches\n"
+        "                  without arguments, so this flag does NOT\n"
+        "                  survive a restart -- for a persistent\n"
+        "                  setting create SYS:System/MCPd/ENABLE-INPUT\n"
+        "                  (see MCPd-Enable-Input).\n",
         (unsigned long)DEFAULT_PORT);
 }
 
 int main(int argc, char **argv) {
     uint16_t port = DEFAULT_PORT;
+    int enable_input = 0;
 
     /* Suppress system requesters in the parent process too. The
      * listener loop itself doesn't usually touch DOS, but Discovery
@@ -381,7 +411,8 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0) {
-            IDOS->Printf("MCPd %s (%s)\n", MCPD_VERSION, MCPD_DATE);
+            IDOS->Printf("MCPd %s (%s %s)\n",
+                         MCPD_VERSION, MCPD_DATE, MCPD_TIME);
             IDOS->Printf("Built with: %s\n", MCPD_SDK_VERSION);
             return 0;
         }
@@ -398,12 +429,25 @@ int main(int argc, char **argv) {
             port = (uint16_t)p;
             continue;
         }
+        if (strcmp(argv[i], "--enable-input") == 0) {
+            enable_input = 1;
+            continue;
+        }
         IDOS->Printf("MCPd: unknown argument: %s\n", argv[i]);
         usage();
         return 64;
     }
 
-    if (open_socket_lib() != 0) return 1;
+    /* Raise the listener above Workbench. Done here rather than with
+     * the pr_WindowPtr setup above so `--version` / `--help` exit
+     * without touching scheduling. */
+    IExec->SetTaskPri((struct Task *)me, MCPD_LISTENER_PRI);
+
+    if (open_socket_lib() != 0) {
+        IExec->DebugPrintF("[MCPd] startup_failed version=%s "
+                           "reason=bsdsocket\n", MCPD_VERSION);
+        return 1;
+    }
 
     /* z.library is best-effort - if the system doesn't have it, the
      * non-compressed paths still work and compression='zlib' returns
@@ -412,6 +456,9 @@ int main(int argc, char **argv) {
 
     int listen_sock = make_listen_socket(port);
     if (listen_sock < 0) {
+        IExec->DebugPrintF("[MCPd] startup_failed version=%s "
+                           "reason=listen port=%lu\n",
+                           MCPD_VERSION, (unsigned long)port);
         close_z_lib();
         close_socket_lib();
         return 1;
@@ -443,8 +490,35 @@ int main(int argc, char **argv) {
                      "(non-fatal)\n");
     }
 
+    /* Resolve the input-injection gate ONCE, here, before the accept
+     * loop spawns any child Process. g_input_enabled is read-only
+     * from this point on, so the children see it without locking and
+     * no RPC can flip it at runtime. Prints its own banner. */
+    input_init_gate(enable_input);
+
     IDOS->Printf("MCPd %s listening on :%lu (Ctrl-C to stop)\n",
                  MCPD_VERSION, (unsigned long)port);
+
+    /* Readiness beacon in the kernel debug ring. Printf above goes to
+     * stdout, which is NIL: on the auto-start path
+     * (S:Network-Startup -> Run >NIL: <NIL: Execute MCPd-Watchdog), so
+     * it never lands anywhere observable. DebugPrintF goes to the ring
+     * (and the serial console when kernel debug is enabled), which
+     * survives regardless of how MCPd was launched.
+     *
+     * Intended for anything reading the ring (C:DumpDebugBuffer via
+     * sys.debug_ring, a serial capture, a boot watcher) to decide
+     * "MCPd is up" without opening a socket. Emitted after bind+listen
+     * succeed, so seeing it means the port is actually accepting - not
+     * merely that the binary loaded.
+     *
+     * Keep the "[MCPd] ready " prefix and the key=value shape stable:
+     * they are parsed. */
+    IExec->DebugPrintF("[MCPd] ready name=MCPd version=%s "
+                       "build_date=%s build_time=%s port=%lu input=%s\n",
+                       MCPD_VERSION, MCPD_DATE, MCPD_TIME,
+                       (unsigned long)port,
+                       input_is_enabled() ? "on" : "off");
 
     /* Multi-client (§19.3 P1 #7): the parent task does nothing but
      * accept + spawn. Each child Process owns its own connection
@@ -480,5 +554,8 @@ int main(int argc, char **argv) {
     close_z_lib();
     close_socket_lib();
     IDOS->Printf("MCPd: shutdown\n");
+    /* Counterpart to the readiness beacon - lets a debug-ring reader
+     * tell "was up, exited cleanly" from "was up, crashed". */
+    IExec->DebugPrintF("[MCPd] shutdown version=%s\n", MCPD_VERSION);
     return 0;
 }

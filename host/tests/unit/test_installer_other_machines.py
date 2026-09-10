@@ -47,7 +47,8 @@ def test_pegasos2_sequence_shape():
     assert names[0] == "stage_diskimage_tools"
     assert names[1] == "extract_iso_lha"
     assert names[2] == "mount_iso"
-    assert names[-2] == "unmount_iso"
+    assert names[-3] == "unmount_iso"
+    assert names[-2] == "dismount_combi_device"
     assert names[-1] == "cleanup_tmp"
 
 
@@ -112,7 +113,9 @@ def test_all_implemented_sequences_have_same_skeleton():
     # SerialShell auto-start, MCPd auto-start, then unmount + clean.
     # quarantine_emu10kx (X5000-only) sits between SerialShell and
     # MCPd when present, so we only pin the tail to the universal bits.
-    expected_epilogue = ["install_mcpd", "unmount_iso", "cleanup_tmp"]
+    expected_epilogue = [
+        "install_mcpd", "unmount_iso", "dismount_combi_device", "cleanup_tmp",
+    ]
     for seq in (
         pegasos2_seq.build(iso_filename="Pegasos2InstallCD-53.42.iso"),
         amigaone_seq.build(iso_filename="AmigaOneInstallCD-53.42.iso"),

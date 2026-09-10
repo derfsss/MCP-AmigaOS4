@@ -162,15 +162,16 @@ Drives an end-to-end AmigaOS 4.1 FE install. Requirements:
   extras (X5000 needs `NGFCheck.lha` + `NGFS.lha`). Run
   `installer.required_files` for the machine to see the full list.
 - A built `MCPd` binary, either in `sources_dir` or in the
-  install-support tree (set `$AMIGA_INSTALL_SUPPORT_DIR` or pass
-  `bootstrap_dir=`).
-- A `diskimage-bootstrap/` directory holding `MountDiskImage`,
-  `diskimage.device`, and `CDFileSystem`. The installer falls back
-  to `<sources_dir>/diskimage-bootstrap/` if `bootstrap_dir` is not
-  given.
+  install-support tree (set `$AMIGA_INSTALL_SUPPORT_DIR`).
 - A formatted destination volume on the target that is **not** the
   current system volume. `installer.preflight` checks this and
   refuses to proceed against a system volume.
+
+  Note: the AOS 4.1 diskimage tools (`MountDiskImage`,
+  `diskimage.device`, `CDFileSystem`) are sourced from the running
+  AmigaOS at install time and pulled onto the dest drive via
+  `copy_base_os` from the install ISO — no host-side
+  `diskimage-bootstrap/` directory is required.
 - The A1222 install path additionally requires a mounted RESCUEV2:
   or AAATECH0: USB volume on the target with the bootloader files;
   preflight emits a warning when targeting A1222.
@@ -296,7 +297,7 @@ blocks. See [USAGE.md](USAGE.md) for the configuration schema.
 
 The starter config also ships with a commented `[defaults]` block —
 uncomment and fill it in to give frequently-repeated parameters
-(`dest_volume`, `sources_dir`, `bootstrap_dir`, `machine`, ...) a
+(`dest_volume`, `sources_dir`, `machine`, `iso_filename`) a
 fleet-wide default. See [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults) for the full list of keys.
 
@@ -402,7 +403,12 @@ The installer performs five steps:
 2. Copies the binary to `SYS:System/MCPd/MCPd` and clears the
    `e`-protected bit (AmigaOS new-file default).
 3. Uploads the watchdog script `SYS:System/MCPd/MCPd-Watchdog`, which
-   relaunches MCPd if it ever exits, with a 5 s back-off.
+   relaunches MCPd if it ever exits, with a 5 s back-off, plus the
+   `MCPd-Enable-Input` / `MCPd-Disable-Input` operator scripts.
+   Those two are only copied, never run: keyboard / mouse injection
+   (`input.*`) stays disabled until you execute `MCPd-Enable-Input`
+   on the target yourself and restart MCPd. See
+   [SECURITY.md](SECURITY.md).
 4. Creates a one-time backup of `S:Network-Startup` at
    `S:Network-Startup.before-mcpd`.
 5. Idempotently appends a launch line that runs the watchdog from the
@@ -413,8 +419,8 @@ eleven seconds of cold boot.
 
 ### Manual install (no host helper)
 
-Copy `mcpd/MCPd` and `mcpd/install/MCPd-Install` onto the target, then
-from a Shell on the target:
+Copy `mcpd/MCPd` and the scripts from `mcpd/install/` onto the
+target, then from a Shell on the target:
 
 ```
 CD <directory containing the files>

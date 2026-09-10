@@ -1,0 +1,32 @@
+; MCPd-Disable-Input - revoke remote keyboard / mouse injection.
+;
+; Usage from a Shell on the target:
+;     Execute SYS:System/MCPd/MCPd-Disable-Input
+;
+; Removes the SYS:System/MCPd/ENABLE-INPUT sentinel. MCPd reads the
+; gate only at startup, so a currently-running MCPd keeps whatever
+; state it started with -- you MUST restart it for this to take
+; effect.
+;
+; Note this does not undo a --enable-input flag on a running MCPd's
+; command line. If MCPd was launched with that flag, remove it from
+; wherever the launch happens (S:Network-Startup, or your Shell
+; history) as well as running this script.
+
+FailAt 21
+
+If EXISTS SYS:System/MCPd/ENABLE-INPUT
+  Delete >NIL: SYS:System/MCPd/ENABLE-INPUT
+  Echo "MCPd-Disable-Input: sentinel removed"
+Else
+  Echo "MCPd-Disable-Input: sentinel was not present (already disabled)"
+EndIf
+
+Echo ""
+Echo "NOW RESTART MCPd - a running daemon keeps the gate state it"
+Echo "started with. After the restart MCPd should print:"
+Echo "  'MCPd: input injection disabled (input.* -> -32003).'"
+Echo ""
+Echo "Also check that MCPd is not being launched with --enable-input:"
+Echo "  Search S:Network-Startup \"enable-input\""
+Quit 0

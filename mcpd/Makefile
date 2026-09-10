@@ -17,6 +17,14 @@ LDFLAGS ?= -lauto
 BUILD_DATE := $(shell date +%d.%m.%Y)
 MCPD_CFLAGS = -DMCPD_DATE=\"$(BUILD_DATE)\"
 
+# Build time (HH:MM:SS, 24h). Deliberately NOT part of the $VER cookie -
+# AmigaDOS `Version` parses "(DD.MM.YYYY)" and a time component would
+# break it. Surfaced via the startup debug line, `MCPd --version`,
+# proto.version and proto.capabilities instead, so two same-day builds
+# are still distinguishable.
+BUILD_TIME := $(shell date +%H:%M:%S)
+MCPD_CFLAGS += -DMCPD_TIME=\"$(BUILD_TIME)\"
+
 # AmigaOS 4 SDK + toolchain identifier embedded into MCPd. Surfaced
 # via `MCPd --version`, `proto.version`, and `proto.capabilities`
 # build.sdk so users / CI can see exactly which SDK produced a given
@@ -30,7 +38,7 @@ SDK_VERSION ?= AmigaOS 4.1 FE SDK 54.16 + GCC 11.5 (walkero/amigagccondocker:os4
 MCPD_CFLAGS += -DMCPD_SDK_VERSION="\"$(SDK_VERSION)\""
 
 # Distribution
-VERSION = 1.1
+VERSION = 1.3
 
 SRC_DIR = src
 METHODS_DIR = $(SRC_DIR)/methods
@@ -49,6 +57,8 @@ SRCS = \
   $(METHODS_DIR)/exec.c \
   $(METHODS_DIR)/sys.c \
   $(METHODS_DIR)/wb.c \
+  $(METHODS_DIR)/screen.c \
+  $(METHODS_DIR)/input.c \
   $(METHODS_DIR)/debug.c \
   $(METHODS_DIR)/events.c \
   $(METHODS_DIR)/hwres.c \

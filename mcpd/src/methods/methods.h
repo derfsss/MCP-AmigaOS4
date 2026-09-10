@@ -79,6 +79,18 @@ MCPD_HANDLER(wb_screens);
 MCPD_HANDLER(wb_windows);
 MCPD_HANDLER(wb_publicscreens);
 MCPD_HANDLER(wb_frontmost);
+MCPD_HANDLER(wb_screenshot);
+
+/* input.* -- DISABLED BY DEFAULT. Every one of these returns -32003
+ * unless MCPd was started with --enable-input or the sentinel file
+ * SYS:System/MCPd/ENABLE-INPUT exists. See methods/input.c. */
+MCPD_HANDLER(input_state);
+MCPD_HANDLER(input_type);
+MCPD_HANDLER(input_key);
+MCPD_HANDLER(input_mouse_move);
+MCPD_HANDLER(input_click);
+MCPD_HANDLER(input_drag);
+MCPD_HANDLER(input_scroll);
 
 MCPD_HANDLER(debug_task_snapshot);
 MCPD_HANDLER(debug_symbol);

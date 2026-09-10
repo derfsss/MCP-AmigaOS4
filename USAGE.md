@@ -80,7 +80,6 @@ default_target = "x5000"
 [defaults]
 dest_volume   = "BootTest:"
 sources_dir   = "/path/to/your/amiga-source-tree"
-bootstrap_dir = "/path/to/your/diskimage-bootstrap"
 machine       = "X5000"
 # iso_filename = "AmigaOneX5000InstallCD-53.42.iso"   # rarely needed; auto-detected
 ```
@@ -100,7 +99,6 @@ Resolution order on every call:
 |---|---|
 | `dest_volume`   | `installer.preflight`, `installer.read_kicklayout`, `installer.write_kicklayout`, `installer.patch_kicklayout`, `installer.install_x5000`, `installer.run`, `installer.stage`, `installer.verify` |
 | `sources_dir`   | `installer.scan_sources`, `installer.preflight`, `installer.install_x5000`, `installer.run`, `installer.stage` |
-| `bootstrap_dir` | `installer.stage` |
 | `machine`       | `installer.required_files`, `installer.preflight`, `installer.run`, `installer.stage`, `installer.verify` |
 | `iso_filename`  | `installer.install_x5000`, `installer.run`, `installer.stage` (auto-detected when omitted) |
 
@@ -277,6 +275,100 @@ arbitrary address to module / function / source.
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
 
+## Driving the target's UI (`input.*`)
+
+The `wb.*` tools only *look* at Intuition. `input.*` writes to it —
+synthesising keyboard and mouse events through `input.device` so an
+agent can dismiss a requester, click Proceed in a GUI installer, or
+drive Workbench itself.
+
+This is the most dangerous surface in the project, and it is **off by
+default behind two independent gates**.
+
+### Opening the gates
+
+**1. On the Amiga (the real control).** Either start the daemon with
+`--enable-input`, or — better — create the sentinel file:
+
+```
+Execute SYS:System/MCPd/MCPd-Enable-Input
+```
+
+then restart MCPd. The flag does *not* survive a restart, because
+`MCPd-Watchdog` relaunches with no arguments; the sentinel does.
+MCPd prints `*** INPUT INJECTION ENABLED ***` at startup when the
+gate is open — if you don't see that line, it isn't.
+
+The gate is read once at startup, so **no RPC method can turn it
+on**. Enabling requires filesystem access to the target.
+
+**2. In the host config (a wrong-target guard).**
+
+```toml
+[targets.x5000-real.input]
+enabled = true
+```
+
+Absent or `false` raises `NotCapable` before anything reaches the
+wire. This exists to stop an agent firing input at a target you never
+meant to drive; it is *not* access control, since anything that can
+reach TCP 4322 bypasses the host entirely.
+
+To revoke: `Execute SYS:System/MCPd/MCPd-Disable-Input`, restart MCPd.
+
+### Look before you click
+
+You are typing blind unless you check first. The idiom is:
+
+```
+input.state                    -> pointer position, active window
+wb.windows                     -> where everything is
+input.mouse_move  x=.. y=..    -> returns the position ACHIEVED
+input.state                    -> confirm before committing
+input.click       confirm=true
+wb.frontmost                   -> confirm activation changed
+```
+
+`input.mouse_move` reports where the pointer actually ended up rather
+than where you asked it to go, so the move is self-verifying. Absolute
+coordinates are clamped to the frontmost screen.
+
+### Typing
+
+```
+input.type  text="Hello" confirm=true
+input.key   keys=["lamiga","q"] confirm=true      # or chord="lamiga+q"
+```
+
+For `input.key`, every entry but the last must be a modifier. The
+`ctrl+lamiga+ramiga` reset chord additionally requires
+`confirm_reset=true`.
+
+`input.type` is layout-correct: the daemon maps each character through
+the target's own `keymap.library` (`MapANSI`), including dead-key
+sequences for accented characters, so a German or French machine
+receives what you asked for. Pass `keymap="us"` to force the built-in
+US table; that table is also the automatic fallback if
+`keymap.library` cannot be opened, and the result's `keymap` field
+tells you which path ran. Characters that cannot be produced on the
+active layout come back in `unmapped[]` rather than being silently
+dropped, so check that field if the result matters.
+
+⚠️ Everything typed through `input.type` is recorded **in cleartext**
+in the run archive. That is deliberate — it is an audit log — but it
+means you must not type credentials through it.
+
+### Limits
+
+Each call is capped at 256 events, 20 s of wall clock, 512 characters
+of text, and 64 drag steps. A call that hits a cap stops cleanly and
+returns `truncated: true`. The daemon always releases held modifiers
+and mouse buttons before returning, including on the abort path, so a
+truncated `input.drag` cannot leave the machine with a stuck button.
+
+`[targets.<n>.input] allow_drag = false` disables `input.drag` alone
+while leaving the rest of the surface available.
+
 ## Out-of-band power control (`power.*`)
 
 For real-hardware targets with the FTDI USB-TTL cable wired to the
@@ -332,6 +424,134 @@ fleet.target_status(target="x5000-real")     # confirm reachable
 
 `power.on` `p` empirically takes ~80 s for a full off-then-boot
 cycle before MCPd is reachable again on real X5000 hardware.
+
+## Driver / program iteration via SandboxVM (`sandbox.*`)
+
+The `sandbox.*` namespace wraps
+[SandboxVM](https://github.com/derfsss/SandboxVM) — a PPC AOS4
+binary that runs guest ELFs inside a sandboxed `IExec` clone with
+a `tc_TrapCode` trampoline that survives DSI / ISI / illegal /
+alignment / privilege traps. The integration lets an agent
+edit-compile-deploy-run a binary on a real or emulated AmigaOS
+target without power-cycling on every crash.
+
+### When to use it
+
+- Iterating on a new program where you expect occasional segfaults
+  during development.
+- Loading a `.device` / `.library` driver and exercising it with a
+  follow-on test program, **without** doing a real `Mount` on the
+  live system.
+- Running a regression bundle of test binaries (≤ 16 per call) and
+  collecting per-guest exit codes + trap classifications.
+
+For untrusted code or genuinely unsafe fuzz targets, use QEMU
+instead — SandboxVM is API-boundary, not MMU-boundary, so a wild
+store like `*(int *)0xDEADBEEF = 42` still corrupts host memory
+(the sandbox catches the *trap that follows*, not the store).
+This is documented and expected.
+
+### Prerequisites
+
+- Target must be ExtMem-capable: X5000 / X1000 / A1222 or QEMU
+  AmigaOne. Pegasos II is refused at probe time.
+- A built `bin/sandboxvm` (PPC AOS4 binary). Fastest route:
+  download from
+  [the SandboxVM releases page](https://github.com/derfsss/SandboxVM/releases/latest).
+  Build-from-source documented in the SandboxVM repo's README
+  (Docker cross-compile via `walkero/amigagccondocker:os4-gcc11`).
+- Optional `[paths] sandboxvm` in `config.toml` so `sandbox.deploy`
+  doesn't need an explicit `source=`. Optional
+  `[targets.<name>.sandbox]` block for per-target overrides
+  (binary path, default extmem / window size, always-on deny-libs).
+
+### Typical inner loop
+
+```
+sandbox.probe(target="x5000")
+# -> SANDBOXVM_MISSING -- binary not on target yet
+
+sandbox.deploy(target="x5000", confirm=true)
+# uploads bin/sandboxvm to SYS:Tools/sandboxvm, invalidates the
+# probe cache, re-pins it to the deployed path
+
+# build + upload your guest binary via the host Docker SDK +
+# fs.upload -- or just fs.upload an existing build.
+fs.upload(target="x5000",
+          local_path="bin/my_test",
+          remote_path="RAM:my_test")
+
+sandbox.run_guest(target="x5000", guest="RAM:my_test")
+# -> { exit_code: 0, trap_kind: null, stdout: "...", ... }
+
+# on a crash:
+sandbox.run_guest(target="x5000", guest="RAM:crashy")
+# -> { exit_code: -768, trap_kind: "DSI", ... }
+sandbox.last_trap(target="x5000")
+# -> { found: true, trap_kind: "DSI", traptype_hex: "0x300",
+#      raw_lines: [<full trap dump from the kernel ring>], ... }
+# -- daemon survived the crash; the next sandbox call works
+# without intervention.
+```
+
+### Driver iteration
+
+```
+fs.upload(target="x5000",
+          local_path="bin/virtioscsi.device",
+          remote_path="RAM:virtioscsi.device")
+fs.upload(target="x5000",
+          local_path="bin/virtioscsi-test",
+          remote_path="RAM:virtioscsi-test")
+
+sandbox.run_driver(target="x5000",
+                   driver="RAM:virtioscsi.device",
+                   test="RAM:virtioscsi-test")
+# Loads the driver via -r mode (CLT_InitFunc + IExec clone),
+# then chains the test ELF in the SAME Guest so OpenLibrary
+# resolves the freshly-loaded driver via the resident-lib
+# registry. Per-iteration cycle ≈ 1 s on real X5000.
+```
+
+### Batched test bundles
+
+```
+sandbox.run_batch(target="x5000", guests=[
+    {"guest": "RAM:test_1"},
+    {"guest": "RAM:test_2"},
+    {"guest": "RAM:test_3"},
+    # ... up to 16
+])
+# -> {
+#   aggregate_exit_code: -768,   // last non-zero rc seen
+#   all_clean: false,
+#   entries: [
+#     { name: "batch.0", exit_code: 0, trap_kind: null, ... },
+#     { name: "batch.1", exit_code: -768, trap_kind: "DSI", ... },
+#     { name: "batch.2", exit_code: 0, trap_kind: null, ... },
+#   ],
+# }
+```
+
+Per-guest exit codes are recovered from the kernel debug ring
+after the batch finishes (`[sandboxvm] guest_run_elf <path>
+returned <rc>` lines emitted via `DebugPrintF`). Per-guest argv
+and per-guest deny-lists are deliberately not supported — both
+conflict with SandboxVM's actual CLI. Use `sandbox.run_guest`
+per-binary when either matters.
+
+For multi-target fan-out, wrap a `sandbox.run_batch` call in
+`fleet.run_on_all` to drive the same bundle across X5000 + A1222
++ QEMU AmigaOne in parallel; per-target results come back keyed
+by target name.
+
+### Cross-references
+
+- `sys.debug_ring` is the underlying primitive `sandbox.last_trap`
+  filters against. Useful well outside sandbox: post-install
+  forensics, hardware bring-up.
+- `tests.run_suite` is the right tool for JSON-config-driven
+  multi-step test bundles **without** the SandboxVM harness.
 
 ## Validation
 

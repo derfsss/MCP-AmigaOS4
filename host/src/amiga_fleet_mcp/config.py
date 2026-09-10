@@ -153,6 +153,30 @@ class SerialChannel(BaseModel):
     baud: int = 115200
 
 
+class InputConfig(BaseModel):
+    """Per-target input-injection policy. Disabled by default.
+
+    ⚠️ This is a *host-side convenience* gate, not a security boundary.
+    The real control lives in the daemon: MCPd must have been started
+    with `--enable-input`, or have the sentinel file
+    `SYS:System/MCPd/ENABLE-INPUT` present, or every `input.*` call
+    returns -32003 no matter what this file says. Anything that can
+    reach TCP 4322 bypasses this block entirely.
+
+    Its purpose is to stop an agent from firing input at a target the
+    operator never intended to drive — a wrong-target guard, not an
+    access-control one.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    max_text_len: int = 512
+    max_events: int = 256
+    default_delay_ms: int = 15
+    allow_drag: bool = True
+
+
 class TargetChannels(BaseModel):
     """Per-target channel configuration."""
 
@@ -163,6 +187,31 @@ class TargetChannels(BaseModel):
     gdb: GdbChannel | None = None
     uboot: SerialChannel | None = None
     mcu: SerialChannel | None = None
+
+
+class SandboxTargetConfig(BaseModel):
+    """Per-target SandboxVM overrides.
+
+    Lives under `[targets.<name>.sandbox]` in config.toml. All fields
+    optional; the `sandbox.*` namespace falls back to built-in defaults
+    when an entry is omitted.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str | None = None
+    """AOS path to sandboxvm on this target (e.g. ``"Tools:sandboxvm"``).
+    When omitted, `sandbox.probe` searches a default list."""
+
+    default_extmem_mb: int = 1024
+    """Default ``-m <MB>`` for sandbox.run_guest."""
+
+    default_window_mb: int = 256
+    """Default ``-w <MB>`` for sandbox.run_guest."""
+
+    deny_libs: list[str] = Field(default_factory=list)
+    """Libraries always denied via ``-x`` for every guest run on this
+    target. Merged with per-call ``deny_libs``."""
 
 
 class TargetConfig(BaseModel):
@@ -177,6 +226,13 @@ class TargetConfig(BaseModel):
     headless: bool = False
     tags: list[str] = Field(default_factory=list)
     channels: TargetChannels = Field(default_factory=TargetChannels)
+    sandbox: SandboxTargetConfig | None = None
+
+    # Policy, not a transport — so it sits on the target rather than in
+    # `channels`. Defaults to None (absent) rather than a disabled
+    # instance so "never configured" and "explicitly turned off" stay
+    # distinguishable.
+    input: InputConfig | None = None
 
 
 class PathsConfig(BaseModel):
@@ -188,6 +244,10 @@ class PathsConfig(BaseModel):
     spe_tests: Path | None = None
     adtools_gdb: Path | None = None
     qemu_binary: Path | None = None
+    sandboxvm: Path | None = None
+    """Host-side path to a built ``bin/sandboxvm``. Used by
+    ``sandbox.deploy`` to resolve the upload source when no explicit
+    ``source`` is passed."""
 
 
 class DefaultsConfig(BaseModel):
@@ -203,7 +263,6 @@ class DefaultsConfig(BaseModel):
     # installer.* defaults
     dest_volume: str | None = None
     sources_dir: str | None = None
-    bootstrap_dir: str | None = None
     machine: str | None = None
     # installer_run / installer_install_x5000
     iso_filename: str | None = None

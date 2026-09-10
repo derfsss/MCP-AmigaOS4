@@ -54,6 +54,7 @@ def build_sequence(config: MachineConfig, *, iso_filename: str) -> Sequence:
     # appends to).
     seq_steps.append(steps.install_mcpd())
     seq_steps.append(steps.unmount_iso())
+    seq_steps.append(steps.dismount_combi_device())
     seq_steps.append(steps.cleanup_tmp())
 
     return Sequence(

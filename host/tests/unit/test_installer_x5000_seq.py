@@ -45,6 +45,7 @@ def test_x5000_sequence_step_order():
         "quarantine_devs_monitors",
         "install_mcpd",
         "unmount_iso",
+        "dismount_combi_device",
         "cleanup_tmp",
     ]
 
@@ -292,6 +293,67 @@ async def test_install_mcpd_copies_binary_and_edits_network_startup(fleet_with_f
     exec_cmds = [p["command"] for m, p in ops if m == "exec.cmd"]
     assert any('Protect "BootTest:System/MCPd/MCPd" +rwed' in c
                for c in exec_cmds)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("staged", [True, False])
+async def test_install_mcpd_copies_input_helper_scripts(
+    fleet_with_fake, staged
+):
+    """The MCPd-Enable-Input / MCPd-Disable-Input operator scripts are
+    copied to SYS:System/MCPd/ when staged, and their absence is
+    tolerated.
+
+    `MCPd-Install` copies them, but an installer-provisioned machine
+    never runs `MCPd-Install` -- this step mirrors it -- so without
+    this the only documented persistent way to open the input.* gate
+    wouldn't exist on any machine the fleet installs. They are copied,
+    never executed: injection stays off until an operator runs one.
+    """
+    import base64
+
+    from amiga_fleet_mcp.installer.sequences import _steps
+    fleet, fake = fleet_with_fake
+    fake.existing_paths.add("BootTest:tmp/MCPd")
+    if staged:
+        fake.existing_paths.add("BootTest:tmp/MCPd-Enable-Input")
+        fake.existing_paths.add("BootTest:tmp/MCPd-Disable-Input")
+
+    netstart_path = "BootTest:S/Network-Startup"
+    ops: list[tuple[str, dict]] = []
+    original_request = fake.request
+
+    async def _request(method, params=None, timeout_s=30.0):
+        ops.append((method, dict(params or {})))
+        if method == "fs.read" and (params or {}).get("path") == netstart_path:
+            return {"content_b64": base64.b64encode(b"; empty\n").decode(),
+                    "size": 8}
+        if method in ("fs.write", "fs.copy"):
+            return {"ok": True}
+        return await original_request(method, params, timeout_s)
+    fake.request = _request
+
+    step = _steps.install_mcpd()
+    res = await step.fn({
+        "fleet": fleet, "target": "x5000",
+        "mcpd": fleet.mcpd("x5000"),
+        "dest_volume": "BootTest:",
+    })
+
+    expected = [
+        "BootTest:System/MCPd/MCPd-Enable-Input",
+        "BootTest:System/MCPd/MCPd-Disable-Input",
+    ] if staged else []
+    assert res["input_helpers"] == expected
+
+    copies = [p.get("dst") for m, p in ops if m == "fs.copy"]
+    protects = [p["command"] for m, p in ops if m == "exec.cmd"]
+    for dst in expected:
+        assert dst in copies
+        assert any(f'Protect "{dst}" +rwed' in c for c in protects)
+    # Never executed by the installer -- only copied.
+    assert not any("MCPd-Enable-Input" in c and "Protect" not in c
+                   for c in protects)
 
 
 @pytest.mark.asyncio

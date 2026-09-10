@@ -237,6 +237,137 @@ async def cmd_events_soak(args: argparse.Namespace) -> int:
     return 0 if (fails == 0 and drops == 0) else 1
 
 
+# ---------- subcommands: qemu lifecycle + headless run -------------
+
+
+async def cmd_qemu_start(args: argparse.Namespace) -> int:
+    fleet, _cfg = _make_fleet(args)
+    target = _resolve(fleet, args.target)
+    from .tools import qemu as qtool
+
+    res = await qtool.qemu_start(fleet, target)
+    print(f"started {target} pid={res.pid}")
+    if res.serial_log:
+        print(f"serial_log={res.serial_log}")
+    await fleet.close_all()
+    return 0
+
+
+async def cmd_qemu_stop(args: argparse.Namespace) -> int:
+    fleet, _cfg = _make_fleet(args)
+    target = _resolve(fleet, args.target)
+    from .tools import qemu as qtool
+
+    res = await qtool.qemu_stop(fleet, target)
+    print(f"stopped {target} method={res.method}")
+    await fleet.close_all()
+    return 0
+
+
+async def cmd_qemu_status(args: argparse.Namespace) -> int:
+    fleet, _cfg = _make_fleet(args)
+    target = _resolve(fleet, args.target)
+    from .tools import qemu as qtool
+
+    st = await qtool.qemu_status(fleet, target)
+    print(f"{target} running={st.running} pid={st.pid} "
+          f"mcpd_reachable={st.mcpd_reachable}")
+    await fleet.close_all()
+    return 0 if st.running else 1
+
+
+def _printable(b: bytes) -> str:
+    """Filter a binary -serial log to printable text (NUL etc. -> newline)."""
+    return "".join(
+        chr(c) if (32 <= c < 127 or c in (9, 10, 13)) else "\n" for c in b
+    )
+
+
+async def _wait_serial(log_path: str, pattern: str, timeout_s: float) -> str | None:
+    """Poll a -serial log file until `pattern` (regex) appears, or timeout."""
+    import re
+
+    rx = re.compile(pattern)
+    p = Path(log_path)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if p.is_file():
+            text = _printable(p.read_bytes())
+            if rx.search(text):
+                return text
+        await asyncio.sleep(3)
+    return None
+
+
+async def cmd_qemu_run(args: argparse.Namespace) -> int:
+    """Headless deploy + run + (optional) wait-for-serial-marker, for a bounded
+    on-target smoke. With --start/--stop it is a self-contained pass/fail: start
+    QEMU -> upload the exe -> `run <remote> <args>` (detached) -> wait for the
+    serial marker -> stop. Exit 0 = marker seen (or no --wait), 1 = timeout/fail.
+    """
+    fleet, _cfg = _make_fleet(args)
+    target = _resolve(fleet, args.target)
+    from .tools import exec as etool
+    from .tools import qemu as qtool
+    from .upload import chunked_upload
+
+    serial_log = args.serial_log
+    if args.start:
+        res = await qtool.qemu_start(fleet, target)
+        serial_log = res.serial_log
+        print(f"[qemu-run] started pid={res.pid} serial_log={serial_log}")
+        # Wait for MCPd to come up before deploying.
+        up = False
+        for _ in range(80):
+            st = await qtool.qemu_status(fleet, target)
+            if st.mcpd_reachable:
+                up = True
+                break
+            await asyncio.sleep(3)
+        if not up:
+            print("[qemu-run] MCPd never came up", file=sys.stderr)
+            if args.stop:
+                await qtool.qemu_stop(fleet, target)
+            await fleet.close_all()
+            return 1
+
+    remote = args.remote or ("SYS:Test/" + Path(args.exe).name)
+    print(f"[qemu-run] upload {args.exe} -> {remote}")
+    await chunked_upload(fleet, target, args.exe, remote,
+                         chunk_size=10 * 1024 * 1024, compression="auto")
+    await etool.exec_cmd(fleet, target, "Protect", args=[remote, "+e"])
+
+    run_args = [remote] + (args.args.split() if args.args else [])
+    print(f"[qemu-run] run {' '.join(run_args)}")
+    try:
+        await etool.exec_cmd(fleet, target, "run", args=run_args, timeout_s=15)
+    except Exception as e:
+        # A detached `run` can surface a benign foreground-I/O quirk; tolerate it.
+        print(f"[qemu-run] launch returned: {e}")
+
+    rc = 0
+    if args.wait:
+        if not serial_log:
+            print("[qemu-run] --wait needs a serial log (use --start or "
+                  "--serial-log)", file=sys.stderr)
+            rc = 1
+        else:
+            print(f"[qemu-run] waiting for /{args.wait}/ in serial "
+                  f"(timeout {args.timeout}s)")
+            text = await _wait_serial(serial_log, args.wait, args.timeout)
+            if text is None:
+                print("[qemu-run] TIMEOUT: marker not seen", file=sys.stderr)
+                rc = 1
+            else:
+                print("[qemu-run] marker seen")
+
+    if args.stop:
+        r = await qtool.qemu_stop(fleet, target)
+        print(f"[qemu-run] stopped method={r.method}")
+    await fleet.close_all()
+    return rc
+
+
 # ---------- argparse glue ------------------------------------------
 
 
@@ -284,6 +415,37 @@ def _build_parser() -> argparse.ArgumentParser:
     e.add_argument("--timeout-ms", type=int, default=1000,
                    dest="timeout_ms")
     e.set_defaults(func=cmd_events_soak)
+
+    qs = sub.add_parser("qemu_start", help="start QEMU for a target")
+    qs.add_argument("--target", help="target name")
+    qs.set_defaults(func=cmd_qemu_start)
+
+    qt = sub.add_parser("qemu_stop", help="stop QEMU for a target")
+    qt.add_argument("--target", help="target name")
+    qt.set_defaults(func=cmd_qemu_stop)
+
+    qst = sub.add_parser("qemu_status", help="QEMU/MCPd reachability for a target")
+    qst.add_argument("--target", help="target name")
+    qst.set_defaults(func=cmd_qemu_status)
+
+    qr = sub.add_parser(
+        "qemu_run",
+        help="headless deploy + run an exe, optionally wait for a serial marker "
+             "(a bounded on-target smoke)")
+    qr.add_argument("--target", help="target name")
+    qr.add_argument("--exe", required=True, help="local executable to deploy")
+    qr.add_argument("--remote", help="guest path (default SYS:Test/<basename>)")
+    qr.add_argument("--args", help="arguments passed to the exe (one string)")
+    qr.add_argument("--wait", help="regex to wait for in the -serial log")
+    qr.add_argument("--timeout", type=float, default=240.0,
+                    help="seconds to wait for --wait (default 240)")
+    qr.add_argument("--serial-log", dest="serial_log",
+                    help="serial log path (when not using --start)")
+    qr.add_argument("--start", action="store_true",
+                    help="start QEMU first (captures the serial log)")
+    qr.add_argument("--stop", action="store_true",
+                    help="stop QEMU when done")
+    qr.set_defaults(func=cmd_qemu_run)
 
     return p
 

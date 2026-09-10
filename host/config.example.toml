@@ -34,10 +34,14 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  of derfsss/AmigaQemuTests.
 # qemu_binary      Required by `qemu.start`. Absolute path to
 #                  qemu-system-ppc (qemu-system-ppc.exe on Windows).
+# sandboxvm        Used by `sandbox.deploy` to resolve the upload source
+#                  when no explicit `source` arg is given. Absolute path
+#                  to a built `bin/sandboxvm` (PPC AOS4 binary).
 #
 # qemu_runner      = "<absolute path to qemu-runner checkout>"
 # amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
 # qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
+# sandboxvm        = "<absolute path to SandboxVM/VM-OS4/bin/sandboxvm>"
 
 [defaults]
 # Per-tool parameter defaults. When a tool is invoked without a
@@ -49,8 +53,6 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  (the AmigaDOS volume to install into).
 #   sources_dir    Default for installer.scan_sources / preflight /
 #                  stage / install_x5000 / run.
-#   bootstrap_dir  Default for installer.stage's diskimage-bootstrap/
-#                  directory.
 #   machine        Default for installer.required_files / preflight /
 #                  stage / run / verify (e.g. "X5000", "A1222").
 #   iso_filename   Default ISO filename inside sources_dir; rarely
@@ -58,7 +60,6 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #
 # dest_volume   = "BootTest:"
 # sources_dir   = "<absolute path to your AmigaOS source tree>"
-# bootstrap_dir = "<absolute path to a diskimage-bootstrap directory>"
 # machine       = "X5000"
 
 # ---- Example: QEMU Pegasos2 target -------------------------------
@@ -102,3 +103,37 @@ tags           = ["real-hw", "x5000"]
   # enabled = true
   # port    = "COM5"             # or /dev/ttyUSB1 on Linux/macOS
   # baud    = 38400
+
+  # Optional: SandboxVM overrides for this target. The `sandbox.*`
+  # namespace runs guest ELFs inside SandboxVM (an in-process
+  # sandbox host that survives guest crashes). When omitted,
+  # `sandbox.probe` searches SYS:Tools/sandboxvm,
+  # SYS:Utilities/sandboxvm, then C:sandboxvm; default extmem
+  # window is 1024 MB and default vmem window is 256 MB.
+  # [targets.x5000-real.sandbox]
+  # path              = "Tools:sandboxvm"
+  # default_extmem_mb = 1024
+  # default_window_mb = 256
+  # deny_libs         = ["intuition.library"]   # always denied
+
+  # Optional: keyboard / mouse injection (the `input.*` namespace).
+  #
+  # DISABLED BY DEFAULT, and this block alone is NOT enough. There
+  # are two gates and both must be open:
+  #
+  #   1. This block (a wrong-target guard, host-side).
+  #   2. MCPd on the target, started with --enable-input or with
+  #      SYS:System/MCPd/ENABLE-INPUT present. Run MCPd-Enable-Input
+  #      on the Amiga and restart MCPd. THIS is the real control --
+  #      anything that can reach TCP 4322 bypasses the host entirely.
+  #
+  # Once both are open, any client that can reach the daemon can
+  # type and click on this machine as the logged-in user. Do not
+  # enable it on a target reachable from an untrusted network.
+  # See SECURITY.md.
+  # [targets.x5000-real.input]
+  # enabled          = true
+  # max_text_len     = 512   # chars per input.type
+  # max_events       = 256   # events per call
+  # default_delay_ms = 15    # inter-event pacing
+  # allow_drag       = true  # false disables input.drag only

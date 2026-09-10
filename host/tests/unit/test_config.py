@@ -68,3 +68,46 @@ def test_default_config_path_env(monkeypatch: pytest.MonkeyPatch,
     p = tmp_path / "alt.toml"
     monkeypatch.setenv("AMIGA_FLEET_CONFIG", str(p))
     assert default_config_path() == p
+
+
+def test_input_block_round_trips_from_toml(tmp_path: Path) -> None:
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[targets.x5000]\n'
+        'type = "remote"\n'
+        '[targets.x5000.input]\n'
+        'enabled = true\n'
+        'max_text_len = 128\n'
+        'allow_drag = false\n',
+        encoding="utf-8",
+    )
+    t = load_config(p).targets["x5000"]
+    assert t.input is not None
+    assert t.input.enabled is True
+    assert t.input.max_text_len == 128
+    assert t.input.allow_drag is False
+
+
+def test_input_absent_by_default(tmp_path: Path) -> None:
+    """No [input] block means input injection is off -- pin it, so a
+    refactor cannot make it opt-out."""
+    p = tmp_path / "c.toml"
+    p.write_text('[targets.x5000]\ntype = "remote"\n', encoding="utf-8")
+    assert load_config(p).targets["x5000"].input is None
+
+
+def test_input_unknown_keys_ignored(tmp_path: Path) -> None:
+    """extra="ignore" means a typo silently vanishes -- documented
+    behaviour, pinned here so it is at least a known trap."""
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[targets.x5000]\n'
+        'type = "remote"\n'
+        '[targets.x5000.input]\n'
+        'enabled = true\n'
+        'enabledd = true\n',
+        encoding="utf-8",
+    )
+    t = load_config(p).targets["x5000"]
+    assert t.input is not None
+    assert t.input.enabled is True

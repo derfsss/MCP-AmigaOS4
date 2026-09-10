@@ -28,9 +28,11 @@ from .tools import exec as exec_tool
 from .tools import fleet as fleet_tool
 from .tools import fleet_discover as discover_tool
 from .tools import fs as fs_tool
+from .tools import input as input_tool
 from .tools import installer as installer_tool
 from .tools import power as power_tool
 from .tools import qemu as qemu_tool
+from .tools import sandbox as sandbox_tool
 from .tools import serial as serial_tool
 from .tools import snapshots as snap_tool
 from .tools import sys as sys_tool
@@ -363,6 +365,28 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         """ExecBase->LastAlert (most recent system alert code, plus
         the four-word raw payload)."""
         return await sys_tool.sys_lastalert(fleet, fleet.resolve_target(target))
+
+    @mcp.tool(name="sys_debug_ring", title="sys.debug_ring")
+    @archived("sys.debug_ring", archive)
+    async def sys_debug_ring(
+        *, target: str | None = None,
+        since_s: float = 60.0,
+        max_lines: int = 500,
+    ) -> sys_tool.DebugRingResult:
+        """Read the kernel debug ring via `c:DumpDebugBuffer`.
+
+        Returns the most recent `max_lines` lines (oldest-first)
+        plus the raw byte size of the full capture and an
+        ISO-8601 host timestamp. Useful for post-install forensics,
+        hardware bring-up, and as the primitive that
+        `sandbox.last_trap` filters against. `since_s` is reserved
+        for a future timestamp-aware trim — accepted but not yet
+        used (DumpDebugBuffer lines have no per-line timestamps to
+        filter against)."""
+        return await sys_tool.sys_debug_ring(
+            fleet, fleet.resolve_target(target),
+            since_s=since_s, max_lines=max_lines,
+        )
 
     @mcp.tool(name="sys_uptime", title="sys.uptime")
     @archived("sys.uptime", archive)
@@ -743,6 +767,176 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def wb_frontmost(*, target: str | None = None) -> wb_tool.FrontmostResult:
         """Frontmost screen + active screen + active window."""
         return await wb_tool.wb_frontmost(fleet, fleet.resolve_target(target))
+
+    @mcp.tool(name="wb_screenshot", title="wb.screenshot")
+    @archived("wb.screenshot", archive)
+    async def wb_screenshot(
+        *,
+        target: str | None = None,
+        screen_index: int = 0,
+        save_path: str | None = None,
+        keep_remote: bool = False,
+        inline: bool = True,
+    ) -> wb_tool.ScreenshotResult:
+        """Capture a screen to a PNG on the Amiga and download it.
+
+        Works on real X5000 / A1222 hardware as well as QEMU (unlike
+        qemu.screenshot, which is QMP-only). `screen_index` 0 = frontmost.
+        `save_path` keeps the PNG at a host path; otherwise a tempfile is
+        used. `inline=False` omits the base64 PNG from the result.
+        """
+        return await wb_tool.wb_screenshot(
+            fleet,
+            fleet.resolve_target(target),
+            screen_index=screen_index,
+            save_path=save_path,
+            keep_remote=keep_remote,
+            inline=inline,
+        )
+
+    # ---------- input.* : keyboard / mouse injection -------------------
+    #
+    # DISABLED BY DEFAULT behind two gates. The daemon one is the real
+    # control (MCPd --enable-input or SYS:System/MCPd/ENABLE-INPUT);
+    # the host one ([targets.<n>.input] enabled) is a wrong-target
+    # guard. See tools/input.py and SECURITY.md.
+
+    @mcp.tool(name="input_state", title="input.state")
+    @archived("input.state", archive)
+    async def input_state(*, target: str | None = None) -> input_tool.InputState:
+        """Pointer position, focused window, and screen geometry.
+        Requires input injection to be enabled on both the target's host
+        config and the daemon. Call this BEFORE input.click so you know
+        what you are about to click on."""
+        return await input_tool.input_state(fleet, fleet.resolve_target(target))
+
+    @mcp.tool(name="input_type", title="input.type")
+    @archived("input.type", archive)
+    async def input_type(
+        *,
+        text: str,
+        keymap: str = "system",
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.TypeResult:
+        """Type a string as keystrokes. Requires input injection enabled
+        on both host config and daemon, plus confirm=True. Layout-correct
+        by default (mapped through the target's keymap.library); pass
+        keymap="us" to force the built-in US table. The text is recorded
+        in cleartext in the run archive; do not type credentials through
+        this tool."""
+        return await input_tool.input_type(
+            fleet, fleet.resolve_target(target),
+            text=text, keymap=keymap, delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_key", title="input.key")
+    @archived("input.key", archive)
+    async def input_key(
+        *,
+        keys: list[str] | None = None,
+        chord: str | None = None,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        confirm_reset: bool = False,
+        target: str | None = None,
+    ) -> input_tool.KeyResult:
+        """Press a key or chord, e.g. keys=["lamiga","q"] or
+        chord="lamiga+q". All entries but the last must be modifiers.
+        Requires input injection enabled on both host config and daemon,
+        plus confirm=True. ctrl+lamiga+ramiga REBOOTS the machine and
+        also needs confirm_reset=True."""
+        return await input_tool.input_key(
+            fleet, fleet.resolve_target(target),
+            keys=keys, chord=chord, delay_ms=delay_ms,
+            confirm=confirm, confirm_reset=confirm_reset,
+        )
+
+    @mcp.tool(name="input_mouse_move", title="input.mouse_move")
+    @archived("input.mouse_move", archive)
+    async def input_mouse_move(
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        dx: int | None = None,
+        dy: int | None = None,
+        absolute_mode: str = "delta",
+        steps: int = 1,
+        delay_ms: int | None = None,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Move the pointer -- x+y absolute, or dx/dy relative. Requires
+        input injection enabled on both host config and daemon. No
+        confirm: motion commits nothing. Absolute targets are clamped to
+        the frontmost screen and the achieved position is returned."""
+        return await input_tool.input_mouse_move(
+            fleet, fleet.resolve_target(target),
+            x=x, y=y, dx=dx, dy=dy, absolute_mode=absolute_mode,
+            steps=steps, delay_ms=delay_ms,
+        )
+
+    @mcp.tool(name="input_click", title="input.click")
+    @archived("input.click", archive)
+    async def input_click(
+        *,
+        button: str = "left",
+        count: int = 1,
+        x: int | None = None,
+        y: int | None = None,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Click at the pointer, or at x/y if given. Requires input
+        injection enabled on both host config and daemon, plus
+        confirm=True -- the click lands on whatever is under the
+        pointer, so call input.state first."""
+        return await input_tool.input_click(
+            fleet, fleet.resolve_target(target),
+            button=button, count=count, x=x, y=y,
+            delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_drag", title="input.drag")
+    @archived("input.drag", archive)
+    async def input_drag(
+        *,
+        from_x: int,
+        from_y: int,
+        to_x: int,
+        to_y: int,
+        button: str = "left",
+        steps: int = 16,
+        delay_ms: int | None = None,
+        confirm: bool = False,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Press at from_x/from_y, move to to_x/to_y, release. Requires
+        input injection enabled on both host config and daemon, plus
+        confirm=True. Can move, resize or drag-to-trash. The daemon
+        always releases the button, even on an aborted call."""
+        return await input_tool.input_drag(
+            fleet, fleet.resolve_target(target),
+            from_x=from_x, from_y=from_y, to_x=to_x, to_y=to_y,
+            button=button, steps=steps, delay_ms=delay_ms, confirm=confirm,
+        )
+
+    @mcp.tool(name="input_scroll", title="input.scroll")
+    @archived("input.scroll", archive)
+    async def input_scroll(
+        *,
+        clicks: int = 1,
+        direction: str = "down",
+        delay_ms: int | None = None,
+        target: str | None = None,
+    ) -> input_tool.MouseResult:
+        """Mouse wheel. Requires input injection enabled on both host
+        config and daemon. No confirm: scrolling commits nothing."""
+        return await input_tool.input_scroll(
+            fleet, fleet.resolve_target(target),
+            clicks=clicks, direction=direction, delay_ms=delay_ms,
+        )
 
     # ---------- phase 5c (partial): GDB-stub debug --------------------
 
@@ -1369,6 +1563,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "lastalert":             sys_tool.sys_lastalert,
             "alert_decode":          sys_tool.sys_alert_decode,
             "cold_reboot":           sys_tool.sys_cold_reboot,
+            "debug_ring":            sys_tool.sys_debug_ring,
             # memory introspection (PA / TLB / CCSR)
             "read_ccsr":             sys_tool.sys_read_ccsr,
             "read_pa":               sys_tool.sys_read_pa,
@@ -1409,13 +1604,38 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def wb_ns(*, method: str, params: dict[str, Any] | None = None) -> Any:
         """wb.* (Workbench) dispatcher. `method` is one of:
 
-          screens, windows, publicscreens, frontmost
+          screens, windows, publicscreens, frontmost, screenshot
         """
         return await _ns({
             "screens":       wb_tool.wb_screens,
             "windows":       wb_tool.wb_windows,
             "publicscreens": wb_tool.wb_publicscreens,
             "frontmost":     wb_tool.wb_frontmost,
+            "screenshot":    wb_tool.wb_screenshot,
+        }, method, params or {})
+
+    @mcp.tool(name="input", title="input.dispatch")
+    @archived("input.dispatch", archive)
+    async def input_ns(*, method: str, params: dict[str, Any] | None = None) -> Any:
+        """input.* (keyboard / mouse injection) dispatcher. `method` is
+        one of:
+
+          state, type, key, mouse_move, click, drag, scroll
+
+        DISABLED BY DEFAULT behind two gates: the target's host config
+        ([targets.<name>.input] enabled = true) and the daemon itself
+        (MCPd --enable-input, or SYS:System/MCPd/ENABLE-INPUT on the
+        target). The daemon gate is the real control. type/key/click/
+        drag additionally require confirm=True.
+        """
+        return await _ns({
+            "state":      input_tool.input_state,
+            "type":       input_tool.input_type,
+            "key":        input_tool.input_key,
+            "mouse_move": input_tool.input_mouse_move,
+            "click":      input_tool.input_click,
+            "drag":       input_tool.input_drag,
+            "scroll":     input_tool.input_scroll,
         }, method, params or {})
 
     @mcp.tool(name="debug", title="debug.dispatch")
@@ -1750,10 +1970,9 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     ) -> Any:
         """Run the AmigaOne X5000 install sequence. Default dry_run=True
         returns the planned step list; pass dry_run=False, confirm=True
-        to actually execute. Caller must stage ISO + LHAs +
-        diskimage-bootstrap/ into <dest>:tmp/ before calling.
-        dest_volume / sources_dir / iso_filename fall back to
-        `[defaults]`."""
+        to actually execute. Caller must stage ISO + LHAs into
+        <dest>:tmp/ before calling. dest_volume / sources_dir /
+        iso_filename fall back to `[defaults]`."""
         dest_volume = _default(dest_volume, "dest_volume", "dest_volume")
         if sources_dir is None:
             sources_dir = fleet.config.defaults.sources_dir
@@ -1805,27 +2024,29 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         machine: str | None = None,
         iso_filename: str | None = None,
         iso_lha_path: str | None = None,
-        bootstrap_dir: str | None = None,
         confirm: bool = False,
     ) -> Any:
-        """Upload ISO + LHAs + diskimage-bootstrap/ into <dest>:tmp/.
-        Mutating; requires confirm=True (multi-GB upload).
+        """Upload ISO + Update LHAs + Enhancer + extras + MCPd +
+        AmiDock prefs into <dest>:tmp/. Mutating; requires confirm=True
+        (multi-GB upload).
 
         Auto-detects iso_filename from sources_dir scan if omitted.
-        bootstrap_dir defaults to a search of standard host paths.
+
+        AOS 4.1 diskimage tools (MountDiskImage / diskimage.device /
+        CDFileSystem) are NOT staged from the host -- they're sourced
+        from the running AmigaOS at install time and from the install
+        ISO into the dest drive via copy_base_os.
 
         If `iso_lha_path` is provided (or `<iso>.lha` exists next to
         the iso in sources_dir), the LHA-of-ISO form is uploaded
         instead of the raw ISO -- saves ~60% bandwidth on incompressible
         ISO data. The install sequence's `extract_iso_lha` step
         recovers the .iso file on the target before mount.
-        dest_volume / sources_dir / machine / bootstrap_dir /
-        iso_filename fall back to `[defaults]`."""
+        dest_volume / sources_dir / machine / iso_filename fall back
+        to `[defaults]`."""
         dest_volume = _default(dest_volume, "dest_volume", "dest_volume")
         sources_dir = _default(sources_dir, "sources_dir", "sources_dir")
         machine = _default(machine, "machine", "machine")
-        if bootstrap_dir is None:
-            bootstrap_dir = fleet.config.defaults.bootstrap_dir
         if iso_filename is None:
             iso_filename = fleet.config.defaults.iso_filename
         return await installer_tool.installer_stage(
@@ -1835,7 +2056,6 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             machine=machine,
             iso_filename=iso_filename,
             iso_lha_path=iso_lha_path,
-            bootstrap_dir=bootstrap_dir,
             confirm=confirm,
         )
 
@@ -2084,6 +2304,232 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "tail":  serial_tool.serial_tail,
             "clear": serial_tool.serial_clear,
         }, method, p)
+
+    # ============================================================
+    # sandbox.* — SandboxVM-driven dev loop on AOS4 targets
+    # ============================================================
+
+    @mcp.tool(name="sandbox_probe", title="sandbox.probe")
+    @archived("sandbox.probe", archive)
+    async def sandbox_probe(
+        *, target: str | None = None,
+    ) -> sandbox_tool.SandboxProbeResult:
+        """Probe a target for SandboxVM availability.
+
+        Returns a structured result describing whether sandboxvm is
+        reachable, runnable, and on a compatible machine. Bypasses
+        the in-process probe cache (always re-checks). Other
+        ``sandbox.*`` tools call into the cached version internally
+        before doing work, so the typical caller never has to invoke
+        ``sandbox.probe`` directly — but it's exposed for diagnosis."""
+        return await sandbox_tool.sandbox_probe(
+            fleet, fleet.resolve_target(target),
+        )
+
+    @mcp.tool(name="sandbox_deploy", title="sandbox.deploy")
+    @archived("sandbox.deploy", archive)
+    async def sandbox_deploy(
+        *, target: str | None = None,
+        source: str | None = None,
+        dest_path: str | None = None,
+        confirm: bool = False,
+    ) -> sandbox_tool.DeployResult:
+        """Upload sandboxvm to a target. Convenience wrapper around
+        ``fs.upload``: resolves source path (`[paths] sandboxvm` or
+        explicit ``source`` arg), resolves dest path
+        (``[targets.<target>.sandbox.path]`` or default
+        ``SYS:Tools/sandboxvm``), runs the upload with SHA-256
+        verification, and invalidates the probe cache so the next
+        ``sandbox.*`` call re-validates against the fresh binary.
+
+        Mutating; requires ``confirm=True``."""
+        return await sandbox_tool.sandbox_deploy(
+            fleet, fleet.resolve_target(target),
+            source=source, dest_path=dest_path, confirm=confirm,
+        )
+
+    @mcp.tool(name="sandbox_run_guest", title="sandbox.run_guest")
+    @archived("sandbox.run_guest", archive)
+    async def sandbox_run_guest(
+        *, target: str | None = None,
+        guest: str,
+        args: list[str] | None = None,
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> sandbox_tool.GuestRunResult:
+        """Run one guest ELF inside SandboxVM and return a structured
+        result.
+
+        Probe-gated: a missing / broken / Pegasos2 target raises a
+        typed error before any work happens. Output goes to
+        ``T:sandboxvm-<name>.{out,err}`` on the target; the wrapper
+        slurps + decodes both files after the run and deletes them.
+
+        ``exit_code`` follows SandboxVM's convention: 0 on a clean
+        guest exit, positive for the guest's own rc, negative for
+        traps (-768 == DSI, -1024 == ISI, ...). When the exit code
+        matches a known trap shape, ``trap_kind`` is populated.
+
+        For arbitrary AmigaDOS commands without the SandboxVM
+        harness, use ``exec.cmd``. For JSON-config-driven multi-step
+        test bundles, use ``tests.run_suite``."""
+        return await sandbox_tool.sandbox_run_guest(
+            fleet, fleet.resolve_target(target),
+            guest=guest, args=args,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
+    @mcp.tool(name="sandbox_run_driver", title="sandbox.run_driver")
+    @archived("sandbox.run_driver", archive)
+    async def sandbox_run_driver(
+        *, target: str | None = None,
+        driver: str,
+        test: str | None = None,
+        args: list[str] | None = None,
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> sandbox_tool.GuestRunResult:
+        """Load a driver via SandboxVM resident-driver mode (`-r`).
+
+        Scans the driver's RTF_AUTOINIT Resident, applies PPC ELF
+        relocations, and calls CLT_InitFunc with the sandboxed
+        IExec. When `test` is set, runs that follow-on guest in the
+        same Guest context after a successful init so
+        OpenLibrary(<driver-name>) resolves through the resident-lib
+        registry.
+
+        Same return shape and lifecycle as `sandbox.run_guest`; the
+        result's `guest` field carries the driver path (the thing
+        being loaded). Probe-gated; lock-serialised; T:capture
+        files slurped + deleted."""
+        return await sandbox_tool.sandbox_run_driver(
+            fleet, fleet.resolve_target(target),
+            driver=driver, test=test, args=args,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
+    @mcp.tool(name="sandbox_last_trap", title="sandbox.last_trap")
+    @archived("sandbox.last_trap", archive)
+    async def sandbox_last_trap(
+        *, target: str | None = None,
+        since_s: float = 60.0,
+        max_lines: int = 500,
+        retry_count: int = 3,
+        retry_delay_s: float = 0.2,
+    ) -> sandbox_tool.LastTrapResult:
+        """Filter the kernel debug ring for SandboxVM trap signatures.
+
+        Wraps `sys.debug_ring` with a small retry loop (default 3
+        attempts, 200 ms apart) so a `last_trap` call immediately after a
+        crashed `run_guest` doesn't race the kernel ring write.
+        Returns the matched trap block plus a structured `trap_kind`
+        / `fingerprint` / `traptype_hex` summary. `found=False` is
+        the legitimate "no trap to report" outcome."""
+        return await sandbox_tool.sandbox_last_trap(
+            fleet, fleet.resolve_target(target),
+            since_s=since_s, max_lines=max_lines,
+            retry_count=retry_count, retry_delay_s=retry_delay_s,
+        )
+
+    @mcp.tool(name="sandbox_run_batch", title="sandbox.run_batch")
+    @archived("sandbox.run_batch", archive)
+    async def sandbox_run_batch(
+        *, target: str | None = None,
+        guests: list[dict[str, Any]],
+        extmem_mb: int | None = None,
+        window_mb: int | None = None,
+        deny_libs: list[str] | None = None,
+        name: str | None = None,
+        timeout_s: float = 600.0,
+    ) -> sandbox_tool.BatchRunResult:
+        """Run up to 16 guests sequentially in a single SandboxVM
+        invocation.
+
+        `guests` is a list of `{guest: <aos-path>, name?: <override>}`
+        objects. Per-guest argv and per-guest deny-lists are NOT
+        supported (SandboxVM constraint); use `sandbox.run_guest`
+        per-binary if you need either. Per-guest exit codes are
+        parsed from the kernel debug ring after the batch completes.
+
+        For JSON-config-driven multi-step bundles without the
+        SandboxVM harness, use `tests.run_suite`."""
+        return await sandbox_tool.sandbox_run_batch(
+            fleet, fleet.resolve_target(target),
+            guests=guests,
+            extmem_mb=extmem_mb, window_mb=window_mb,
+            deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+        )
+
+    @mcp.tool(name="sandbox", title="sandbox.dispatch")
+    @archived("sandbox.dispatch", archive)
+    async def sandbox_ns(
+        *, method: str, params: dict[str, Any] | None = None,
+    ) -> Any:
+        """sandbox.* dispatcher. ``method`` is one of:
+
+          probe(target=None)
+          deploy(target=None, source=None, dest_path=None, confirm=False)
+          run_guest(target=None, guest, args=None, extmem_mb=None,
+                    window_mb=None, deny_libs=None, name=None,
+                    timeout_s=120.0)
+          run_driver(target=None, driver, test=None, args=None,
+                     extmem_mb=None, window_mb=None, deny_libs=None,
+                     name=None, timeout_s=120.0)
+          run_batch(target=None, guests=[{guest, name?}, ...],
+                    extmem_mb=None, window_mb=None, deny_libs=None,
+                    name=None, timeout_s=600.0)
+          last_trap(target=None, since_s=60.0, max_lines=500,
+                    retry_count=3, retry_delay_s=0.2)
+
+        target falls back to ``[server] default_target``. Mutating
+        methods need ``confirm=True``."""
+        p = params or {}
+        if method == "probe":
+            return await sandbox_tool.sandbox_probe(
+                fleet, fleet.resolve_target(p.get("target")),
+            )
+        if method == "deploy":
+            return await sandbox_tool.sandbox_deploy(
+                fleet, fleet.resolve_target(p.get("target")),
+                source=p.get("source"),
+                dest_path=p.get("dest_path"),
+                confirm=p.get("confirm", False),
+            )
+        if method == "run_guest":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_guest(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        if method == "run_driver":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_driver(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        if method == "run_batch":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_run_batch(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        if method == "last_trap":
+            kwargs = {k: v for k, v in p.items() if k != "target"}
+            return await sandbox_tool.sandbox_last_trap(
+                fleet, fleet.resolve_target(p.get("target")), **kwargs,
+            )
+        raise MethodNotFound(
+            f"unknown method: {method!r}",
+            data={"namespace_methods": [
+                "probe", "deploy", "run_guest",
+                "run_driver", "run_batch", "last_trap",
+            ]},
+        )
 
 
 def _build_runtime(config: Config) -> tuple[Fleet, Archive]:

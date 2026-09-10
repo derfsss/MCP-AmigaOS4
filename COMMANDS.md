@@ -33,6 +33,7 @@ auto-start watchdog.
 | `--port N` | Listen on TCP port `N` instead of the default 4322. |
 | `--version` | Print the daemon version and exit. |
 | `--help`, `-h` | Print usage and exit. |
+| `--enable-input` | Allow the `input.*` methods (keyboard / mouse injection). **Off by default.** Does *not* survive a restart — the watchdog relaunches without arguments — so for a persistent setting create `SYS:System/MCPd/ENABLE-INPUT` instead (`MCPd-Enable-Input`). See [SECURITY.md](SECURITY.md). |
 
 ## RPC methods (daemon side)
 
@@ -82,6 +83,7 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.read_pa` | DANGEROUS supervisor-mode read at any 36-bit physical address. No range checking; misuse can crash the connection-handling task (the daemon listener stays up by design). |
 | `sys.tlb_dump` | Dump all 64 TLB1 entries from a P5020 / P1022 target via `tlbre` / MAS registers. |
 | `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1). Documented commands `t` / `v` / `f` / `s` plus build-info `b`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
+| `sys.debug_ring` | Read the kernel debug ring via `c:DumpDebugBuffer`. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 
 ### `fs.*`
 
@@ -123,6 +125,40 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `wb.windows` | List windows across all screens. |
 | `wb.publicscreens` | Public-screens registry via `LockPubScreenList`. |
 | `wb.frontmost` | Frontmost screen, active screen, and active window. |
+| `wb.screenshot` | Capture a screen (frontmost or by `screen_index`) to a PNG on the target via `graphics.library` ReadPixelArray + `z.library` encode; the host tool downloads it. Works on real hardware **and** QEMU (unlike `qemu.screenshot`, which is QMP-only). |
+
+### `input.*` (keyboard / mouse injection)
+
+> ⚠️ **Disabled by default.** Every method here returns `-32003`
+> unless `MCPd` was started with `--enable-input` *or* the sentinel
+> file `SYS:System/MCPd/ENABLE-INPUT` exists (run `MCPd-Enable-Input`
+> on the target, then restart the daemon). The gate is read once at
+> startup, so no RPC can turn it on. Enabling it lets any client that
+> can reach port 4322 type and click on the machine as the logged-in
+> user. Read [SECURITY.md](SECURITY.md) first.
+>
+> The host side has a second, independent gate:
+> `[targets.<name>.input] enabled = true`. Both must be open.
+
+| Method | Confirm | Description |
+|---|---|---|
+| `input.state` | — | Pointer position, frontmost/active screen, active window + geometry. **Call this before `input.click`** so you know what you are about to click on. |
+| `input.type` | ✅ | Type a string as keystrokes. `text` (≤512 chars), `keymap` (`system` default / `us`), `delay_ms`. Layout-correct: characters are mapped through the target's `keymap.library` (`MapANSI`), including dead-key sequences. Unmappable characters are returned in `unmapped[]`, never silently dropped. |
+| `input.key` | ✅ | Press a key or chord: `keys: ["lamiga","q"]`. All but the last entry must be modifiers. `ctrl+lamiga+ramiga` **reboots the machine** and additionally requires `confirm_reset: true`. |
+| `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
+| `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). |
+| `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
+| `input.scroll` | — | Mouse wheel via NewMouse codes. `clicks` (1–32), `direction`. |
+
+Per-call caps enforced by the daemon: 256 events, 20 s wall clock,
+512 characters of text, 64 drag steps, `delay_ms` 0–1000. A call that
+hits a cap stops cleanly and returns `truncated: true`.
+
+Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
+`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f10`; `esc`
+`return` `tab` `backspace` `del` `help` `space` `up` `down` `left`
+`right`; `kp0`–`kp9` `kpdot` `kpenter` `kpminus` `kpplus` `kpmul`
+`kpdiv`. A single printable character (`"q"`) also works.
 
 ### `debug.*`
 
@@ -165,6 +201,7 @@ prints the live list.
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` |
+| `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
 | `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub) |
 | `events_wait` | `events.wait` (long-poll only). The other three `events.*` methods are exposed only as daemon RPC; clients invoke them via the transport directly. |
 | `app_notify` | `app.notify` |
@@ -217,9 +254,9 @@ The captured QEMU serial output is exposed as the read-only resource
 End-to-end AmigaOS 4.1 FE install pipeline.
 
 The frequently-repeated parameters (`dest_volume`, `sources_dir`,
-`bootstrap_dir`, `machine`, `iso_filename`) can be defaulted in
-`config.toml` under `[defaults]` so a typical session does not have
-to repeat them on every call — see [USAGE.md § Per-tool
+`machine`, `iso_filename`) can be defaulted in `config.toml`
+under `[defaults]` so a typical session does not have to repeat
+them on every call — see [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults).
 
 | Tool | Description |
@@ -228,7 +265,7 @@ defaults](USAGE.md#per-tool-defaults).
 | `installer_required_files` | For a given machine, the file manifest the installer expects under `sources_dir`. Honours `[defaults] machine`. |
 | `installer_scan_sources` | Walk a host-side directory and report which install files are present, ambiguous, or unsupported. Honours `[defaults] sources_dir`. |
 | `installer_preflight` | Composite pre-install safety check: `sources_dir` validity, machine resolution, dest-volume mount + cleanliness, mandatory-binaries availability. Read-only. Honours `[defaults] dest_volume / sources_dir / machine`. |
-| `installer_stage` | Upload ISO + LHAs + `diskimage-bootstrap/` into `<dest>:tmp/`. Multi-GB upload; requires `confirm: true`. Honours `[defaults] dest_volume / sources_dir / bootstrap_dir / machine / iso_filename`. |
+| `installer_stage` | Upload ISO + Update LHAs + Enhancer + extras + MCPd + bundled AmiDock prefs into `<dest>:tmp/`. Multi-GB upload; requires `confirm: true`. The AOS 4.1 diskimage tools are sourced from the running AmigaOS / install ISO, not staged from the host. Honours `[defaults] dest_volume / sources_dir / machine / iso_filename`. |
 | `installer_mount_iso` | Mount an ISO via `diskimage.device` + `MountDiskImage`. Reversible via `installer_unmount_iso`. |
 | `installer_unmount_iso` | Eject an ISO from a `diskimage.device` unit. Idempotent. |
 | `installer_copy_tree` | Recursive AmigaDOS `Copy ALL CLONE QUIET` between paths on a target. |
@@ -278,6 +315,38 @@ serial port + 38400 baud. Honours `[server] default_target`.
 | `power_off` | **yes** | Shut down all supplies (`s`). |
 | `power_shell` | **yes** | Generic shell-command passthrough (escape hatch). |
 
+### Sandbox harness (`sandbox.*`)
+
+Driver- and program-iteration loop on top of
+[SandboxVM](https://github.com/derfsss/SandboxVM) — a PPC AOS4 binary
+that runs guest ELFs inside a sandboxed `IExec` clone with a
+`tc_TrapCode` trampoline that catches DSI / ISI / illegal /
+alignment / privilege traps so the host process survives. Lets an
+agent edit-compile-deploy-run a binary without power-cycling on
+every crash.
+
+Every `sandbox.*` call probes the target up front. The probe
+fails fast with a typed code (`SANDBOXVM_MISSING`,
+`SANDBOXVM_BROKEN`, `SANDBOXVM_INCOMPATIBLE_TARGET`) so a
+misconfigured target raises an obvious error rather than
+half-running.
+
+Pegasos II is refused at probe time — SandboxVM requires ExtMem
+(X5000 / X1000 / A1222 / QEMU AmigaOne).
+
+| Tool | Confirm | Description |
+|---|---|---|
+| `sandbox_probe` | — | Path resolution + executability + machine compatibility. Returns a structured `SandboxProbeResult`. Bypasses the in-process probe cache (60 s TTL). |
+| `sandbox_deploy` | **yes** | Upload sandboxvm to the target. Convenience wrapper around `fs.upload`: source from `[paths] sandboxvm` (or explicit `source` arg), dest from `[targets.<name>.sandbox.path]` (defaults to `SYS:Tools/sandboxvm`). Verifies via SHA-256 and re-probes the just-uploaded path so the cache can't be shadowed by a legacy default-path binary. |
+| `sandbox_run_guest` | — | Run one guest ELF. Probe-gated, lock-serialised, `T:capture` files slurped + classified. Returns `exit_code` (signed: 0 clean, positive guest rc, negative trap), `trap_kind` (`DSI`/`ISI`/`alignment`/`program`/`fp_unavailable` when matched), `trap_fingerprint` (`kmod_libcall_null4` for the documented `HD_SCSICMD via DoIO` limitation), `stdout` / `stderr` / `capture_paths`. |
+| `sandbox_run_driver` | — | Load a driver via SandboxVM resident-driver mode (`-r`). Scans the driver's `RTF_AUTOINIT` Resident, applies PPC ELF relocations, and calls `CLT_InitFunc` with the sandboxed `IExec`. With `test=` set, runs the test ELF as a follow-on guest in the same Guest context so `OpenLibrary(<driver-name>)` resolves through the resident-lib registry. Same return shape as `run_guest`. |
+| `sandbox_run_batch` | — | Run up to 16 guests sequentially in a single SandboxVM invocation. Returns a `BatchRunResult` with per-entry classification + the aggregate (last non-zero rc, mirrors SandboxVM's own convention). Per-guest argv and per-guest deny-lists are NOT supported (SandboxVM constraint); use `sandbox.run_guest` per-binary if you need either. |
+| `sandbox_last_trap` | — | Filter the kernel debug ring for SandboxVM trap signatures. Wraps `sys.debug_ring` with a 3-attempt × 200 ms retry loop so a `last_trap` call immediately after a crashed `run_guest` doesn't race the kernel ring write. Returns the matched trap block plus structured `trap_kind` / `fingerprint` / `traptype_hex`. `found=False` is the legitimate "no trap to report" outcome. |
+
+For arbitrary AmigaDOS commands without the SandboxVM harness, use
+`exec.cmd`. For JSON-config-driven multi-step test bundles without
+SandboxVM, use `tests.run_suite`.
+
 ### Namespace dispatchers
 
 Each major namespace also has a single dispatcher tool that takes a
@@ -290,6 +359,7 @@ to script an operation by method name rather than by tool name.
 | `fs` | `fs.*` |
 | `sys` | `sys.*` |
 | `wb` | `wb.*` |
+| `input` | `input.*` (disabled by default) |
 | `debug` | `debug.*` |
 | `qemu` | `qemu.*` |
 | `fleet` | `fleet.*` |
@@ -299,6 +369,7 @@ to script an operation by method name rather than by tool name.
 | `installer` | `installer.*` |
 | `serial` | `serial.*` |
 | `power` | `power.*` |
+| `sandbox` | `sandbox.*` |
 
 ## MCP resources
 
@@ -331,6 +402,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 |---|---|
 | `validate.py --endpoint host:port [--rounds 1,2,3,4,5]` | Parametric runner for the validation suites against any endpoint. |
 | `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Comprehensive capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, stress, and the host MCP protocol layer. |
+| `validate_input.py --target <name> [--shared-dir DIR] [--no-restart-cycles]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. Kills/relaunches QEMU for the restarts; use `--no-restart-cycles` on real hardware. |
 | `validate_durability.py --endpoint host:port [--skip-long]` | Out-of-the-box durability sweep: raw-socket frame fuzzing, JSON-RPC envelope abuse, error-code coverage, connection lifecycle, long-running stability, filesystem corner cases, exec.cmd corners, subscription state transitions, concurrency, numeric boundaries, cross-method workflows, MCP resources, fleet host tools, CLI flags. |
 | `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, hardcoded for the canonical test endpoint. |
 | `qemu_install_test.py` | End-to-end: launch QEMU, bootstrap, install, kill+relaunch, verify auto-start, run all rounds. |
@@ -343,7 +415,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 | Script | Description |
 |---|---|
 | `run_installer_x5000.py` | Drive an end-to-end X5000 install via `installer_run` (defaults to dry-run). |
-| `run_installer_stage.py` | Drive `installer_stage` to upload an ISO + LHAs + `diskimage-bootstrap/` to a target. |
+| `run_installer_stage.py` | Drive `installer_stage` to upload the ISO + Update LHAs + Enhancer + extras + MCPd to a target. |
 | `deploy_mcpd_x5000.py` | One-shot deploy of a freshly built MCPd to a running X5000 (auto-start install + watchdog). |
 
 ### Diagnostics and probes
@@ -366,8 +438,10 @@ Located in `mcpd/install/`. Run from a Shell on the target with
 
 | Script | Description |
 |---|---|
-| `MCPd-Install` | Install MCPd to `SYS:System/MCPd/MCPd`, set protection bits, back up `S:Network-Startup`, idempotently append the launch line. |
-| `MCPd-Uninstall` | Restore `S:Network-Startup` from backup; remove `SYS:System/MCPd/`. |
+| `MCPd-Install` | Install MCPd to `SYS:System/MCPd/MCPd`, set protection bits, back up `S:Network-Startup`, idempotently append the launch line. Also copies the two input scripts below — copied, never run. |
+| `MCPd-Enable-Input` | Create `SYS:System/MCPd/ENABLE-INPUT`, the persistent gate for the `input.*` namespace. Prints a warning first; needs an MCPd restart to take effect. Also installed by `installer.stage` + the `install_mcpd` step, and by `scripts/install_mcpd_autostart.py`. |
+| `MCPd-Disable-Input` | Remove the sentinel again. Needs an MCPd restart; does not undo a `--enable-input` flag on a running daemon's command line. |
+| `MCPd-Uninstall` | Restore `S:Network-Startup` from backup; remove `SYS:System/MCPd/` (sentinel and both input scripts included). |
 | `MCPd-Watchdog` | Relaunch wrapper: runs MCPd in a loop with a five-second back-off between exits. Writes `T:MCPd-Watchdog.log`. |
 
 ## Build commands

@@ -13,6 +13,10 @@
 #define MCPD_DATE "00.00.0000"
 #endif
 
+#ifndef MCPD_TIME
+#define MCPD_TIME "00:00:00"
+#endif
+
 #ifndef MCPD_SDK_VERSION
 #define MCPD_SDK_VERSION "AmigaOS 4 SDK (unknown revision)"
 #endif
@@ -36,6 +40,9 @@ static int _add_unique_feature(cJSON *features, const char *name) {
 /* In sys.c. AttnFlags + GetCPUInfo + xena/fsldma resource probes. */
 extern const char *sys_detect_board(void);
 
+/* In input.c. The input-injection gate, resolved once at startup. */
+extern int input_is_enabled(void);
+
 
 int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     (void)params; (void)out_err;
@@ -48,6 +55,7 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     /* Build info. */
     cJSON *build = cJSON_AddObjectToObject(r, "build");
     cJSON_AddStringToObject(build, "date", MCPD_DATE);
+    cJSON_AddStringToObject(build, "time", MCPD_TIME);
     cJSON_AddStringToObject(build, "compiler", "ppc-amigaos-gcc");
     cJSON_AddStringToObject(build, "sdk", MCPD_SDK_VERSION);
 
@@ -89,6 +97,18 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddNumberToObject(limits, "max_concurrent_clients", 1);
     cJSON_AddNumberToObject(limits, "max_in_flight_per_client", 1);
 
+    /* Input-injection gate state.
+     *
+     * Note the input.* methods stay listed in methods[] / method_names
+     * above even when the gate is off. Hiding them would be
+     * indistinguishable from talking to an older daemon that lacks the
+     * feature entirely, which would send clients chasing a phantom
+     * upgrade. Advertising them plus an explicit enabled:false lets a
+     * client say "this daemon supports input but it is switched off"
+     * and point the operator at the remedy. */
+    cJSON *input = cJSON_AddObjectToObject(r, "input");
+    cJSON_AddBoolToObject(input, "enabled", input_is_enabled() ? 1 : 0);
+
     /* Best-effort board detection. */
     cJSON *board = cJSON_AddObjectToObject(r, "board");
     cJSON_AddStringToObject(board, "detected", sys_detect_board());
@@ -106,6 +126,7 @@ int proto_version(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddStringToObject(r, "server", MCPD_SERVER_VERSION);
     cJSON_AddStringToObject(r, "protocol", MCPD_PROTOCOL_VERSION);
     cJSON_AddStringToObject(r, "build_date", MCPD_DATE);
+    cJSON_AddStringToObject(r, "build_time", MCPD_TIME);
     cJSON_AddStringToObject(r, "sdk", MCPD_SDK_VERSION);
     *out_result = r;
     return 0;

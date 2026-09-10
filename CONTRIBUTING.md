@@ -62,11 +62,21 @@ The full build / install procedure for both pieces lives in
    `@mcp.tool` decorator and add it to the matching namespace
    dispatcher.
 3. If it talks to the daemon, also register the JSON-RPC method in
-   `mcpd/src/rpc.c` and implement the handler under
-   `mcpd/src/methods/`.
-4. Add unit tests under `host/tests/unit/` using a fake transport.
-5. Document it in [COMMANDS.md](COMMANDS.md) and (if it's a major
-   addition) [USAGE.md](USAGE.md).
+   `mcpd/src/rpc.c`, add the handler prototype to
+   `mcpd/src/methods/methods.h`, and implement it under
+   `mcpd/src/methods/`. **A new `.c` file must also be added to
+   `SRCS` in `mcpd/Makefile`** — forgetting that is a link error, not
+   a compile error, and the symptom looks nothing like the cause.
+4. If the tool has a daemon-side capability gate, report its state in
+   `proto.capabilities` (`mcpd/src/methods/proto.c`) too — and keep
+   the method advertised when the gate is closed, so clients can tell
+   "switched off" apart from "old daemon".
+5. Add unit tests under `host/tests/unit/` using a fake transport. For
+   a gated or `confirm`-guarded tool, assert both that the error is
+   raised *and* that nothing reached the wire (`fake.calls == []`).
+6. Document it in [COMMANDS.md](COMMANDS.md) and (if it's a major
+   addition) [USAGE.md](USAGE.md). Anything that widens the remote
+   attack surface also needs a [SECURITY.md](SECURITY.md) note.
 
 ## Adding a new target machine
 
