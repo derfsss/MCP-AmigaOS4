@@ -312,9 +312,11 @@ static const named_key g_named_keys[] = {
     { "left",      0x4F, 0 },
 
     /* function keys. F1..F10 are the classic Amiga block and are
-     * solid. F11/F12 are a PC-keyboard extension; the codes below are
-     * the commonly-used AOS4 values but are NOT verified on hardware
-     * here -- see the FLAGGED list in the file header. */
+     * solid. F11/F12 are DELIBERATELY ABSENT: they are a PC-keyboard
+     * extension whose AOS4 rawkey codes were never verified on
+     * hardware for this table, and an unknown key name fails cleanly
+     * with "unknown key name" while a wrong code would silently press
+     * some other key. Add them only with a hardware check behind it. */
     { "f1",  0x50, 0 }, { "f2",  0x51, 0 }, { "f3",  0x52, 0 },
     { "f4",  0x53, 0 }, { "f5",  0x54, 0 }, { "f6",  0x55, 0 },
     { "f7",  0x56, 0 }, { "f8",  0x57, 0 }, { "f9",  0x58, 0 },
@@ -337,24 +339,20 @@ static const named_key g_named_keys[] = {
 /* ASCII -> (rawkey, needs-shift) for the US layout.
  *
  * ------------------------------------------------------------------
- * LIMITATION: this is a US keymap, hardcoded. On a machine configured
- * for a different layout (German, French, Swedish, ...) the CHARACTERS
- * produced by input.type will be wrong -- a German keymap will turn
- * 'y' into 'z', and the symbol keys land in entirely different places.
+ * THIS IS THE FALLBACK PATH, NOT THE DEFAULT.
  *
- * The correct fix is keymap.library's MapANSI() against the system
- * default keymap, which is layout-aware. That is deliberately NOT
- * implemented here: the exact MapANSI buffer layout (bytes per
- * character, and whether the second byte is a qualifier or a qualifier
- * index) must be read out of SDK:Documentation/Autodocs/keymap.doc on
- * a real target first, and shipping a speculative, never-executed
- * implementation as the default typing path would be worse than
- * shipping a known-limited one.
+ * input.type maps characters through keymap.library's MapANSI()
+ * against the system's configured keymap, which is layout-aware --
+ * see input_type() below. This table is used only when
+ * keymap.library cannot be opened, or when the caller explicitly
+ * passes keymap="us".
  *
- * Until then: input.type is US-layout only, and input.key with
- * explicit named keys is the layout-independent escape hatch.
- * See the `keymap` parameter, which rejects "system" explicitly rather
- * than silently doing the wrong thing.
+ * Being a US matrix, it produces the WRONG CHARACTERS on a machine
+ * configured for another layout: a German keymap turns 'y' into 'z'
+ * and moves every symbol key. The result's `keymap` field reports
+ * which of the two paths actually ran, so a caller that cares can
+ * check rather than assume. input.key with explicit named keys is
+ * the layout-independent escape hatch in either case.
  * ------------------------------------------------------------------
  */
 typedef struct { uint8_t code; uint8_t shift; } ascii_key;
@@ -387,6 +385,63 @@ static const ascii_key g_us_ascii[96] = {
     /* xyz{ */ {0x32,0}, {0x15,0}, {0x31,0}, {0x1A,1},
     /* |}~  */ {0x0D,1}, {0x1B,1}, {0x00,1}, {NOKEY,0},
 };
+
+/* ---- UTF-8 -> codepoint ------------------------------------------- *
+ *
+ * The wire is UTF-8. The host sends
+ * `json.dumps(env, ensure_ascii=False).encode("utf-8")`
+ * (transports/mcpd.py), and cJSON decodes any \uXXXX escape into UTF-8
+ * too, so a non-ASCII character reaches us as TWO OR MORE BYTES.
+ *
+ * MapANSI, by contrast, wants ONE ANSI (ISO-8859-1) byte per
+ * character. Walking the string byte-by-byte therefore typed 0xC3
+ * followed by 0xA9 for a single "e-acute" -- two wrong keystrokes, or
+ * two entries in unmapped[], for one requested character. Decode
+ * first, then map the codepoint.
+ *
+ * Returns the number of bytes consumed (always >= 1) and stores the
+ * codepoint. A malformed or truncated sequence consumes exactly one
+ * byte and yields that raw byte, so bad input is reported through
+ * unmapped[] rather than resynchronising into something typeable.
+ */
+static int _utf8_next(const char *s, size_t len, size_t i, uint32_t *out_cp) {
+    unsigned char c0 = (unsigned char)s[i];
+    int need;
+    uint32_t cp;
+
+    if (c0 < 0x80)            { *out_cp = c0; return 1; }
+    else if ((c0 & 0xE0) == 0xC0) { need = 1; cp = c0 & 0x1Fu; }
+    else if ((c0 & 0xF0) == 0xE0) { need = 2; cp = c0 & 0x0Fu; }
+    else if ((c0 & 0xF8) == 0xF0) { need = 3; cp = c0 & 0x07u; }
+    else                      { *out_cp = c0; return 1; }
+
+    if (i + (size_t)need >= len) {   /* truncated at end of buffer */
+        *out_cp = c0;
+        return 1;
+    }
+    for (int k = 1; k <= need; k++) {
+        unsigned char cn = (unsigned char)s[i + (size_t)k];
+        if ((cn & 0xC0) != 0x80) { *out_cp = c0; return 1; }
+        cp = (cp << 6) | (uint32_t)(cn & 0x3Fu);
+    }
+    *out_cp = cp;
+    return need + 1;
+}
+
+
+/* Count characters, not bytes. The caller's 512-character budget was
+ * counted in characters, so enforcing it on the byte length would
+ * reject a perfectly legal 300-character accented string. */
+static size_t _utf8_strlen(const char *s, size_t len) {
+    size_t n = 0, i = 0;
+    while (i < len) {
+        uint32_t cp;
+        i += (size_t)_utf8_next(s, len, i, &cp);
+        n++;
+    }
+    return n;
+}
+
 
 /* Newline and tab are the two control characters worth honouring in a
  * typed string; everything else non-printable is rejected. */
@@ -994,17 +1049,24 @@ done:
 /* ---- input.type ---------------------------------------------------- *
  *
  * Bulk text entry. params:
- *   text      : the string (US layout -- see the g_us_ascii comment)
- *   keymap    : optional, "us" (default). "system" is rejected until
- *               the MapANSI layout is verified on hardware.
+ *   text      : the string, UTF-8 on the wire, <= 512 CHARACTERS
+ *   keymap    : optional, "system" (default, layout-correct via
+ *               keymap.library MapANSI) or "us" (built-in table)
  *   delay_ms  : optional pacing
  *   confirm   : REQUIRED
  *
- * Unlike input.key this does NOT emit separate shift press/release
- * events -- it sets IEQUALIFIER_LSHIFT on the character event itself.
- * Intuition's RawKeyConvert path derives the character from code +
- * qualifier, so this is correct for text entry and halves the event
- * count, which matters against the 256-event cap.
+ * Characters are decoded from UTF-8 to a codepoint first (see
+ * _utf8_next) because both mapping paths are ANSI / ISO-8859-1: one
+ * byte per character. Anything above U+00FF, and anything the keymap
+ * cannot generate, is reported in unmapped[] rather than typed as
+ * something else.
+ *
+ * In the "us" fallback path this does NOT emit separate shift
+ * press/release events -- it sets IEQUALIFIER_LSHIFT on the character
+ * event itself. Intuition's RawKeyConvert path derives the character
+ * from code + qualifier, so this is correct for text entry and halves
+ * the event count, which matters against the 256-event cap. The
+ * MapANSI path uses whatever qualifier the keymap returned.
  */
 int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
     INPUT_GATE();
@@ -1020,7 +1082,10 @@ int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
             "text must not be empty", NULL);
         return 0;
     }
-    if (len > INPUT_MAX_TEXT) {
+    /* In CHARACTERS, not bytes -- the wire is UTF-8, so an accented
+     * string is longer in bytes than the caller counted. */
+    size_t nchars = _utf8_strlen(text, len);
+    if (nchars > INPUT_MAX_TEXT) {
         *out_err = rpc_make_error(MCPD_ERR_INVPARAMS,
             "text exceeds 512 characters", NULL);
         return 0;
@@ -1050,8 +1115,21 @@ int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *unmapped = cJSON_CreateArray();
     int mapped = 0;
 
-    for (size_t i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)text[i];
+    for (size_t i = 0; i < len; ) {
+        uint32_t cp;
+        i += (size_t)_utf8_next(text, len, i, &cp);
+
+        /* MapANSI and the US table are both ANSI (ISO-8859-1): one
+         * byte per character. A codepoint above 0xFF has no key on any
+         * Amiga keymap, so report it rather than truncating it into a
+         * different character. */
+        if (cp > 0xFFu) {
+            char one[12];
+            snprintf(one, sizeof(one), "U+%04X", (unsigned)cp);
+            cJSON_AddItemToArray(unmapped, cJSON_CreateString(one));
+            continue;
+        }
+        unsigned char ch = (unsigned char)cp;
 
         if (use_keymap) {
             /* MapANSI yields code/qualifier PAIRS (2 bytes each) for
@@ -1070,8 +1148,8 @@ int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
             int32 pairs = c.ikeymap->MapANSI((STRPTR)&ch, 1,
                                              (STRPTR)rbuf, 3, NULL);
             if (pairs < 1 || pairs > 3) {
-                char one[8];
-                snprintf(one, sizeof(one), "0x%02X", (unsigned)ch);
+                char one[12];
+                snprintf(one, sizeof(one), "U+%04X", (unsigned)cp);
                 cJSON_AddItemToArray(unmapped, cJSON_CreateString(one));
                 continue;
             }
@@ -1114,8 +1192,8 @@ int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
             /* Report rather than drop silently -- a caller who typed a
              * password containing a character we can't map needs to
              * know the target got a DIFFERENT string than requested. */
-            char one[8];
-            snprintf(one, sizeof(one), "0x%02X", (unsigned)ch);
+            char one[12];
+            snprintf(one, sizeof(one), "U+%04X", (unsigned)cp);
             cJSON_AddItemToArray(unmapped, cJSON_CreateString(one));
             continue;
         }
@@ -1129,7 +1207,7 @@ int input_type(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "op", "type");
-    cJSON_AddNumberToObject(r, "text_len", (double)len);
+    cJSON_AddNumberToObject(r, "text_len", (double)nchars);
     cJSON_AddNumberToObject(r, "chars_mapped", (double)mapped);
     cJSON_AddItemToObject(r, "unmapped", unmapped);
     cJSON_AddStringToObject(r, "keymap",

@@ -158,7 +158,7 @@ const method_entry mcpd_methods[] = {
     { "input.state",        input_state,
       "DISABLED BY DEFAULT (-32003 unless MCPd was started with --enable-input or SYS:System/MCPd/ENABLE-INPUT exists). Read-only: pointer position, frontmost/active screen, active window + geometry. Call this before input.click to know what you are about to click on." },
     { "input.type",         input_type,
-      "DISABLED BY DEFAULT (see input.state). Type a string as rawkey events via input.device. params: text (<=512 chars, REQUIRED), keymap (\"us\" only), delay_ms (0..1000), confirm:true (REQUIRED). US layout only -- non-US keymaps produce wrong characters; use input.key for those. Unmappable characters are reported in unmapped[], not silently dropped." },
+      "DISABLED BY DEFAULT (see input.state). Type a string as rawkey events via input.device. params: text (UTF-8, <=512 characters, REQUIRED), keymap (\"system\" default | \"us\"), delay_ms (0..1000), confirm:true (REQUIRED). Layout-correct: characters map through the target's own keymap.library (MapANSI), including dead-key sequences; \"us\" forces the built-in table, which is also the fallback when keymap.library cannot be opened. The result's keymap field says which path ran. Characters the keymap cannot generate, and anything above U+00FF, are reported in unmapped[], not silently dropped." },
     { "input.key",          input_key,
       "DISABLED BY DEFAULT (see input.state). Press a key or chord. params: keys (array, e.g. [\"lamiga\",\"q\"]; all but the last must be modifiers), delay_ms, confirm:true (REQUIRED). ctrl+lamiga+ramiga REBOOTS the machine and additionally requires confirm_reset:true." },
     { "input.mouse_move",   input_mouse_move,

@@ -304,6 +304,35 @@ async def test_latin1_text_accepted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_latin1_text_reaches_the_wire_verbatim() -> None:
+    """Pin the host half of the UTF-8 contract.
+
+    The daemon decodes `text` from UTF-8 back to codepoints before
+    mapping (input.c `_utf8_next`), because both of its mapping paths
+    are one-byte ANSI. That is only correct if the host passes the
+    string through untouched and the transport encodes it as UTF-8 --
+    it does (`transports/mcpd.py`). Before the daemon-side decode
+    existed, "café" was typed as five keystrokes instead of four, and
+    the assertion below was the only thing a host test could see.
+    """
+    fleet, fake = _enabled()
+    await input_tool.input_type(fleet, "x5000", text="café", confirm=True)
+    _method, params = fake.calls[0]
+    assert params is not None
+    assert params["text"] == "café"
+    assert params["text"].encode("utf-8") == b"caf\xc3\xa9"
+
+
+@pytest.mark.asyncio
+async def test_text_cap_counts_characters_not_bytes() -> None:
+    """512 accented characters is 1024 bytes of UTF-8 and must still
+    be accepted -- the daemon counts characters too (`_utf8_strlen`)."""
+    fleet, fake = _enabled()
+    await input_tool.input_type(fleet, "x5000", text="é" * 512, confirm=True)
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_non_latin1_text_rejected_naming_the_char() -> None:
     fleet, fake = _enabled()
     with pytest.raises(InvalidParams) as ei:

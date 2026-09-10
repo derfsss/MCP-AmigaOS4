@@ -154,10 +154,15 @@ def _check_delay(delay_ms: int | None) -> None:
 def _encode_text(text: str, cfg: InputConfig) -> str:
     """Validate a string is typeable and return it unchanged.
 
-    The daemon's keymap is byte-oriented (Latin-1), not UTF-8, so any
-    codepoint above 0xFF cannot be represented at all. Rejecting here —
-    naming the offending character — beats letting it reach the wire
-    and come back as a silent entry in `unmapped`.
+    The text crosses the wire as UTF-8 and the daemon decodes it back
+    to codepoints before mapping, but both mapping paths on the Amiga
+    side (`keymap.library` `MapANSI` and the built-in table) are ANSI /
+    ISO-8859-1 — one byte per character. Any codepoint above U+00FF has
+    no key on any Amiga keymap, so reject it here, naming the offending
+    character, rather than letting it reach the wire and come back as a
+    silent entry in `unmapped`.
+
+    Length is counted in characters, matching the daemon's own cap.
     """
     if not text:
         raise InvalidParams("text must not be empty")
