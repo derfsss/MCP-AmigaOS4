@@ -83,8 +83,12 @@ On a successful start MCPd writes one line to the kernel debug ring
 via `IExec->DebugPrintF`:
 
 ```
-[MCPd] ready name=MCPd version=1.3 build_date=02.08.2026 build_time=18:18:04 port=4322
+[MCPd] ready name=MCPd version=1.3 build_date=02.08.2026 build_time=18:18:04 port=4322 input=off
 ```
+
+`input=on|off` reports the keyboard / mouse injection gate, which is
+resolved once at startup; a companion `[MCPd] input_gate state=...
+source=...` line says where the setting came from.
 
 The line is emitted **after** `bind` + `listen` succeed, so its
 presence means the port is accepting connections — not merely that
