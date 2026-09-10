@@ -31,14 +31,17 @@ bytes: `text_len == 4` and a 4-byte file mean the decode happened,
 The typed output is written to the guest's `SHARED:` volume (a 9p
 share pointing at a host directory) so the bytes can be inspected on
 the host rather than read back through the same daemon that typed
-them. Pass `--shared-dir` to point at the host side of that share; the
-typing checks are skipped when it isn't given.
+them. Pass `--shared-dir` to point at the host side of that share.
+Without it -- real hardware has no such share -- the same files go to
+`T:` and are read back with `fs.read`: less independent, but still
+the Shell's own output rather than `input.type`'s self-report.
 
 QEMU targets only for the restart cycles: the script kills and
 relaunches the QEMU process, because neither QMP `system_reset` nor a
 guest-side Reboot works reliably for AmigaOS 4 guests. On real
-hardware the daemon has to be restarted out of band, so run this with
-`--no-restart-cycles` there and drive the reboots yourself.
+hardware use `--restart-mode cold`, which reboots via
+`sys.cold_reboot` and falls back to an MCU power cycle when the board
+doesn't come back; `--restart-mode manual` prompts instead.
 
 Usage:
     python scripts/validate_input.py --target qemu-pegasos2-sm501 \\
@@ -66,6 +69,7 @@ from amiga_fleet_mcp.fleet import Fleet
 from amiga_fleet_mcp.tools import exec as exec_tool
 from amiga_fleet_mcp.tools import fs as fs_tool
 from amiga_fleet_mcp.tools import input as input_tool
+from amiga_fleet_mcp.tools import power as power_tool
 from amiga_fleet_mcp.tools import qemu as qemu_tool
 from amiga_fleet_mcp.tools import sys as sys_tool
 
@@ -110,11 +114,14 @@ def port_open(endpoint: str, timeout: float = 1.0) -> bool:
 
 class Runner:
     def __init__(self, fleet: Fleet, target: str, *,
-                 shared_dir: Path | None, restart_cycles: bool) -> None:
+                 shared_dir: Path | None, restart_mode: str) -> None:
         self.fleet = fleet
         self.target = target
         self.shared = shared_dir
-        self.restart_cycles = restart_cycles
+        # "qemu"   kill + relaunch the QEMU process
+        # "cold"   sys.cold_reboot, with an MCU power-cycle fallback
+        # "manual" prompt the operator and wait
+        self.restart_mode = restart_mode
         self.endpoint = fleet.target_config(target).channels.mcpd.endpoint
 
     # ---- plumbing --------------------------------------------------
@@ -139,20 +146,48 @@ class Runner:
               flush=True)
         await asyncio.sleep(WRITEBACK_SETTLE_S)
         log(f"restarting target ({why})")
-        if not self.restart_cycles:
-            print("  --no-restart-cycles: restart MCPd on the target now,"
-                  " then press Enter", flush=True)
+
+        if self.restart_mode == "manual":
+            print("  restart MCPd on the target now, then press Enter",
+                  flush=True)
             await asyncio.to_thread(input)
-            return await self.wait_up()
-        try:
-            await qemu_tool.qemu_stop(self.fleet, self.target)
-        except Exception as e:
-            print(f"  (stop: {e})", flush=True)
-        await asyncio.sleep(5.0)
-        await qemu_tool.qemu_start(self.fleet, self.target)
+        elif self.restart_mode == "cold":
+            if not await self._cold_restart():
+                return False
+        else:
+            try:
+                await qemu_tool.qemu_stop(self.fleet, self.target)
+            except Exception as e:
+                print(f"  (stop: {e})", flush=True)
+            await asyncio.sleep(5.0)
+            await qemu_tool.qemu_start(self.fleet, self.target)
+
         ok = await self.wait_up()
         print(f"  target back: {ok}", flush=True)
         return ok
+
+    async def _cold_restart(self) -> bool:
+        """Reboot real hardware. ColdReboot doesn't always bring an
+        X5000 back on the first try, so fall back to an MCU power
+        cycle when the machine hasn't reappeared in time."""
+        try:
+            await sys_tool.sys_cold_reboot(
+                self.fleet, self.target, confirm=True)
+        except Exception as e:
+            print(f"  (cold_reboot: {e})", flush=True)
+        await asyncio.sleep(20.0)
+        if await self.wait_up(timeout_s=240.0):
+            return True
+        print("  cold reboot didn't come back -- MCU power cycle",
+              flush=True)
+        try:
+            await power_tool.power_off(self.fleet, self.target, confirm=True)
+            await asyncio.sleep(15.0)
+            await power_tool.power_on(self.fleet, self.target, confirm=True)
+        except Exception as e:
+            print(f"  (power cycle failed: {e})", flush=True)
+            return False
+        return True
 
     async def gate_open(self) -> bool:
         caps = await self.fleet.mcpd(self.target).request(
@@ -161,8 +196,33 @@ class Runner:
 
     async def ring(self) -> str:
         r = await sys_tool.sys_debug_ring(
-            self.fleet, self.target, max_lines=400)
+            self.fleet, self.target, max_lines=2000)
         return "\n".join(r.lines)
+
+    async def check_ring(self, name: str, needle: str) -> None:
+        """Assert a beacon is in the kernel debug ring -- unless this
+        machine's ring never captured MCPd at all.
+
+        AmigaOS's debug buffer does not wrap: once full it stops
+        accepting entries. On a real X5000 with a chatty graphics
+        driver (amdgpu-os4 logs ~80 KB during boot) the buffer is
+        already exhausted before MCPd starts, so nothing the daemon
+        emits can land there -- measured: 711 lines, zero growth over
+        60 s with two daemons running. That is a property of the
+        machine, not of the gate, so report it as SKIP rather than
+        failing a check the daemon cannot influence. The authoritative
+        gate reading is proto.capabilities, which is checked either
+        way.
+        """
+        ring = await self.ring()
+        if needle in ring:
+            check(name, True)
+        elif "[MCPd]" not in ring:
+            print(f"  [SKIP] {name} -- this machine's debug buffer holds "
+                  "no MCPd output at all (full before the daemon "
+                  "started; AmigaOS's ring does not wrap)", flush=True)
+        else:
+            check(name, False, "MCPd is in the ring but this line isn't")
 
     async def sentinel_present(self) -> bool:
         try:
@@ -172,16 +232,45 @@ class Runner:
         except Exception:
             return False
 
-    def read_shared(self, name: str) -> bytes:
-        assert self.shared is not None
-        p = self.shared / name
+    def typed_path(self, name: str) -> str:
+        """Where the Shell should redirect its output to."""
+        return f"SHARED:{name}" if self.shared is not None else f"T:{name}"
+
+    async def clear_typed(self, name: str) -> None:
+        if self.shared is not None:
+            (self.shared / name).unlink(missing_ok=True)
+            return
+        try:
+            await fs_tool.fs_delete(self.fleet, self.target, f"T:{name}")
+        except Exception:
+            pass
+
+    async def read_typed(self, name: str) -> bytes:
+        """Read back what the Shell actually received.
+
+        Preferred route is the host side of the guest's 9p SHARED:
+        volume, so the bytes are inspected outside the daemon that
+        typed them. Real hardware has no such share, so fall back to
+        fs.read of a T: file -- less independent, but still the
+        Shell's own output rather than input.type's self-report.
+        """
+        if self.shared is not None:
+            p = self.shared / name
+            for _ in range(10):
+                if p.exists():
+                    try:
+                        return p.read_bytes()
+                    except OSError:
+                        pass
+                time.sleep(1.0)
+            return b"<missing>"
         for _ in range(10):
-            if p.exists():
-                try:
-                    return p.read_bytes()
-                except OSError:
-                    pass
-            time.sleep(1.0)
+            try:
+                r = await fs_tool.fs_read(
+                    self.fleet, self.target, f"T:{name}")
+                return base64.b64decode(r.content_b64)
+            except Exception:
+                await asyncio.sleep(1.0)
         return b"<missing>"
 
     # ---- A: gate closed --------------------------------------------
@@ -221,10 +310,9 @@ class Runner:
         refused, leaked = await self.all_refused()
         check("all 7 methods refuse", refused == 7 and not leaked,
               f"refused={refused} leaked={leaked}")
-        ring = await self.ring()
-        check("debug ring shows input_gate state=disabled",
-              "input_gate state=disabled" in ring)
-        check("ready beacon carries input=off", "input=off" in ring)
+        await self.check_ring("debug ring shows input_gate state=disabled",
+                              "input_gate state=disabled")
+        await self.check_ring("ready beacon carries input=off", "input=off")
 
     # ---- B: enable --------------------------------------------------
 
@@ -240,10 +328,9 @@ class Runner:
             return check("target returns after enabling", False)
         check("proto.capabilities reports input.enabled true",
               await self.gate_open() is True)
-        ring = await self.ring()
-        check("debug ring shows input_gate state=ENABLED",
-              "input_gate state=ENABLED" in ring)
-        check("ready beacon carries input=on", "input=on" in ring)
+        await self.check_ring("debug ring shows input_gate state=ENABLED",
+                              "input_gate state=ENABLED")
+        await self.check_ring("ready beacon carries input=on", "input=on")
         return True
 
     # ---- C-F: the actual injection ----------------------------------
@@ -266,11 +353,7 @@ class Runner:
               mv.x == mx and mv.y == my,
               f"asked ({mx},{my}) got ({mv.x},{mv.y})")
 
-        if self.shared is None:
-            print("\n  (skipping typing checks: no --shared-dir)",
-                  flush=True)
-        else:
-            await self._section_typing()
+        await self._section_typing()
 
         log("F. input.drag + input.scroll")
         before = await input_tool.input_state(f, t)
@@ -295,7 +378,6 @@ class Runner:
 
     async def _section_typing(self) -> None:
         f, t = self.fleet, self.target
-        assert self.shared is not None
 
         log("E. typing -- a Shell to receive the keystrokes")
         await exec_tool.exec_cmd(
@@ -307,14 +389,16 @@ class Runner:
                      f"active_window={st.active_window!r}"):
             return
 
-        (self.shared / "mcpd-typed.txt").unlink(missing_ok=True)
+        await self.clear_typed("mcpd-typed.txt")
         r = await input_tool.input_type(
-            f, t, text="Echo TYPED-OK >SHARED:mcpd-typed.txt", confirm=True)
+            f, t,
+            text=f"Echo TYPED-OK >{self.typed_path('mcpd-typed.txt')}",
+            confirm=True)
         await input_tool.input_key(f, t, keys=["return"], confirm=True)
         await asyncio.sleep(3.0)
-        check("ASCII string reaches the Shell",
-              self.read_shared("mcpd-typed.txt").strip() == b"TYPED-OK",
-              f"keymap={r.keymap} unmapped={r.unmapped}")
+        got = (await self.read_typed("mcpd-typed.txt")).strip()
+        check("ASCII string reaches the Shell", got == b"TYPED-OK",
+              f"file={got!r} keymap={r.keymap} unmapped={r.unmapped}")
 
         log("E. typing -- non-ASCII (UTF-8 decode)")
         r2 = await input_tool.input_type(f, t, text=ACUTE, confirm=True)
@@ -334,12 +418,14 @@ class Runner:
         await input_tool.input_key(f, t, keys=["ctrl", "x"], confirm=True)
         await asyncio.sleep(1.0)
 
-        (self.shared / "mcpd-typed2.txt").unlink(missing_ok=True)
+        await self.clear_typed("mcpd-typed2.txt")
         await input_tool.input_type(
-            f, t, text=f"Echo {ACUTE} >SHARED:mcpd-typed2.txt", confirm=True)
+            f, t,
+            text=f"Echo {ACUTE} >{self.typed_path('mcpd-typed2.txt')}",
+            confirm=True)
         await input_tool.input_key(f, t, keys=["return"], confirm=True)
         await asyncio.sleep(3.0)
-        raw = self.read_shared("mcpd-typed2.txt").strip()
+        raw = (await self.read_typed("mcpd-typed2.txt")).strip()
         check("the Shell received 4 characters, not 5", len(raw) == 4,
               f"got {len(raw)} bytes: {raw!r}")
 
@@ -406,10 +492,14 @@ async def main() -> int:
                     help="target name from the amiga-fleet-mcp config")
     ap.add_argument("--shared-dir",
                     help="host side of the guest's SHARED: volume; "
-                         "typing checks are skipped without it")
-    ap.add_argument("--no-restart-cycles", action="store_true",
-                    help="don't kill/relaunch QEMU -- prompt for a manual "
-                         "MCPd restart instead (use on real hardware)")
+                         "without it the typed output goes to T: and is "
+                         "read back with fs.read")
+    ap.add_argument("--restart-mode", choices=("qemu", "cold", "manual"),
+                    default="qemu",
+                    help="how to restart the target between gate changes: "
+                         "kill+relaunch QEMU (default), sys.cold_reboot "
+                         "with an MCU power-cycle fallback (real hardware), "
+                         "or prompt and wait")
     ap.add_argument("--keep-running", action="store_true",
                     help="leave the QEMU guest running at the end")
     args = ap.parse_args()
@@ -431,9 +521,9 @@ async def main() -> int:
         return 2
 
     r = Runner(fleet, args.target, shared_dir=shared,
-               restart_cycles=not args.no_restart_cycles)
+               restart_mode=args.restart_mode)
 
-    if r.restart_cycles:
+    if r.restart_mode == "qemu":
         # A QEMU left behind by an earlier run invalidates everything:
         # the second instance can't bind the same hostfwd port, so this
         # script would end up talking to the OLD guest, with whatever
@@ -467,7 +557,7 @@ async def main() -> int:
             await r.section_guards()
             await r.section_disable()
     finally:
-        if r.restart_cycles and not args.keep_running:
+        if r.restart_mode == "qemu" and not args.keep_running:
             log("stopping guest")
             try:
                 await qemu_tool.qemu_stop(fleet, args.target)

@@ -99,6 +99,15 @@ These are documented behaviours, not vulnerabilities:
   cannot be opened it silently falls back to a built-in US table;
   the result's `keymap` field reports which path ran, and callers
   who care should check it.
+- MCPd announces the gate at startup in the kernel debug ring
+  (`[MCPd] input_gate state=... source=...`, plus `input=on|off` on
+  the readiness beacon), because its stdout banner goes to `NIL:` on
+  the watchdog auto-start path. **Do not treat the ring as the
+  authoritative reading**: AmigaOS's debug buffer does not wrap, so on
+  a machine whose buffer is already full when MCPd starts -- a real
+  X5000 with a verbose graphics driver fills ~80 KB during boot -- the
+  daemon's lines never land there at all. `proto.capabilities`
+  (`input.enabled`) is the reading that is always correct.
 - `input.*` calls are capped per call (256 events, 20 s wall clock,
   512 characters of text) and the daemon always releases any held
   modifier or mouse button before returning, including on the abort
