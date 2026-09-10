@@ -32,6 +32,10 @@ extern void applib_shutdown(void);
  * any connection Process exists, and prints the startup banner. */
 extern void input_init_gate(int cli_flag);
 
+/* Also in methods/input.c. Reads the resolved gate, so the readiness
+ * beacon can say whether this daemon will accept injection. */
+extern int input_is_enabled(void);
+
 /* Derived from rpc.h so there is exactly one place to bump. */
 #define MCPD_VERSION MCPD_VERSION_STR
 #define DEFAULT_PORT 4322
@@ -511,9 +515,10 @@ int main(int argc, char **argv) {
      * Keep the "[MCPd] ready " prefix and the key=value shape stable:
      * they are parsed. */
     IExec->DebugPrintF("[MCPd] ready name=MCPd version=%s "
-                       "build_date=%s build_time=%s port=%lu\n",
+                       "build_date=%s build_time=%s port=%lu input=%s\n",
                        MCPD_VERSION, MCPD_DATE, MCPD_TIME,
-                       (unsigned long)port);
+                       (unsigned long)port,
+                       input_is_enabled() ? "on" : "off");
 
     /* Multi-client (§19.3 P1 #7): the parent task does nothing but
      * accept + spawn. Each child Process owns its own connection

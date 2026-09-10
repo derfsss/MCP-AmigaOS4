@@ -168,6 +168,10 @@ void input_init_gate(int cli_flag) {
     int sentinel = _sentinel_present();
     g_input_enabled = (cli_flag || sentinel) ? 1 : 0;
 
+    const char *how = cli_flag
+        ? (sentinel ? "--enable-input + sentinel file" : "--enable-input")
+        : (sentinel ? "sentinel file" : "off");
+
     if (g_input_enabled) {
         /* Deliberately loud. An operator who enabled this by accident
          * -- or an operator who inherited a machine someone else
@@ -176,14 +180,25 @@ void input_init_gate(int cli_flag) {
         IDOS->Printf(
             "MCPd: *** INPUT INJECTION ENABLED *** (%s)\n"
             "MCPd: remote clients can type and click on this machine.\n",
-            cli_flag ? (sentinel ? "--enable-input + sentinel file"
-                                 : "--enable-input")
-                     : "sentinel file");
+            how);
     } else {
         IDOS->Printf(
             "MCPd: input injection disabled (input.* -> -32003).\n"
             "MCPd: to enable: %s\n", INPUT_ENABLE_HINT);
     }
+
+    /* Printf goes to stdout, which is NIL: on the normal auto-start
+     * path (S:Network-Startup -> Run >NIL: <NIL: Execute
+     * MCPd-Watchdog), so on a production machine nobody ever sees the
+     * banner above. An annunciator that is invisible in production is
+     * not an annunciator, so mirror it into the kernel debug ring,
+     * which survives regardless of how MCPd was launched and is
+     * readable remotely via sys.debug_ring.
+     *
+     * Same key=value shape as the "[MCPd] ready" beacon in main.c;
+     * keep it parseable. */
+    IExec->DebugPrintF("[MCPd] input_gate state=%s source=%s\n",
+                       g_input_enabled ? "ENABLED" : "disabled", how);
 }
 
 
