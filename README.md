@@ -46,7 +46,7 @@ can:
   resident-init mode and chain a test program against them, all in
   a single tool call.
 
-129 typed MCP tools, 8 live resources, validated end-to-end on QEMU
+137 typed MCP tools, 8 live resources, validated end-to-end on QEMU
 pegasos2 and real AmigaOne X5000 hardware.
 
 If that sounds useful, the rest of this README and the docs below
@@ -96,7 +96,8 @@ context in [USAGE.md](USAGE.md).
 - More than 120 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`,
   `wb.*`, `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
   `app.notify`, `notify.*`, `installer.*`, `serial.*`, `power.*`,
-  and `sandbox.*`, plus a namespace dispatcher per group.
+  `sandbox.*`, and `input.*` (keyboard / mouse injection, disabled by
+  default at the daemon), plus a namespace dispatcher per group.
   (`events.subscribe`, `events.unsubscribe`, and `events.test_emit`
   are exposed only as daemon RPC methods, not MCP tools — clients
   call them directly through the transport.)

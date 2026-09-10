@@ -437,8 +437,10 @@ Located in `mcpd/install/`. Run from a Shell on the target with
 
 | Script | Description |
 |---|---|
-| `MCPd-Install` | Install MCPd to `SYS:System/MCPd/MCPd`, set protection bits, back up `S:Network-Startup`, idempotently append the launch line. |
-| `MCPd-Uninstall` | Restore `S:Network-Startup` from backup; remove `SYS:System/MCPd/`. |
+| `MCPd-Install` | Install MCPd to `SYS:System/MCPd/MCPd`, set protection bits, back up `S:Network-Startup`, idempotently append the launch line. Also copies the two input scripts below — copied, never run. |
+| `MCPd-Enable-Input` | Create `SYS:System/MCPd/ENABLE-INPUT`, the persistent gate for the `input.*` namespace. Prints a warning first; needs an MCPd restart to take effect. Also installed by `installer.stage` + the `install_mcpd` step, and by `scripts/install_mcpd_autostart.py`. |
+| `MCPd-Disable-Input` | Remove the sentinel again. Needs an MCPd restart; does not undo a `--enable-input` flag on a running daemon's command line. |
+| `MCPd-Uninstall` | Restore `S:Network-Startup` from backup; remove `SYS:System/MCPd/` (sentinel and both input scripts included). |
 | `MCPd-Watchdog` | Relaunch wrapper: runs MCPd in a loop with a five-second back-off between exits. Writes `T:MCPd-Watchdog.log`. |
 
 ## Build commands

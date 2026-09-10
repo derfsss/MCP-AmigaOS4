@@ -27,7 +27,10 @@
   `allow_drag`), defaulting to absent. Raises `NotCapable` naming both
   gates. The `--init` wizard asks about it, defaulting to no.
 - **New install scripts** `MCPd-Enable-Input` / `MCPd-Disable-Input`,
-  copied by `MCPd-Install` but never run by it.
+  copied but never run -- by `MCPd-Install`, by `installer.stage` +
+  the `install_mcpd` sequence step, and by
+  `scripts/install_mcpd_autostart.py`, so a machine provisioned any of
+  the three ways has the documented persistent way to open the gate.
 - `confirm: true` required on the committing operations (`type`,
   `key`, `click`, `drag`); not on `mouse_move`, `scroll`, `state`.
   `ctrl+lamiga+ramiga` additionally requires `confirm_reset: true`
@@ -43,7 +46,18 @@
   end-to-end on a German (QWERTZ) AmigaOS 4.1 FE guest: typing
   `Echo TYPED-OK >T:typed.txt` into a Shell produced exactly that
   file. `keymap="us"` forces the built-in table, which is also the
-  automatic fallback; the result reports which path ran.
+  automatic fallback; the result reports which path ran. Text is
+  decoded from UTF-8 to codepoints before mapping (both mapping paths
+  are one-byte ANSI), so an accented character is one keystroke rather
+  than one per UTF-8 byte; codepoints above U+00FF, which no Amiga
+  keymap can generate, are reported in `unmapped[]`. The 512 cap
+  counts characters on both sides.
+- **The input gate is visible in the kernel debug ring.** MCPd emits
+  `[MCPd] input_gate state=... source=...` at startup and adds
+  `input=on|off` to the `[MCPd] ready` beacon, both readable through
+  `sys.debug_ring`. The startup banner alone goes to stdout, which is
+  `NIL:` on the watchdog auto-start path -- invisible exactly where it
+  matters most.
 
 
 - **`wb.screenshot`** — capture an AmigaOS screen to a PNG on the
@@ -182,15 +196,28 @@
   from its inherited Output() handle). The probe now treats any
   structured `exec.cmd` exit as proof the binary started.
 
-### Known limitations
+### Known limitations (`input.*`)
 
-- F11/F12 rawkey codes and the NewMouse wheel constants are still
-  flagged in `mcpd/src/methods/input.c` as unverified.
-  `input.mouse_move` defaults to a read-position-then-relative-delta
-  strategy (verified accurate); `absolute_mode="raw"` remains
-  available to A/B the true-absolute event form.
+- F11/F12 are deliberately absent from the rawkey table: their AOS4
+  codes were never verified on hardware, and an unknown key name fails
+  cleanly where a wrong code would silently press something else. The
+  NewMouse wheel constants remain unverified (behind `#ifndef` guards
+  so a missing header cannot break the build).
+- `input.mouse_move` defaults to a read-position-then-relative-delta
+  strategy and reports the position actually achieved, but does not
+  retry to converge. `input.click`'s pre-move and `input.drag`'s
+  move-to-start do not read back at all, so pointer acceleration on
+  real hardware could land them off-target; only QEMU pegasos2 has
+  been measured. `absolute_mode="raw"` remains available to A/B the
+  true-absolute event form.
 - `input.click` does not report the achieved pointer position the way
   `input.mouse_move` and `input.drag` do.
+
+### Tool count
+
+- 121 → 137 tools (+6 `sandbox.*`, +`sys.debug_ring`,
+  +`wb.screenshot`, +8 `input.*` including its dispatcher).
+  13 → 14 namespaces.
 
 ## 1.2 — Guided setup and whole-file transfers
 

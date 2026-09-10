@@ -403,7 +403,12 @@ The installer performs five steps:
 2. Copies the binary to `SYS:System/MCPd/MCPd` and clears the
    `e`-protected bit (AmigaOS new-file default).
 3. Uploads the watchdog script `SYS:System/MCPd/MCPd-Watchdog`, which
-   relaunches MCPd if it ever exits, with a 5 s back-off.
+   relaunches MCPd if it ever exits, with a 5 s back-off, plus the
+   `MCPd-Enable-Input` / `MCPd-Disable-Input` operator scripts.
+   Those two are only copied, never run: keyboard / mouse injection
+   (`input.*`) stays disabled until you execute `MCPd-Enable-Input`
+   on the target yourself and restart MCPd. See
+   [SECURITY.md](SECURITY.md).
 4. Creates a one-time backup of `S:Network-Startup` at
    `S:Network-Startup.before-mcpd`.
 5. Idempotently appends a launch line that runs the watchdog from the
@@ -414,8 +419,8 @@ eleven seconds of cold boot.
 
 ### Manual install (no host helper)
 
-Copy `mcpd/MCPd` and `mcpd/install/MCPd-Install` onto the target, then
-from a Shell on the target:
+Copy `mcpd/MCPd` and the scripts from `mcpd/install/` onto the
+target, then from a Shell on the target:
 
 ```
 CD <directory containing the files>

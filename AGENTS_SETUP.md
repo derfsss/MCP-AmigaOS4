@@ -163,7 +163,7 @@ amiga-fleet-mcp --inspect
 
 # 2. List the live tool surface (no target reach required).
 amiga-fleet-mcp --list-tools | wc -l
-# Expected: 121 tools as of v1.2.
+# Expected: 137 tools on the current develop branch (121 at v1.2).
 
 # 3. Probe every target's MCPd channel (target reach required).
 amiga-fleet-mcp --health-check
@@ -195,6 +195,7 @@ wiring.
 | `paths.amiga_qemu_tests not set in config`        | `tests.*` invoked but no `[paths] amiga_qemu_tests`. Set it. |
 | `target.qemu_config is required for qemu.start`   | Target's `qemu_config` path missing from `[targets.<name>]`. Set it. |
 | `NotCapable: channel mcu`                         | `power.*` invoked but `[targets.<name>.channels.mcu]` not configured. Wire the FTDI cable, set the block. |
+| `NotCapable: input injection is not enabled`      | `input.*` invoked without both gates open. Host side: `[targets.<name>.input] enabled = true`. Daemon side (the real control): run `MCPd-Enable-Input` on the target and restart MCPd. Do not open either without the user asking. |
 | `FileNotFoundError: config not found`             | `--config` points at a path that doesn't exist, or no config at the platform default. Run `--init`. |
 | `bad config: ...`                                 | TOML doesn't validate against the schema. Re-run `--init`; the wizard pre-validates. |
 
@@ -204,6 +205,14 @@ wiring.
   procedure (see [INSTALL.md § Installing MCPd on a target](INSTALL.md#installing-mcpd-on-a-target))
   — it requires the target to already be reachable and is
   inherently more interactive.
+- **Doesn't enable keyboard / mouse injection.** `input.*` is off by
+  default at both layers and this spec leaves it that way. Writing
+  `[targets.<name>.input] enabled = true` into a generated config is
+  out of scope — an agent must not open a gate whose whole purpose is
+  to require a deliberate human action, and the host-side flag alone
+  does nothing anyway (the daemon gate needs `MCPd-Enable-Input` plus a
+  restart, on the target). If the user asks for it, point them at
+  [SECURITY.md](SECURITY.md) first.
 - **Doesn't choose secrets or credentials.** MCPd has no
   authentication on its TCP listener; the security stance is
   network-level isolation (private LAN, host-only QEMU NAT,
