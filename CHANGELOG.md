@@ -196,6 +196,17 @@
   from its inherited Output() handle). The probe now treats any
   structured `exec.cmd` exit as proof the binary started.
 
+### Fixed
+
+- **Dependency majors are now capped** (`mcp[cli]>=1.0.0,<2`,
+  `pydantic>=2.0,<3`). `uv.lock` is not committed, so CI resolves
+  dependencies fresh on every run; the unbounded `mcp` requirement
+  picked up mcp 2.2.0, which removed the 1.x
+  `from mcp.server.fastmcp import FastMCP` entry point this server is
+  written against, and the type-check failed for reasons unrelated to
+  anything in the repo. Lift the cap in a change that ports to the 2.x
+  API and is tested against it.
+
 ### Known limitations (`input.*`)
 
 - F11/F12 are deliberately absent from the rawkey table: their AOS4

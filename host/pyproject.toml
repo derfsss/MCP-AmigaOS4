@@ -24,8 +24,15 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "mcp[cli]>=1.0.0",
-  "pydantic>=2.0",
+  # Upper-bounded on purpose. This server is written against the 1.x
+  # FastMCP API (`from mcp.server.fastmcp import FastMCP`), which mcp
+  # 2.0 removed -- CI resolves fresh on every run (uv.lock is not
+  # committed), so an unbounded requirement silently upgraded to
+  # mcp 2.2.0 and broke the type-check for reasons unrelated to any
+  # change in this repo. Lift the cap in a change that actually ports
+  # to the 2.x API and is tested against it.
+  "mcp[cli]>=1.0.0,<2",
+  "pydantic>=2.0,<3",
   "pyserial>=3.5",
 ]
 
