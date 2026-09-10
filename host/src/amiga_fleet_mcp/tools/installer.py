@@ -1100,6 +1100,31 @@ def _resolve_mcpd_binary(sources_dir: Path) -> Path | None:
     return None
 
 
+def _resolve_mcpd_install_script(name: str, sources_dir: Path) -> Path | None:
+    """Resolve one of the AmigaDOS scripts shipped in `mcpd/install/`.
+
+    Same search order as `_resolve_mcpd_binary`, plus the repo's
+    `mcpd/install/` directory, which is where these live in a checkout.
+    Returns None when nothing matches -- these are optional, and a
+    missing one must never fail an install.
+    """
+    cand = sources_dir / name
+    if cand.is_file():
+        return cand
+    # parents[3] is `host/`, parents[4] the repo root; try both so this
+    # resolves whether the package is used from a checkout or installed.
+    here = Path(__file__).resolve()
+    for repo_root in (Path.cwd(), here.parents[3], here.parents[4]):
+        cand = repo_root / "mcpd" / "install" / name
+        if cand.is_file():
+            return cand
+    for d in _candidate_install_support_dirs():
+        cand = d / name
+        if cand.is_file():
+            return cand
+    return None
+
+
 # What the preflight + stage need to find before allowing an install.
 # Each entry has: name, friendly description, and a resolver function
 # returning a Path or None.
@@ -1271,6 +1296,25 @@ async def installer_stage(
     mcpd_local = _resolve_mcpd_binary(src)
     assert mcpd_local is not None  # _mandatory_binaries enforced this
     items.append(("mcpd_binary", mcpd_local, staging + "MCPd"))
+
+    # MCPd operator scripts (optional). `MCPd-Install` copies these
+    # next to the binary, but installer-provisioned machines never run
+    # MCPd-Install -- install_mcpd() mirrors it -- so stage them here
+    # or the documented persistent way to enable input injection
+    # doesn't exist on the resulting install. They are only ever
+    # copied, never executed: injection stays off.
+    for helper in ("MCPd-Enable-Input", "MCPd-Disable-Input"):
+        helper_local = _resolve_mcpd_install_script(helper, src)
+        if helper_local is not None:
+            items.append((f"mcpd_script_{helper}", helper_local,
+                          staging + helper))
+        else:
+            skipped.append(
+                f"mcpd_script_{helper}: {helper} not found; the "
+                "installed system will have no helper script for "
+                "input.* injection (create "
+                "SYS:System/MCPd/ENABLE-INPUT by hand instead)."
+            )
 
     # SerialShell binary (optional). Useful only for users who run
     # qemu-runner / AmigaQemuTests workflows on the resulting install;

@@ -39,7 +39,8 @@ APPEND_LINES = [
     "; MCPd - Model Context Protocol daemon (auto-installed, watchdog'd)",
     "Run >NIL: <NIL: Execute SYS:System/MCPd/MCPd-Watchdog",
 ]
-WATCHDOG_LOCAL = HERE.parent / "mcpd" / "install" / "MCPd-Watchdog"
+INSTALL_DIR = HERE.parent / "mcpd" / "install"
+WATCHDOG_LOCAL = INSTALL_DIR / "MCPd-Watchdog"
 
 
 def make_config(endpoint: str) -> Config:
@@ -125,6 +126,23 @@ async def install(
         base64.b64encode(wd_blob).decode(),
     )
     print(f"      wrote {len(wd_blob)} bytes")
+
+    # The operator scripts for the input.* gate. Uploaded, never run:
+    # input injection stays off until someone executes
+    # MCPd-Enable-Input on the target and restarts MCPd. Without them
+    # the only persistent way to open the gate wouldn't be present on
+    # a machine provisioned by this script.
+    for helper in ("MCPd-Enable-Input", "MCPd-Disable-Input"):
+        local = INSTALL_DIR / helper
+        if not local.exists():
+            print(f"      skip {helper} (not in {INSTALL_DIR})")
+            continue
+        blob_h = local.read_bytes()
+        await fs_tool.fs_write(
+            fleet, target, f"SYS:System/MCPd/{helper}",
+            base64.b64encode(blob_h).decode(),
+        )
+        print(f"      wrote {helper} ({len(blob_h)} bytes, not executed)")
 
     print("[4/6] Backup S:Network-Startup -> S:Network-Startup.before-mcpd "
           "(if missing)")

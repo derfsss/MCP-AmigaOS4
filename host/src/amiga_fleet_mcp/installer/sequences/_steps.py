@@ -1385,6 +1385,34 @@ def install_mcpd() -> Step:
             "timeout_ms": 30000,
         }, timeout_s=35.0)
 
+        # 1b. Operator helper scripts, if staged. These are what
+        # `MCPd-Install` copies, and without them the ONLY documented
+        # way to turn input injection on persistently doesn't exist on
+        # an installer-provisioned machine -- which is how every
+        # machine in the fleet is built. Copied, never run: input
+        # injection stays off until an operator executes
+        # MCPd-Enable-Input on the target themselves.
+        helpers_installed: list[str] = []
+        for helper in ("MCPd-Enable-Input", "MCPd-Disable-Input"):
+            hsrc = dest + "tmp/" + helper
+            hdst = dest + "System/MCPd/" + helper
+            try:
+                await mcpd.request("fs.stat", {"path": hsrc})
+            except Exception:
+                continue  # not staged; optional
+            try:
+                await mcpd.request("fs.copy", {"src": hsrc, "dst": hdst})
+            except Exception:
+                await mcpd.request("exec.cmd", {
+                    "command": f'Copy "{hsrc}" "{hdst}" CLONE',
+                    "timeout_ms": 30000,
+                }, timeout_s=35.0)
+            await mcpd.request("exec.cmd", {
+                "command": f'Protect "{hdst}" +rwed',
+                "timeout_ms": 30000,
+            }, timeout_s=35.0)
+            helpers_installed.append(hdst)
+
         # 2. Network-Startup: read, check for existing MCPd line, edit.
         # Capture mtime first so we can restore it after our append.
         orig_netstart_mtime = await _capture_mtime(mcpd, netstart)
@@ -1400,6 +1428,7 @@ def install_mcpd() -> Step:
         if marker in existing:
             return {"action": "binary copied; Network-Startup unchanged",
                     "binary": binary_dst,
+                    "input_helpers": helpers_installed,
                     "marker_already_present": True}
 
         # backup
@@ -1439,6 +1468,7 @@ def install_mcpd() -> Step:
         return {
             "action": "installed",
             "binary": binary_dst,
+            "input_helpers": helpers_installed,
             "network_startup": netstart,
             "backed_up_to": backup if backed_up else None,
         }
@@ -1446,7 +1476,9 @@ def install_mcpd() -> Step:
         name="install_mcpd",
         doc=("Copy MCPd binary to SYS:System/MCPd/, +rwed, append "
              "launch line to S:Network-Startup so it auto-starts on "
-             "first boot."),
+             "first boot. Also copies the MCPd-Enable-Input / "
+             "MCPd-Disable-Input operator scripts when staged - "
+             "copied only, never run: input injection stays off."),
         fn=fn,
     )
 
