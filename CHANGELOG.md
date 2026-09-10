@@ -1,6 +1,6 @@
 # Change log
 
-## Unreleased
+## 1.3 — Sandboxed iteration, screen capture, and input injection
 
 ### Added
 
