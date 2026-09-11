@@ -41,6 +41,23 @@ extern int input_is_enabled(void);
 #define DEFAULT_PORT 4322
 #define BACKLOG 4
 
+/* How long a connection may go completely silent *mid-frame* before
+ * we drop it. This is a silence timeout, not a transfer deadline: it
+ * fires only when nothing at all arrives for the whole window, so a
+ * slow multi-megabyte upload that keeps trickling is unaffected, and
+ * an idle client between frames is handled by WaitSelect rather than
+ * this. Without it, a peer that sends a frame header and then stops
+ * parks a worker Process for the uptime of the daemon. */
+#define MCPD_RECV_TIMEOUT_S 120
+
+/* Ceiling on live connection workers. Each is a Process with a 64 KiB
+ * stack that may be holding a multi-megabyte frame, so an unbounded
+ * count is an unbounded commitment -- and connections that are never
+ * closed (a killed client, a NAT that dropped the flow) accumulate.
+ * Normal use is one or two per client; 16 leaves room for a fan-out
+ * plus a long-poll and still bounds the damage. */
+#define MCPD_MAX_CLIENTS 16
+
 /* Priority of the listener process itself. The accept+spawn loop burns
  * almost no CPU, so running it just above Workbench (0) keeps MCPd
  * responsive to new connections even while the machine is loaded.
@@ -278,6 +295,34 @@ static void handle_connection(int sock) {
  * sys.crashhook_status (exception_count), sys.lastalert, then
  * exec.cmd C:DumpDebugBuffer for the full register/stack dump.
  * See memory entry reference_mcpd_per_connection_isolation.md. */
+
+/* Live connection workers, capped at MCPD_MAX_CLIENTS.
+ *
+ * The child Processes share the parent's data segment, so this is one
+ * counter for the whole daemon. AmigaOS 4 runs one core, so Forbid()
+ * is enough to make the read-modify-write indivisible -- no atomics
+ * needed, and the critical section is three instructions long.
+ *
+ * The parent claims a slot before spawning; the child releases it on
+ * the way out, including after a crash-killed handler, because the
+ * kernel unwinds to the Process exit path. */
+static int g_live_clients = 0;
+
+static int client_slot_claim(void) {
+    int ok;
+    IExec->Forbid();
+    ok = (g_live_clients < MCPD_MAX_CLIENTS);
+    if (ok) g_live_clients++;
+    IExec->Permit();
+    return ok;
+}
+
+static void client_slot_release(void) {
+    IExec->Forbid();
+    if (g_live_clients > 0) g_live_clients--;
+    IExec->Permit();
+}
+
 static void client_task_entry(void) {
     struct Task *self = IExec->FindTask(NULL);
 
@@ -323,6 +368,14 @@ static void client_task_entry(void) {
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_LINGER,
                             &lng, sizeof(lng));
 
+    /* Receive timeout: see MCPD_RECV_TIMEOUT_S. Best-effort -- if the
+     * stack doesn't honour it we are no worse off than before. */
+    struct timeval rcv_to;
+    rcv_to.tv_sec = MCPD_RECV_TIMEOUT_S;
+    rcv_to.tv_usec = 0;
+    ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_RCVTIMEO,
+                            &rcv_to, sizeof(rcv_to));
+
     /* Wire the conn_ctx into tc_UserData so frame.c's _isk() finds
      * us. (Replaces the inherited socket_id we read above.) */
     self->tc_UserData = &ctx;
@@ -334,6 +387,7 @@ static void client_task_entry(void) {
     ctx.isocket->CloseSocket(ctx.fd);
     IExec->DropInterface((struct Interface *)ctx.isocket);
     IExec->CloseLibrary(ctx.socket_base);
+    client_slot_release();
 }
 
 /* Spawn a child Process to handle `client_fd`. Releases the fd from
@@ -472,7 +526,7 @@ int main(int argc, char **argv) {
 
     /* Spawn the LAN-discovery responder peer task. Best-effort:
      * a discovery failure doesn't take MCPd down. */
-    if (discovery_start(method_count) != 0) {
+    if (discovery_start(method_count, port) != 0) {
         IDOS->Printf("MCPd: discovery responder failed to start\n");
     }
 
@@ -535,11 +589,25 @@ int main(int argc, char **argv) {
             if (IExec->SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) break;
             continue;
         }
+        /* Refuse rather than accumulate. Dropping the connection is
+         * the honest signal: the client sees the close immediately
+         * and can retry, whereas accepting it would queue work the
+         * daemon has no room for. */
+        if (!client_slot_claim()) {
+            IExec->DebugPrintF("[MCPd] refused connection: %d workers "
+                               "already live (max %d)\n",
+                               MCPD_MAX_CLIENTS, MCPD_MAX_CLIENTS);
+            ISocket->CloseSocket(client);
+            if (IExec->SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) break;
+            continue;
+        }
+
         if (spawn_client_worker(client) != 0) {
             /* Spawn failed - close the fd so we don't leak it; loop
              * back and accept the next connection. */
             IDOS->Printf("MCPd: spawn_client_worker failed; "
                          "dropping connection\n");
+            client_slot_release();
             ISocket->CloseSocket(client);
         }
         /* spawn_client_worker has either handed the fd to the child

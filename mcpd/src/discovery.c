@@ -5,9 +5,12 @@
  * loops responding to discovery probes. The reply carries:
  *
  *   {"mcp_discovery":1, "v":1,
- *    "server":"mcpd/0.1", "protocol":"1.0",
- *    "tcp_port":4322, "host":"<hostname>",
+ *    "server":"mcpd/1.4", "protocol":"1.0",
+ *    "tcp_port":NNNN, "host":"<hostname>",
  *    "methods":NN, "tag":"<echoed>"}
+ *
+ * tcp_port is the port the RPC listener actually bound, not a
+ * constant - --port would otherwise make the announcement a lie.
  *
  * The daemon never reports its own IP - the host learns it from
  * recvfrom's source address, which is authoritative.
@@ -30,6 +33,12 @@
 
 #define DISCOVERY_BUF 2048
 
+/* Smallest datagram we will answer. Chosen to sit below the host's
+ * own probe (~77 bytes, unchanged since 1.0, so older hosts keep
+ * working) and above the ~16 bytes that would otherwise buy a ~120
+ * byte reply. See the comment at the acceptance check. */
+#define DISCOVERY_MIN_PROBE 64
+
 
 /* Bsdsocket interface owned by the discovery task only. */
 static struct Library     *DiscoverySocketBase = NULL;
@@ -38,6 +47,10 @@ static struct SocketIFace *DiscoveryISocket    = NULL;
 /* Snapshot of method count, captured at task spawn (so we don't
  * have to take a lock on the dispatch table). */
 static int g_methods_advertised = 0;
+
+/* The port the RPC listener bound. Announced as-is; see discovery.h
+ * for why this is not the compile-time constant it used to be. */
+static uint16_t g_tcp_port = 4322;
 
 
 static int _open_socket_lib(void) {
@@ -145,7 +158,24 @@ static void _discovery_loop(void) {
         buf[got] = '\0';
 
         /* Probe? */
+        /* A probe has to look like one, and has to cost the sender
+         * at least as much as the answer costs us.
+         *
+         * The reply is ~120 bytes. Answering a 16-byte datagram --
+         * which is all `strstr` alone required -- turns the daemon
+         * into a 7x UDP amplifier pointed at whatever return address
+         * the sender wrote, and UDP lets them write anything. A
+         * minimum probe size removes the leverage: nobody gains by
+         * spending more bytes than they extract. The host's own probe
+         * has always been ~77 bytes, so this costs real clients
+         * nothing, and requiring the "v" field rejects a datagram
+         * that merely happens to contain the magic substring.
+         *
+         * This does not stop someone flooding the port; it stops them
+         * flooding somebody ELSE through it. */
+        if (got < DISCOVERY_MIN_PROBE) continue;
         if (!strstr(buf, "\"mcp_discovery\"")) continue;
+        if (!strstr(buf, "\"v\"")) continue;
 
         char tag[64] = "";
         _extract_str_field(buf, "tag", tag, sizeof(tag));
@@ -156,11 +186,11 @@ static void _discovery_loop(void) {
             "{\"mcp_discovery\":1,\"v\":1,"
             "\"server\":\"" MCPD_SERVER_VERSION "\","
             "\"protocol\":\"" MCPD_PROTOCOL_VERSION "\","
-            "\"tcp_port\":4322,"
+            "\"tcp_port\":%u,"
             "\"host\":\"%s\","
             "\"methods\":%d,"
             "\"tag\":\"%s\"}",
-            host, g_methods_advertised, tag);
+            (unsigned)g_tcp_port, host, g_methods_advertised, tag);
         if (rlen <= 0 || rlen >= (int)sizeof(resp)) continue;
 
         DiscoveryISocket->sendto(sock, resp, (size_t)rlen, 0,
@@ -180,8 +210,9 @@ static void _discovery_task_entry(void) {
 }
 
 
-int discovery_start(int methods_advertised) {
+int discovery_start(int methods_advertised, uint16_t tcp_port) {
     g_methods_advertised = methods_advertised;
+    g_tcp_port = tcp_port;
 
     struct Process *p = IDOS->CreateNewProcTags(
         NP_Entry,     (Tag)_discovery_task_entry,

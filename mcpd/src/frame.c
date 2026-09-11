@@ -71,11 +71,23 @@ int frame_read(int sock, char **out, size_t *out_len) {
                  |  (uint32_t)hdr[3];
     if (len == 0 || len > MCPD_FRAME_MAX_PAYLOAD) return -1;
 
+    /* Read one byte of the body BEFORE reserving room for the rest.
+     * A header is four bytes and may claim 32 MiB; allocating on that
+     * promise alone means four bytes is all it costs a peer -- hostile
+     * or merely wedged -- to tie up 32 MiB for as long as it stays
+     * silent. Waiting for the first real byte costs nothing in the
+     * normal case, where the body is already on its way, and bounds
+     * the abnormal one to a worker Process plus the receive timeout
+     * (SO_RCVTIMEO, set in main.c). */
+    char first;
+    if (read_n(sock, &first, 1) != 0) return -1;
+
     char *buf = (char *)IExec->AllocVecTags((uint32)len + 1,
                                             AVT_Clear, FALSE,
                                             TAG_END);
     if (!buf) return -1;
-    if (read_n(sock, buf, len) != 0) {
+    buf[0] = first;
+    if (len > 1 && read_n(sock, buf + 1, len - 1) != 0) {
         IExec->FreeVec(buf);
         return -1;
     }
