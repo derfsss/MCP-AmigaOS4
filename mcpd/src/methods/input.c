@@ -1499,6 +1499,25 @@ int input_click(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddNumberToObject(r, "count", (double)count);
 
     _inject_close(&c);
+
+    /* Report where the pointer actually was, as mouse_move and drag
+     * already do. A click is the operation where this matters most --
+     * it commits to whatever is under the pointer -- and having to
+     * follow up with input.state to find out was a gap in the shape
+     * of the results rather than a deliberate omission. */
+    {
+        cJSON *pe = NULL;
+        int cx2, cy2, w2, h2;
+        if (_pointer_pos(&cx2, &cy2, &w2, &h2, &pe) == 0) {
+            cJSON_AddNumberToObject(r, "x", (double)cx2);
+            cJSON_AddNumberToObject(r, "y", (double)cy2);
+        } else {
+            cJSON_AddNullToObject(r, "x");
+            cJSON_AddNullToObject(r, "y");
+            if (pe) cJSON_Delete(pe);
+        }
+    }
+
     _add_common(r, &c);
     *out_result = r;
     return 0;

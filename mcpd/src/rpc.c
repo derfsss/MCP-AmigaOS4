@@ -165,7 +165,7 @@ const method_entry mcpd_methods[] = {
     { "input.mouse_move",   input_mouse_move,
       "DISABLED BY DEFAULT (see input.state). Move the pointer. params: x+y (absolute) OR dx/dy (relative, +-4096), absolute_mode (\"delta\" default | \"raw\"), steps (1..64), delay_ms. No confirm -- motion commits nothing. Absolute targets are clamped to the frontmost screen; the achieved position is returned." },
     { "input.click",        input_click,
-      "DISABLED BY DEFAULT (see input.state). Click at the pointer, or at x+y if given. params: button (\"left\"|\"right\"|\"middle\"), count (1..8), x, y, delay_ms, confirm:true (REQUIRED -- lands on whatever is under the pointer; call input.state first)." },
+      "DISABLED BY DEFAULT (see input.state). Click at the pointer, or at x+y if given. params: button (\"left\"|\"right\"|\"middle\"), count (1..8), x, y, delay_ms, confirm:true (REQUIRED -- lands on whatever is under the pointer; call input.state first). Returns the pointer position actually achieved." },
     { "input.drag",         input_drag,
       "DISABLED BY DEFAULT (see input.state). Press at from_x/from_y, move to to_x/to_y, release. params: from_x, from_y, to_x, to_y (all REQUIRED), button, steps (1..64), delay_ms, confirm:true (REQUIRED). The button is always released, even if the call aborts on a budget overrun." },
     { "input.scroll",       input_scroll,

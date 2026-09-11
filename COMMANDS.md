@@ -147,7 +147,7 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `input.type` | ✅ | Type a string as keystrokes. `text` (≤512 chars), `keymap` (`system` default / `us`), `delay_ms`. Layout-correct: characters are mapped through the target's `keymap.library` (`MapANSI`), including dead-key sequences. Unmappable characters are returned in `unmapped[]`, never silently dropped. |
 | `input.key` | ✅ | Press a key or chord: `keys: ["lamiga","q"]`. All but the last entry must be modifiers. `ctrl+lamiga+ramiga` **reboots the machine** and additionally requires `confirm_reset: true`. |
 | `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
-| `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). |
+| `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). Returns the pointer position actually achieved, as `mouse_move` and `drag` do. |
 | `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
 | `input.scroll` | — | Mouse wheel via NewMouse codes. `clicks` (1–32), `direction`. |
 
