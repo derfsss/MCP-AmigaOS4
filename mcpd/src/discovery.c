@@ -19,6 +19,7 @@
 #include "discovery.h"
 #include "rpc.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,165 @@
  * working) and above the ~16 bytes that would otherwise buy a ~120
  * byte reply. See the comment at the acceptance check. */
 #define DISCOVERY_MIN_PROBE 64
+
+
+/* ---- reply budgets -------------------------------------------------
+ *
+ * The size floor at the acceptance check stops a sender extracting
+ * more bytes than they spend. It does not stop them spending a lot: a
+ * flood of full-size probes carrying a forged source address still
+ * points this daemon at that address, and a sender willing to forge
+ * one address is willing to forge a different one per datagram - so a
+ * per-source budget on its own buys nothing against the case that
+ * actually matters.
+ *
+ * Hence two budgets. The global one bounds what this daemon can
+ * contribute to anybody's reflected flood, whatever the sources look
+ * like. The per-source one stops a single real, unspoofed host from
+ * spending that global budget and leaving none for the rest of the
+ * LAN.
+ *
+ * Both are sized against what discovery actually is: one
+ * fleet.discover() sends one probe per broadcast address - typically
+ * two or three - and repeats only when a person asks again. A burst of
+ * four replies per source refilling at one a second covers that with
+ * room to spare, and the global ceiling still lets a couple of dozen
+ * machines find this daemon in the same second.
+ */
+#define DISCOVERY_TICKS_PER_SEC   50   /* DateStamp ds_Tick units */
+#define DISCOVERY_SRC_SLOTS       16
+#define DISCOVERY_SRC_BURST        4
+#define DISCOVERY_SRC_RATE         1   /* replies/sec, sustained */
+#define DISCOVERY_GLOBAL_BURST    24
+#define DISCOVERY_GLOBAL_RATE      8   /* replies/sec, sustained */
+
+/* Tokens are scaled so a refill smaller than one token per tick still
+ * accumulates instead of rounding away to nothing. */
+#define RL_SCALE 1000
+
+struct rl_bucket {
+    int32_t  tokens;      /* scaled by RL_SCALE */
+    uint32_t last_tick;
+};
+
+struct rl_src {
+    uint32_t ip;          /* network order; 0 means the slot is free */
+    uint32_t last_seen;
+    struct rl_bucket b;
+};
+
+static struct rl_src    g_src[DISCOVERY_SRC_SLOTS];
+static struct rl_bucket g_global;
+
+/* Drop accounting. The AmigaOS debug ring does not wrap - once full,
+ * the kernel stops accepting entries rather than overwriting the
+ * oldest - so a line per dropped probe would let a flood push
+ * everything else out of the one place an operator can look. Report
+ * the first drop, then at most one summary a minute. */
+static uint32_t g_dropped          = 0;
+static uint32_t g_drop_reported    = 0;
+static uint32_t g_drop_report_tick = 0;
+
+
+/* Monotonic-enough tick counter from DateStamp, which needs no device
+ * open in this peer task. Wraps about every 2.7 years; differences
+ * stay correct across the wrap because they are computed in uint32
+ * arithmetic. A backwards clock change reads as an enormous elapsed
+ * time, which refills the buckets - self-correcting, and in the
+ * permissive direction. */
+static uint32_t _now_ticks(void) {
+    struct DateStamp ds;
+    IDOS->DateStamp(&ds);
+    uint64_t t = ((uint64_t)ds.ds_Days * 1440u + (uint64_t)ds.ds_Minute)
+                 * (uint64_t)(60 * DISCOVERY_TICKS_PER_SEC)
+                 + (uint64_t)ds.ds_Tick;
+    return (uint32_t)t;
+}
+
+
+static void _rl_init(struct rl_bucket *b, int32_t burst, uint32_t now) {
+    b->tokens = burst * RL_SCALE;
+    b->last_tick = now;
+}
+
+
+static void _rl_refill(struct rl_bucket *b, uint32_t now,
+                       int32_t rate_per_sec, int32_t burst) {
+    uint32_t elapsed = now - b->last_tick;
+    if (elapsed == 0) return;
+    b->last_tick = now;
+    int64_t tok = (int64_t)b->tokens
+                  + ((int64_t)elapsed * rate_per_sec * RL_SCALE)
+                    / DISCOVERY_TICKS_PER_SEC;
+    int64_t cap = (int64_t)burst * RL_SCALE;
+    b->tokens = (int32_t)(tok > cap ? cap : tok);
+}
+
+
+/* Find (or make) the bucket for a source address.
+ *
+ * A new source starts with a full burst, so a sender forging a fresh
+ * address per datagram always finds tokens here. That is deliberate:
+ * forged sources are the global budget's problem, and starting new
+ * arrivals empty would instead punish the real machine that just
+ * booted. */
+static struct rl_src *_rl_src_for(uint32_t ip, uint32_t now) {
+    struct rl_src *free_slot = NULL;
+    struct rl_src *oldest = &g_src[0];
+
+    for (int i = 0; i < DISCOVERY_SRC_SLOTS; i++) {
+        struct rl_src *s = &g_src[i];
+        if (s->ip != 0 && s->ip == ip) {
+            s->last_seen = now;
+            return s;
+        }
+        if (s->ip == 0 && !free_slot) free_slot = s;
+        if ((uint32_t)(now - s->last_seen) >
+            (uint32_t)(now - oldest->last_seen)) {
+            oldest = s;
+        }
+    }
+
+    struct rl_src *s = free_slot ? free_slot : oldest;
+    s->ip = ip;
+    s->last_seen = now;
+    _rl_init(&s->b, DISCOVERY_SRC_BURST, now);
+    return s;
+}
+
+
+/* Both budgets have to allow the reply, and only then is either
+ * spent, so a probe one budget refuses does not quietly drain the
+ * other. */
+static int _rl_allow(uint32_t ip, uint32_t now) {
+    struct rl_src *s = _rl_src_for(ip, now);
+    _rl_refill(&s->b, now, DISCOVERY_SRC_RATE, DISCOVERY_SRC_BURST);
+    _rl_refill(&g_global, now, DISCOVERY_GLOBAL_RATE,
+               DISCOVERY_GLOBAL_BURST);
+
+    if (s->b.tokens < RL_SCALE || g_global.tokens < RL_SCALE) return 0;
+    s->b.tokens    -= RL_SCALE;
+    g_global.tokens -= RL_SCALE;
+    return 1;
+}
+
+
+static void _rl_note_drop(uint32_t now) {
+    g_dropped++;
+    if (!g_drop_reported) {
+        g_drop_reported = 1;
+        g_drop_report_tick = now;
+        IExec->DebugPrintF("[MCPd] discovery rate limit engaged\n");
+        return;
+    }
+    if ((uint32_t)(now - g_drop_report_tick)
+        < 60u * DISCOVERY_TICKS_PER_SEC) {
+        return;
+    }
+    g_drop_report_tick = now;
+    IExec->DebugPrintF("[MCPd] discovery dropped=%lu (rate limit)\n",
+                       (unsigned long)g_dropped);
+}
 
 
 /* Bsdsocket interface owned by the discovery task only. */
@@ -143,6 +303,8 @@ static void _discovery_loop(void) {
     host[sizeof(host) - 1] = '\0';
     _sanitize_inplace(host, sizeof(host));
 
+    _rl_init(&g_global, DISCOVERY_GLOBAL_BURST, _now_ticks());
+
     char buf[DISCOVERY_BUF];
     for (;;) {
         struct sockaddr_in peer;
@@ -176,6 +338,14 @@ static void _discovery_loop(void) {
         if (got < DISCOVERY_MIN_PROBE) continue;
         if (!strstr(buf, "\"mcp_discovery\"")) continue;
         if (!strstr(buf, "\"v\"")) continue;
+
+        /* Looks like a probe. Whether we answer it is now a
+         * question of budget - see the reply-budget block above. */
+        uint32_t now = _now_ticks();
+        if (!_rl_allow((uint32_t)peer.sin_addr.s_addr, now)) {
+            _rl_note_drop(now);
+            continue;
+        }
 
         char tag[64] = "";
         _extract_str_field(buf, "tag", tag, sizeof(tag));
