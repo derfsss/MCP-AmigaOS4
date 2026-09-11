@@ -71,6 +71,7 @@ MCPD_HANDLER(fs_makedir);
 MCPD_HANDLER(fs_rename);
 MCPD_HANDLER(fs_protect);
 MCPD_HANDLER(fs_copy);
+MCPD_HANDLER(fs_sync);
 MCPD_HANDLER(fs_hash);
 
 MCPD_HANDLER(exec_cmd);

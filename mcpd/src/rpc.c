@@ -148,6 +148,7 @@ const method_entry mcpd_methods[] = {
     { "fs.rename",          fs_rename,          "Rename / move a file or directory" },
     { "fs.protect",         fs_protect,         "Set protection bits on a path" },
     { "fs.copy",            fs_copy,            "Copy a file (preserves protection + date via CLONE)" },
+    { "fs.sync",            fs_sync,            "Flush a filesystem's cached writes to disk and wait for it (ACTION_FLUSH). params: path (default \"SYS:\"). AmigaOS buffers writes and flushes on its own schedule, so a guest killed or a machine powered off shortly after a write can lose it; call this when the write has to be durable before something abrupt happens. Returns path + flushed." },
     { "fs.hash",            fs_hash,            "Streaming SHA-256 of a file (algo=sha256 only for now)" },
     { "exec.cmd",           exec_cmd,           "Run an AmigaDOS command, capture stdout" },
     { "wb.screens",         wb_screens,         "List public screens (LockIBase walk)" },
