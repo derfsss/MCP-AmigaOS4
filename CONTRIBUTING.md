@@ -26,7 +26,8 @@ file it as a regular issue.
 ```sh
 # Host (Python) side
 cd host
-uv sync                   # or: pip install -e .[dev]
+uv sync                   # installs from the committed uv.lock
+                          # (or: pip install -e .[dev])
 uv run pytest -q
 uv run ruff check src tests
 uv run mypy src

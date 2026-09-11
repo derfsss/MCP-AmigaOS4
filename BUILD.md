@@ -156,9 +156,22 @@ uv sync
 uv run amiga-fleet-mcp --version
 ```
 
-`uv sync` resolves `pyproject.toml`, installs the project plus dev
-dependencies into `.venv/`, and is fully reproducible via
-`uv.lock`.
+`uv sync` installs the project plus dev dependencies into `.venv/`
+from the committed `host/uv.lock`, so you get exactly the versions CI
+tested against. CI runs it with `--frozen`, which additionally fails
+if the lock and `pyproject.toml` have drifted apart.
+
+To take a dependency update deliberately:
+
+```sh
+uv lock --upgrade        # or --upgrade-package <name>
+uv sync
+```
+
+and commit the resulting `uv.lock` with whatever the upgrade required.
+The versions in `pyproject.toml` carry upper bounds on the majors
+(`mcp[cli]<2`, `pydantic<3`) because the server is written against
+those APIs; lifting a bound is a porting change, not a version bump.
 
 ### Using `pip`
 
@@ -196,7 +209,7 @@ by the scripts described in [USAGE.md](USAGE.md).
 
 `.github/workflows/ci.yml` exercises:
 
-- **Host job**: `uv sync` against Python 3.11 / 3.12 / 3.13, then
+- **Host job**: `uv sync --frozen` against Python 3.11 / 3.12 / 3.13, then
   `ruff check src tests`, `mypy src`, and `pytest -q`.
 - **MCPd job**: pulls `walkero/amigagccondocker:os4-gcc11` and runs
   `make all` from the project root mounted at `/src`. The

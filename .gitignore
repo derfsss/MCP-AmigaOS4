@@ -94,7 +94,11 @@ htmlcov/
 /env/
 /ENV/
 .python-version
-uv.lock
+# uv.lock is COMMITTED (host/uv.lock), not ignored. This is an
+# application rather than a library: CI should install exactly
+# what was tested. Leaving it out meant CI resolved fresh on
+# every run, and an unrelated PR failed when mcp 2.0 removed an
+# entry point the server is built on. See issue #4.
 
 # Host-package build / venv dirs — anchored so submodule trees aren't affected.
 /host/.venv/

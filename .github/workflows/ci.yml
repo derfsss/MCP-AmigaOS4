@@ -26,7 +26,11 @@ jobs:
 
       - name: Sync dependencies
         working-directory: host
-        run: uv sync --dev --python ${{ matrix.python-version }}
+        # --frozen: install exactly what host/uv.lock pins, and
+        # fail if the lock and pyproject disagree. Without a
+        # committed lock CI resolved fresh every run, which is how
+        # mcp 2.0 arrived unannounced and failed an unrelated PR.
+        run: uv sync --dev --frozen --python ${{ matrix.python-version }}
 
       - name: Lint (ruff)
         working-directory: host
