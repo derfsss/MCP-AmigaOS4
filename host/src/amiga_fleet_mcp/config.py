@@ -86,6 +86,11 @@ class McpdChannel(BaseModel):
 
     enabled: bool = True
     endpoint: str = "127.0.0.1:4322"
+    # Host-side UDP port for the LAN discovery forwarder. The guest always
+    # binds the fixed discovery port; the HOST port must be unique per
+    # concurrently-running QEMU instance. None => derive from the mcpd host
+    # port (already unique per target) so two qemu targets never collide.
+    discovery_port: int | None = None
 
     @field_validator("endpoint")
     @classmethod

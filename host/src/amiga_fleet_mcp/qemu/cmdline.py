@@ -100,16 +100,25 @@ def build_cmdline(
         "discovery": None,
     }
     if target.channels.mcpd is not None and target.channels.mcpd.enabled:
-        mcpd_host = target.channels.mcpd.port
+        mch = target.channels.mcpd
+        mcpd_host = mch.port
         fwds.append(f"hostfwd=tcp::{mcpd_host}-:{GUEST_PORT_MCPD}")
         ports["mcpd"] = mcpd_host
         # Also forward the UDP discovery port so the host's
-        # `fleet.discover` probe (which sends to 127.0.0.1:4323)
-        # reaches the guest's MCPd discovery responder.
-        fwds.append(
-            f"hostfwd=udp::{GUEST_PORT_DISCOVERY}-:{GUEST_PORT_DISCOVERY}"
+        # `fleet.discover` probe reaches the guest's MCPd discovery
+        # responder. The guest always binds GUEST_PORT_DISCOVERY, but the
+        # HOST-side port must be UNIQUE PER QEMU INSTANCE or two qemu
+        # targets cannot run concurrently (QEMU aborts on a duplicate
+        # hostfwd rule). Default it to the target's already-unique mcpd
+        # host port (TCP mcpd + UDP discovery can share a port number);
+        # an explicit `discovery_port` on the mcpd channel overrides.
+        disc_host = (
+            mch.discovery_port if mch.discovery_port is not None else mcpd_host
         )
-        ports["discovery"] = GUEST_PORT_DISCOVERY
+        fwds.append(
+            f"hostfwd=udp::{disc_host}-:{GUEST_PORT_DISCOVERY}"
+        )
+        ports["discovery"] = disc_host
 
     qmp_arg: str | None = None
     if target.channels.qmp is not None and target.channels.qmp.enabled:
