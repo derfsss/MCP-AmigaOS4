@@ -41,8 +41,10 @@ The full build / install procedure for both pieces lives in
 
 ## Pull requests
 
-- Branch from `main` and keep the diff focused: one logical change
-  per PR.
+- **Branch from `develop` and target `develop`.** That is the active
+  development branch; `main` holds releases and is protected. A PR
+  aimed at `main` has to be rebased before it can land.
+- Keep the diff focused: one logical change per PR.
 - CI must pass on every PR. The CI workflow runs ruff, mypy, pytest
   on Python 3.11 / 3.12 / 3.13, and cross-compiles MCPd in the
   `walkero/amigagccondocker:os4-gcc11` image.
@@ -51,7 +53,10 @@ The full build / install procedure for both pieces lives in
   cleanly.
 - Update the relevant doc (USAGE.md / COMMANDS.md / INSTALL.md)
   when changing the user-visible surface, plus a `CHANGELOG.md`
-  entry under `## Unreleased`.
+  entry under `## Unreleased`. If a new tool needs something the
+  target doesn't have by default, add it to [INSTALL.md § Per-feature
+  prerequisites](INSTALL.md#per-feature-prerequisites) — that table is
+  how users find out why a call returns `NotCapable`.
 - Sign your commits if you can (`git commit -S`); not mandatory.
 
 ## Adding a new MCP tool

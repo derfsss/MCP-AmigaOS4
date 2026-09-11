@@ -61,9 +61,9 @@ no source is vendored into this repository.
 
 | Name | Min version | Licence (SPDX) | Used for |
 |---|---|---|---|
-| `mcp[cli]` | 1.0 | MIT | Model Context Protocol SDK. |
-| `pydantic` | 2.0 | MIT | Configuration and tool-parameter schemas. |
-| `pyserial` | 3.5 | BSD-3-Clause | One-time serial-console bootstrap helper. |
+| `mcp[cli]` | 1.0 (capped below 2.0) | MIT | Model Context Protocol SDK. The server targets the 1.x FastMCP API. |
+| `pydantic` | 2.0 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
+| `pyserial` | 3.5 | BSD-3-Clause | Serial-console bootstrap and the `serial.*` / `power.*` host channels. |
 
 ## AmigaOS shared libraries linked at run time
 
@@ -74,5 +74,8 @@ Listed for completeness and licence transparency.
 | Library | Version | Licence | Notes |
 |---|---|---|---|
 | `bsdsocket.library` | Roadshow 4 or later | proprietary (ships with AmigaOS 4) | TCP / UDP sockets. |
+| `z.library` | 53 or later | zlib (Hyperion port of zlib) | Decompressing `fs.upload` chunks and encoding PNGs for `wb.screenshot`. |
+| `keymap.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Layout-correct typing for `input.type`. |
+| `graphics.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Screen capture for `wb.screenshot`. |
 | `dos.library`, `exec.library`, `intuition.library`, `application.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Standard system libraries. |
 | [`clib4`](https://github.com/AmigaLabs/clib4) (link-time) | 2.1 or later | GPL-2.0 with linking exception | POSIX-shaped C library. |

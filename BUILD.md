@@ -110,7 +110,11 @@ mcpd/
       sys.c             sys.* introspection (23 methods)
       fs.c              fs.* (11 methods)
       exec.c            exec.cmd
-      wb.c              wb.* (4 methods)
+      wb.c              wb.* (4 introspection methods)
+      screen.c          wb.screenshot (ReadPixelArray + PNG encode
+                        through z.library)
+      input.c           input.* (7 methods, keyboard / mouse
+                        injection; gated off by default)
       debug.c           debug.* (5 methods, IDebug-driven)
       events.c          events.{wait,subscribe,unsubscribe,test_emit}
       hwres.c           sys.hardware.{i2c,perfcounters}
@@ -123,6 +127,8 @@ mcpd/
     MCPd-Install        AmigaDOS install script
     MCPd-Uninstall      AmigaDOS uninstall script
     MCPd-Watchdog       relaunch wrapper
+    MCPd-Enable-Input   opens the input.* gate (operator action)
+    MCPd-Disable-Input  closes it again
   third-party/cjson     cJSON 1.7.18 (submodule)
 ```
 
@@ -219,10 +225,16 @@ internal policy, in brief:
 Currently the only third-party dependency in MCPd is **cJSON 1.7.18**,
 included as a clean upstream submodule (strategy (c)).
 
-## Source-of-truth statement
+## Source of truth
 
-The `mcpd/` and `host/` source trees are the authoritative description
-of behaviour. The Markdown documents in this repository capture
-intent, history, and architectural decisions — they are not
-authoritative for the current API surface. Inspect the source code,
-or query the running daemon via `proto.capabilities`, when in doubt.
+The `mcpd/` and `host/` source trees define behaviour. Where a
+document and the code disagree, the code is right — and the quickest
+way to settle a question about a *running* system is to ask it:
+
+```sh
+uv run amiga-fleet-mcp --list-tools     # the live host tool surface
+```
+
+`proto.capabilities` reports the daemon's own method list, payload
+limits, build metadata, and detected board, derived at runtime rather
+than from a hand-maintained table.

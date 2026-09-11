@@ -37,7 +37,13 @@ operator. In particular:
   shut down the box from MCP. This bypasses the daemon entirely
   and works regardless of AOS state. Treat the host workstation
   running `amiga-fleet-mcp` with cable attached as having physical
-  power-button access to the target.
+  power-button access to the target. One operational caveat: while a
+  board is powered **off**, only `power.on` and `power.off` are safe
+  to send. The other MCU shell commands (`power.identify`,
+  `power.sensors`, `power.help`, `power.toggle_stream`,
+  `power.shell`) can leave a cold MCU unresponsive to everything,
+  recoverable only by cutting mains power to the PSU for about a
+  minute. Boot the board first, then query it.
 - **Keyboard / mouse injection is off by default**: the `input.*`
   methods (`input.type`, `input.key`, `input.click`, `input.drag`,
   `input.mouse_move`, `input.scroll`, `input.state`) let a remote

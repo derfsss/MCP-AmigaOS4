@@ -28,7 +28,7 @@ or, with a local `ppc-amigaos-gcc` toolchain:
 make all
 ```
 
-The resulting `MCPd` ELF (~190 KiB PowerPC) lands beside the source
+The resulting `MCPd` ELF (~300 KiB PowerPC) lands beside the source
 files. See [BUILD.md](../BUILD.md) for prerequisites and details.
 
 ## Source layout
@@ -51,6 +51,10 @@ src/
     fs.c               fs.* filesystem operations (11 methods)
     exec.c             exec.cmd
     wb.c               wb.* Workbench / Intuition queries
+    screen.c           wb.screenshot (ReadPixelArray + PNG encode
+                       via z.library)
+    input.c            input.* keyboard / mouse injection --
+                       DISABLED unless the operator opens the gate
     debug.c            debug.* per-task IDebug-driven helpers
     events.c           events.* long-poll and server-push
     hwres.c            sys.hardware.{i2c,perfcounters}
@@ -63,13 +67,19 @@ install/
   MCPd-Install         AmigaDOS install script
   MCPd-Uninstall       AmigaDOS uninstall script
   MCPd-Watchdog        relaunch-on-exit wrapper
+  MCPd-Enable-Input    open the input.* gate (operator action)
+  MCPd-Disable-Input   close it again
 ```
+
+59 JSON-RPC methods in total. `COMMANDS.md` documents every one.
 
 ## Direct command-line invocation
 
 ```
 MCPd                  ; default :4322
 MCPd --port 4421      ; override port
+MCPd --enable-input   ; allow input.* -- off by default, and NOT
+                      ; persistent; see SECURITY.md
 MCPd --version
 ```
 
@@ -117,9 +127,18 @@ Read the beacon with any of:
 - a serial capture of the debug UART — `serial.*` on real hardware,
   or QEMU's `-serial stdio` log with `debuglevel=1`
 
-Note that `sys.debug_ring` reaches `DumpDebugBuffer` *through* MCPd,
-so it cannot be used to detect a daemon that failed to start. For
-that, read the serial capture, which does not depend on the daemon.
+Two limits are worth knowing:
+
+- `sys.debug_ring` reaches `DumpDebugBuffer` *through* MCPd, so it
+  cannot detect a daemon that failed to start. Use the serial
+  capture, which does not depend on the daemon.
+- **The AmigaOS debug buffer does not wrap.** Once full it stops
+  accepting entries, so on a machine whose buffer is exhausted before
+  MCPd starts — a verbose graphics driver can fill it during boot —
+  no beacon appears there at all. Compare `raw_size` across two
+  `sys.debug_ring` calls: no growth on an active machine means the
+  buffer is full, not that the system is quiet. Serial capture is
+  unaffected.
 
 Build date comes from the `$VER` cookie; build time is a separate
 `MCPD_TIME` macro. Time is deliberately excluded from `$VER` because
