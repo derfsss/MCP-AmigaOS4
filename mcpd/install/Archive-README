@@ -1,0 +1,73 @@
+MCPd 1.3 - the AmigaOS 4 daemon for MCP-AmigaOS4
+================================================
+
+MCPd lets an MCP-aware client on another machine drive this Amiga:
+browse and edit files, run AmigaDOS commands, read live system state,
+capture the screen, and more. It listens on TCP port 4322, with a UDP
+discovery responder on 4323.
+
+This archive was assembled on AmigaOS, so every file already carries
+the right protection bits. Unpack it with LhA and the binary is
+runnable as-is - no Protect needed:
+
+    LhA x MCPd-1.3.lha
+
+
+Installing
+----------
+
+From a Shell, in the directory this archive unpacked into:
+
+    Execute MCPd/MCPd-Install
+
+That copies MCPd to SYS:System/MCPd/, installs the watchdog wrapper,
+backs up S:Network-Startup, and adds a launch line so the daemon
+starts on boot. Reboot, or start it straight away with:
+
+    Run >NIL: <NIL: SYS:System/MCPd/MCPd
+
+To remove it again:
+
+    Execute SYS:System/MCPd/MCPd-Uninstall
+
+
+What is in here
+---------------
+
+    MCPd                  the daemon (PowerPC ELF)
+    MCPd-Install          install + register for auto-start
+    MCPd-Uninstall        undo the above
+    MCPd-Watchdog         relaunch wrapper, used by the auto-start
+    MCPd-Enable-Input     allow keyboard / mouse injection
+    MCPd-Disable-Input    disallow it again
+
+
+Before you enable input injection
+---------------------------------
+
+MCPd has NO authentication on its listener. Anyone who can reach port
+4322 can read and write any file this machine can see, and run
+AmigaDOS commands. Run it on a trusted, private network only.
+
+Keyboard and mouse injection is the one part that is off until you
+switch it on, because it types and clicks as the logged-in user in
+whatever window has focus. MCPd-Enable-Input opens that gate and
+prints a warning first; the setting is read once at daemon startup,
+so restart MCPd afterwards.
+
+
+Requirements
+------------
+
+    AmigaOS 4.1 Final Edition
+    bsdsocket.library (Roadshow)
+    z.library 53+ (ships with Update 2 and later) - used for
+      compressed uploads and for screen capture
+
+
+Documentation and source
+------------------------
+
+    https://github.com/derfsss/MCP-AmigaOS4
+
+BSD 3-Clause licensed. Copyright (c) 2026 Richard Gibbs.

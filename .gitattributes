@@ -1,0 +1,15 @@
+# Files that get shipped to an AmigaOS machine byte-for-byte must keep
+# LF line endings, whatever the checkout platform does by default.
+#
+# The install scripts and the archive README are uploaded to targets
+# exactly as they sit in the working tree. Checked out on Windows with
+# the usual autocrlf, they gain CRLF, which puts a stray carriage
+# return on the end of every AmigaDOS script line and shows up as ^M
+# in Amiga text viewers.
+mcpd/install/*      text eol=lf
+
+# The daemon sources are cross-compiled from the working tree by the
+# Docker toolchain; keep them LF for the same reason a Unix-side build
+# would expect.
+mcpd/src/**         text eol=lf
+mcpd/Makefile       text eol=lf

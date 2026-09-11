@@ -472,8 +472,37 @@ eleven seconds of cold boot.
 
 ### Manual install (no host helper)
 
-Copy `mcpd/MCPd` and the scripts from `mcpd/install/` onto the
-target, then from a Shell on the target:
+The simplest route is the release archive. Download
+`MCPd-<version>.lha` from the [latest
+release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) onto
+the Amiga and, from a Shell:
+
+```
+LhA x MCPd-1.3.lha
+Execute MCPd/MCPd-Install
+```
+
+The archive is assembled on AmigaOS, so every file already carries the
+right protection bits — the daemon is runnable the moment it is
+extracted.
+
+**Why that matters.** AmigaOS protection bits are a property of the
+file, not of its contents, and no cross-platform container preserves
+them. A bare `MCPd` ELF fetched from the release page and moved onto
+the Amiga over SMB, a USB stick, or a browser download arrives with
+the `e` (executable) bit protected, and the daemon then refuses to run
+for a reason that looks nothing like the cause. If you do transfer the
+bare binary that way, fix it by hand:
+
+```
+Protect SYS:System/MCPd/MCPd +rwed
+```
+
+`MCPd-Install` and `scripts/install_mcpd_autostart.py` both set the
+bits themselves, so only manual copies need this.
+
+Alternatively, copy `mcpd/MCPd` and the scripts from `mcpd/install/`
+onto the target yourself, then:
 
 ```
 CD <directory containing the files>

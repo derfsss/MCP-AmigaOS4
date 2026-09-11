@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **`scripts/build_release_lha.py`** — assembles the MCPd release
+  archive on an AmigaOS target (a QEMU guest will do), so the AmigaOS
+  protection bits are already correct in the file users download.
+  Protection bits belong to the file rather than the byte stream, and
+  no cross-platform container preserves them: a bare ELF moved onto an
+  Amiga over SMB, a USB stick, or a browser download arrives with the
+  executable bit protected and refuses to run. The script stages the
+  daemon, the install scripts and a README, sets the executable and
+  script bits, runs `LhA`, then extracts the archive again and checks
+  the flags came back before accepting it. `MCPd-1.3.lha` is attached
+  to the v1.3 release.
+
 ### Changed
 
 - Documentation pass across the README and everything it links to,
