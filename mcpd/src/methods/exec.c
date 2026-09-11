@@ -149,7 +149,7 @@ int exec_cmd(cJSON *params, cJSON **out_result, cJSON **out_err) {
         dir_swapped = 1;
     }
 
-    /* Streaming mode (#9 / §19.3 P1 #8): when stream=true, run the
+    /* Streaming mode: when stream=true, run the
      * command async + emit proc.stdout notifications as bytes arrive.
      * Non-streaming path (default) keeps the existing
      * one-shot-capture behaviour for backward compat. */

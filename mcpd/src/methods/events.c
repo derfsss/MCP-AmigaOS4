@@ -261,7 +261,7 @@ int events_wait(cJSON *params, cJSON **out_result, cJSON **out_err) {
  * in main.c::client_task_entry). Looking it up gives each connected
  * client its own subscription mask + baseline + synthetic slot, so
  * subscribe/wait semantics stop colliding when 2+ clients are
- * connected. (§19.3 P1 #7 v2 / API tidy #8.) */
+ * connected. */
 
 #include "../conn_ctx.h"
 

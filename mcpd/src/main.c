@@ -229,12 +229,12 @@ extern int crashhook_drain(int sock);
  * (events.subscribe topics that changed) + drain the crash hook.
  * Returns when the client disconnects or a frame error occurs.
  *
- * Multi-client note (sec 19.3 P1 #7): this runs in a child Process
+ * Multi-client note: this runs in a child Process
  * spawned per accepted connection. The crashhook signal mask is
  * NOT used here because the AllocSignal'd bit lives in the parent
  * task; children would need their own bit. Polling the crash flag
- * at every 200 ms timeout is sufficient (latency tradeoff
- * documented in sec 19). The function uses _isk() inside frame.c via
+ * at every 200 ms timeout is sufficient. The function uses
+ * _isk() inside frame.c via
  * tc_UserData so each child uses its own per-task ISocket. */
 static void handle_connection(int sock) {
     /* Pull our task-local ISocket out of conn_ctx for the WaitSelect
@@ -292,7 +292,7 @@ static void handle_connection(int sock) {
     }
 }
 
-/* ---- multi-client (sec 19.3 P1 #7): spawn-per-connection worker -- */
+/* ---- multi-client: spawn-per-connection worker ---------------- */
 
 /* Entry point for a per-connection child Process spawned via
  * CreateNewProcTags. The inherited socket id is passed through
@@ -611,7 +611,7 @@ int main(int argc, char **argv) {
                        (unsigned long)port,
                        input_is_enabled() ? "on" : "off");
 
-    /* Multi-client (sec 19.3 P1 #7): the parent task does nothing but
+    /* Multi-client: the parent task does nothing but
      * accept + spawn. Each child Process owns its own connection
      * lifecycle. The single-client wedge that bit us when an old
      * client's socket was still open while a new one tried to

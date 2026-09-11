@@ -13,7 +13,7 @@
 
 #include "conn_ctx.h"
 
-/* Parent-task fallback. Multi-client (§19.3 P1 #7) child tasks open
+/* Parent-task fallback. Multi-client child tasks open
  * their own bsdsocket interface and stash it in tc_UserData via a
  * conn_ctx struct - bsdsocket maintains task-local state, so the
  * parent's interface pointer can't be reused from a child task.

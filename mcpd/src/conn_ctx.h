@@ -1,6 +1,6 @@
 /* conn_ctx.h - per-connection task-local state for multi-client MCPd.
  *
- * §19.3 P1 #7. Each accepted TCP connection runs in its own AOS4
+ * Each accepted TCP connection runs in its own AOS4
  * Process spawned via CreateNewProcTags. Because bsdsocket.library
  * maintains task-local socket tables, every child Process must open
  * its own SocketBase + ISocket interface; reusing the parent's
@@ -11,7 +11,7 @@
  *
  * Lifetime: the struct lives on the child task's stack inside its
  * entry function, so it's valid for the entire connection lifetime.
- * The parent task's tc_UserData is NULL → frame.c falls back to
+ * The parent task's tc_UserData is NULL, so frame.c falls back to
  * the global ISocket (used by the listen socket).
  */
 #ifndef MCPD_CONN_CTX_H
@@ -21,8 +21,8 @@
 #include <proto/bsdsocket.h>
 #include <exec/tasks.h>
 
-/* Per-task events.* subscription state (§19.3 P1 #7 v2 / API tidy
- * #8). Was a single `_evs` global in events.c which meant only one
+/* Per-task events.* subscription state. Was a single `_evs`
+ * global in events.c, which meant only one
  * (random) connected client received each notification. Lives here
  * so each spawned worker has its own subscription mask, baseline,
  * and synthetic-notification slot. */
