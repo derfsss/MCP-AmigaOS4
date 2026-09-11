@@ -155,7 +155,21 @@ static void close_socket_lib(void) {
     SocketBase = NULL;
 }
 
-static int make_listen_socket(uint16_t port) {
+/* Create and BIND the listener, but do not accept yet.
+ *
+ * Binding early is what makes "this port is already taken" a fast,
+ * unambiguous failure before the daemon builds anything else. Calling
+ * listen() early is a different matter: between listen() and the end
+ * of startup, the OS completes handshakes on the daemon's behalf, so
+ * a client can connect and send an RPC while the crash hook, the
+ * application registration and the input gate are still being set up.
+ *
+ * That window is why the host carries a "warmup" that fires throwaway
+ * requests at a freshly booted daemon -- it exists to absorb replies
+ * that arrive from a half-built one. Closing the window here is the
+ * fix the workaround was standing in for. `start_listening()` below
+ * is called once everything else is ready. */
+static int make_bound_socket(uint16_t port) {
     int s = ISocket->socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) {
         IDOS->Printf("MCPd: socket() failed\n");
@@ -187,12 +201,18 @@ static int make_listen_socket(uint16_t port) {
         ISocket->CloseSocket(s);
         return -1;
     }
+    return s;
+}
+
+
+/* Start accepting. Deliberately separate from the bind above: nothing
+ * may connect until every subsystem a request could touch is up. */
+static int start_listening(int s) {
     if (ISocket->listen(s, BACKLOG) != 0) {
         IDOS->Printf("MCPd: listen() failed\n");
-        ISocket->CloseSocket(s);
         return -1;
     }
-    return s;
+    return 0;
 }
 
 extern int events_emit_pending(int sock);
@@ -209,12 +229,12 @@ extern int crashhook_drain(int sock);
  * (events.subscribe topics that changed) + drain the crash hook.
  * Returns when the client disconnects or a frame error occurs.
  *
- * Multi-client note (§19.3 P1 #7): this runs in a child Process
+ * Multi-client note (sec 19.3 P1 #7): this runs in a child Process
  * spawned per accepted connection. The crashhook signal mask is
  * NOT used here because the AllocSignal'd bit lives in the parent
  * task; children would need their own bit. Polling the crash flag
  * at every 200 ms timeout is sufficient (latency tradeoff
- * documented in §19). The function uses _isk() inside frame.c via
+ * documented in sec 19). The function uses _isk() inside frame.c via
  * tc_UserData so each child uses its own per-task ISocket. */
 static void handle_connection(int sock) {
     /* Pull our task-local ISocket out of conn_ctx for the WaitSelect
@@ -272,7 +292,7 @@ static void handle_connection(int sock) {
     }
 }
 
-/* ---- multi-client (§19.3 P1 #7): spawn-per-connection worker -- */
+/* ---- multi-client (sec 19.3 P1 #7): spawn-per-connection worker -- */
 
 /* Entry point for a per-connection child Process spawned via
  * CreateNewProcTags. The inherited socket id is passed through
@@ -508,10 +528,12 @@ int main(int argc, char **argv) {
      * an explicit InvalidParams. */
     (void)open_z_lib();
 
-    int listen_sock = make_listen_socket(port);
+    /* Bind now so a port clash fails immediately, before any of the
+     * subsystems below are built. Accepting comes later. */
+    int listen_sock = make_bound_socket(port);
     if (listen_sock < 0) {
         IExec->DebugPrintF("[MCPd] startup_failed version=%s "
-                           "reason=listen port=%lu\n",
+                           "reason=bind port=%lu\n",
                            MCPD_VERSION, (unsigned long)port);
         close_z_lib();
         close_socket_lib();
@@ -522,12 +544,6 @@ int main(int argc, char **argv) {
     int method_count = 0;
     for (const method_entry *m = mcpd_methods; m->name != NULL; m++) {
         method_count++;
-    }
-
-    /* Spawn the LAN-discovery responder peer task. Best-effort:
-     * a discovery failure doesn't take MCPd down. */
-    if (discovery_start(method_count, port) != 0) {
-        IDOS->Printf("MCPd: discovery responder failed to start\n");
     }
 
     /* Register with application.library so MCPd shows up in AmiDock
@@ -549,6 +565,27 @@ int main(int argc, char **argv) {
      * from this point on, so the children see it without locking and
      * no RPC can flip it at runtime. Prints its own banner. */
     input_init_gate(enable_input);
+
+    /* Everything an incoming request could reach is now up, so it is
+     * safe to let the OS complete handshakes on our behalf. */
+    if (start_listening(listen_sock) != 0) {
+        IExec->DebugPrintF("[MCPd] startup_failed version=%s "
+                           "reason=listen port=%lu\n",
+                           MCPD_VERSION, (unsigned long)port);
+        ISocket->CloseSocket(listen_sock);
+        applib_shutdown();
+        close_z_lib();
+        close_socket_lib();
+        return 1;
+    }
+
+    /* Spawn the LAN-discovery responder peer task only now: a
+     * discovery reply is an invitation to connect, and answering one
+     * we cannot yet serve is the same race in a longer form.
+     * Best-effort - a discovery failure doesn't take MCPd down. */
+    if (discovery_start(method_count, port) != 0) {
+        IDOS->Printf("MCPd: discovery responder failed to start\n");
+    }
 
     IDOS->Printf("MCPd %s listening on :%lu (Ctrl-C to stop)\n",
                  MCPD_VERSION, (unsigned long)port);
@@ -574,7 +611,7 @@ int main(int argc, char **argv) {
                        (unsigned long)port,
                        input_is_enabled() ? "on" : "off");
 
-    /* Multi-client (§19.3 P1 #7): the parent task does nothing but
+    /* Multi-client (sec 19.3 P1 #7): the parent task does nothing but
      * accept + spawn. Each child Process owns its own connection
      * lifecycle. The single-client wedge that bit us when an old
      * client's socket was still open while a new one tried to
