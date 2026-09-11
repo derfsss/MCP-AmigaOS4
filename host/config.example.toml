@@ -18,13 +18,17 @@
 log_level     = "info"                   # debug | info | warn | error
 log_dir       = "<absolute path to a writable log directory>"
 archive_root  = "<absolute path to a writable archive directory>"
-# How many past run directories to keep under archive_root,
-# and how many QEMU serial logs to keep per target. Neither
-# was pruned before and both grow without limit -- serial
-# logs in particular run to hundreds of megabytes per boot
-# with kernel debug enabled. Comment out to keep everything.
-archive_keep_runs = 50
-serial_log_keep   = 20
+# Retention. Neither the run archive nor the QEMU serial logs
+# were pruned before and both grow without limit -- serial logs
+# in particular run to hundreds of megabytes per boot with
+# kernel debug enabled. Comment a line out to keep everything.
+#
+# serial_log_max_total_mb is a size budget per target, because a
+# count alone does not bound the disk: twenty logs of 150 MB is
+# still 3 GB. Oldest go first; the newest is never deleted.
+archive_keep_runs        = 50
+serial_log_keep          = 20
+serial_log_max_total_mb  = 512
 mcp_transport = "stdio"                  # stdio | sse | streamable-http
 # mcp_http_addr = "127.0.0.1:7180"       # only set when mcp_transport != "stdio"
 

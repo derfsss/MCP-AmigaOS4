@@ -30,6 +30,12 @@ class ServerConfig(BaseModel):
     #: per `qemu.start` and they are never small -- a chatty boot with
     #: kernel debug on runs to hundreds of megabytes. None disables.
     serial_log_keep: int | None = 20
+    #: Total size budget for those logs, per target, in megabytes.
+    #: A count on its own does not bound the disk: twenty logs of
+    #: 150 MB is still 3 GB. Oldest are deleted first, and the newest
+    #: is never touched -- a running guest is probably writing to it.
+    #: None disables the size budget and leaves only the count.
+    serial_log_max_total_mb: int | None = 512
     mcp_transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
     mcp_http_addr: str = "127.0.0.1:7180"
     # When set, MCP tool calls that omit `target` resolve to this

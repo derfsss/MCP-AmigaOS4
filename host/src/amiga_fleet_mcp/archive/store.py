@@ -121,30 +121,73 @@ def prune_runs(root: Path, keep: int) -> list[Path]:
     return removed
 
 
-def prune_logs(directory: Path, keep: int, pattern: str = "*.log") -> list[Path]:
-    """Keep the newest `keep` log files in `directory`.
+def prune_logs(
+    directory: Path,
+    keep: int,
+    pattern: str = "*.log",
+    max_total_bytes: int | None = None,
+) -> list[Path]:
+    """Bound the QEMU serial logs in `directory` by count and by size.
 
     QEMU writes its serial output straight to a file descriptor, one
     new file per launch, for the life of the guest. A chatty boot with
     kernel debug enabled produces well over 100 MB, and nothing ever
-    removed the old ones: 2.8 GB of them on one machine. Capping the
-    count is what can be done from outside the writer; capping an
-    individual file would need to sit between QEMU and the disk.
+    removed the old ones: 2.8 GB of them on one machine.
+
+    Capping an individual file would mean sitting between QEMU and the
+    disk, which we don't; truncating one it holds open reclaims nothing
+    and corrupts what is left. What can be done from outside the writer
+    is to bound the collection, and a count on its own does not do that
+    -- twenty logs of 150 MB is still 3 GB. So `keep` bounds how many
+    and `max_total_bytes` bounds how much, oldest deleted first.
+
+    The newest file is never deleted: it is the one a running guest is
+    most likely still writing to.
     """
-    if keep <= 0 or not directory.is_dir():
+    if not directory.is_dir():
         return []
+    if keep <= 0 and max_total_bytes is None:
+        return []
+
     files = sorted(
         (f for f in directory.glob(pattern) if f.is_file()),
         key=lambda f: f.stat().st_mtime,
     )
+    if not files:
+        return []
+
+    doomed: list[Path] = []
+    if keep > 0 and len(files) > keep:
+        doomed = files[:-keep]
+
+    if max_total_bytes is not None:
+        # Oldest first, stopping before the newest, until the survivors
+        # fit the budget.
+        survivors = [f for f in files if f not in doomed]
+        total = sum(_size_or_zero(f) for f in survivors)
+        for f in survivors[:-1]:
+            if total <= max_total_bytes:
+                break
+            total -= _size_or_zero(f)
+            doomed.append(f)
+
     removed: list[Path] = []
-    for f in files[:-keep] if len(files) > keep else []:
+    for f in doomed:
         try:
             f.unlink()
             removed.append(f)
         except OSError:
+            # Most likely the live log on Windows, where the running
+            # QEMU holds it open. Leaving it is the correct outcome.
             pass
     return removed
+
+
+def _size_or_zero(f: Path) -> int:
+    try:
+        return f.stat().st_size
+    except OSError:
+        return 0
 
 
 def _default_encoder(o: Any) -> Any:

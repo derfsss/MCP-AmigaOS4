@@ -149,3 +149,70 @@ def test_prune_logs_leaves_other_files_alone(tmp_path: Path) -> None:
 
 def test_prune_logs_handles_a_missing_directory(tmp_path: Path) -> None:
     assert prune_logs(tmp_path / "nope", keep=3) == []
+
+
+# ---- serial log size budget -----------------------------------------
+#
+# A count is not a bound on the disk. Twenty logs of 150 MB is 3 GB,
+# which is how the 2.8 GB in the module docstring accumulated under a
+# retention policy that was already "working".
+
+
+def _make_logs(root: Path, sizes: list[int]) -> list[Path]:
+    """Oldest first, one byte of content per unit of `sizes`."""
+    import os
+    out = []
+    for i, n in enumerate(sizes):
+        f = root / f"{1700000000 + i}.log"
+        f.write_bytes(b"x" * n)
+        os.utime(f, (1700000000 + i, 1700000000 + i))
+        out.append(f)
+    return out
+
+
+def test_size_budget_deletes_oldest_until_it_fits(tmp_path: Path) -> None:
+    _make_logs(tmp_path, [100, 100, 100, 100])
+    prune_logs(tmp_path, keep=10, max_total_bytes=250)
+    left = sorted(f.name for f in tmp_path.glob("*.log"))
+    assert left == ["1700000002.log", "1700000003.log"]
+
+
+def test_the_newest_log_is_never_deleted(tmp_path: Path) -> None:
+    """It is the one a running guest is probably still writing to, and
+    on Windows the unlink would fail anyway -- better to be explicit
+    than to rely on the OS refusing."""
+    _make_logs(tmp_path, [10_000])
+    prune_logs(tmp_path, keep=10, max_total_bytes=1)
+    assert [f.name for f in tmp_path.glob("*.log")] == ["1700000000.log"]
+
+
+def test_a_single_oversized_log_survives_alongside_the_newest(
+    tmp_path: Path,
+) -> None:
+    _make_logs(tmp_path, [500, 500])
+    prune_logs(tmp_path, keep=10, max_total_bytes=100)
+    # The older one goes; the newest stays whatever its size.
+    assert [f.name for f in tmp_path.glob("*.log")] == ["1700000001.log"]
+
+
+def test_budget_and_count_compose(tmp_path: Path) -> None:
+    """Count trims first, then the budget trims what is left -- and a
+    file must not be deleted twice or counted after removal."""
+    _make_logs(tmp_path, [100] * 6)
+    removed = prune_logs(tmp_path, keep=4, max_total_bytes=250)
+    assert len(removed) == len(set(removed)) == 4
+    left = sorted(f.name for f in tmp_path.glob("*.log"))
+    assert left == ["1700000004.log", "1700000005.log"]
+
+
+def test_no_budget_leaves_count_behaviour_unchanged(tmp_path: Path) -> None:
+    _make_logs(tmp_path, [10_000] * 3)
+    assert prune_logs(tmp_path, keep=3) == []
+    assert len(list(tmp_path.glob("*.log"))) == 3
+
+
+def test_budget_alone_works_with_keep_disabled(tmp_path: Path) -> None:
+    _make_logs(tmp_path, [100] * 4)
+    prune_logs(tmp_path, keep=0, max_total_bytes=150)
+    left = sorted(f.name for f in tmp_path.glob("*.log"))
+    assert left == ["1700000003.log"]

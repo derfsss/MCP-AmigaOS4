@@ -10,9 +10,14 @@
   machine stops abruptly. `qemu.stop` calls it automatically; call it
   directly before a cold reboot or cutting power. 137 → 138 tools,
   59 → 60 daemon methods.
-- **Archive retention** — `[server] archive_keep_runs` (default 50)
-  and `serial_log_keep` (default 20 per target). Neither was pruned
-  before; one development machine had accumulated 3.2 GB.
+- **Archive retention** — `[server] archive_keep_runs` (default 50),
+  `serial_log_keep` (default 20 per target) and
+  `serial_log_max_total_mb` (default 512 per target). Neither the run
+  archive nor the serial logs were pruned before; one development
+  machine had accumulated 3.2 GB. A count alone is not a bound on the
+  disk — twenty logs of 150 MB is still 3 GB — so the serial logs
+  also have a size budget, oldest deleted first. The newest is never
+  deleted: a running guest is probably still writing to it.
 - **`qemu.status` reports `owned`** — whether *this* process holds the
   QEMU handle, as distinct from whether a guest is running at all.
 - **`power.*` refuses query commands on a board that looks powered
@@ -21,6 +26,10 @@
   unresponsive until the PSU is switched off at the mains.
 - **`sandbox.last_trap` reports `ring_usable`** — `found=False` with
   `ring_usable=False` means "cannot tell", not "no trap".
+- **`sandbox.run_batch` reports `ring_usable` and per-entry
+  `exit_code_known`** — the same distinction for per-guest exit codes,
+  which are read from the same debug ring. `aggregate_exit_code` comes
+  from SandboxVM itself and stays trustworthy either way.
 
 ### Fixed
 
@@ -37,7 +46,21 @@
 - **The discovery responder answered any datagram**, making it a ~7x
   UDP amplifier aimed at whatever return address a sender chose. A
   probe must now be at least 64 bytes and carry the `v` field, which
-  the host's own 77-byte probe always has.
+  the host's own 77-byte probe always has, and replies are bounded by
+  a global budget (24 burst, 8/s) with a per-source budget (4 burst,
+  1/s) underneath it. A forged source address defeats per-source
+  limiting by design, which is why the global ceiling is the one that
+  matters; the per-source one stops a single real host spending it.
+  Measured on a guest: 200 probes at once now draw 4 replies, while a
+  normal `fleet.discover` and a once-a-second poll are untouched.
+- **The daemon accepted connections before it could serve them.**
+  `listen()` ran before discovery, `application.library`
+  registration, the crash hook and the input gate were set up, so a
+  client could connect and get a reply shaped by a half-built daemon.
+  The socket is still bound early — a port clash should fail fast —
+  but nothing is accepted until every subsystem a request could reach
+  is up. The host-side warmup stays, since it is what lets a 1.4 host
+  talk to the 1.2 and 1.3 daemons already deployed.
 - **`qemu.stop` could discard the guest's most recent writes** — it
   now flushes first via `fs.sync`.
 - **`qemu.stop` / `qemu.status` reported a running guest as stopped**
