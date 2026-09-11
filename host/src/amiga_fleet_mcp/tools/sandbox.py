@@ -973,6 +973,14 @@ class LastTrapResult(BaseModel):
 
     target: str
     found: bool
+    #: Whether the debug ring is actually reporting on this daemon.
+    #: The AmigaOS kernel debug buffer does not wrap -- once full it
+    #: stops accepting entries -- so on a machine whose buffer filled
+    #: during boot (a verbose graphics driver will do it) nothing MCPd
+    #: or SandboxVM emits ever lands there. `found=False` with
+    #: `ring_usable=False` means "cannot tell", NOT "no trap": treat
+    #: it as unknown and read a serial capture instead.
+    ring_usable: bool = True
     trap_kind: str | None = None
     """One of DSI / ISI / alignment / program / fp_unavailable when
     the ring contained a recognised trap line."""
@@ -1105,8 +1113,11 @@ async def sandbox_last_trap(
     `since_s` and `max_lines` are forwarded to `sys.debug_ring`.
 
     Returns an empty `found=False` result when no trap signature is
-    visible after all retries — that's the genuine "no trap to
-    report" case, not an error."""
+    visible after all retries — but check `ring_usable` before reading
+    that as "no trap". The AmigaOS debug buffer does not wrap, so on a
+    machine whose buffer filled during boot the ring contains nothing
+    from MCPd or SandboxVM at all and cannot report a trap that did
+    happen. `ring_usable=False` means the answer is unknown."""
     if retry_count < 1:
         retry_count = 1
     if retry_delay_s < 0:
@@ -1128,6 +1139,7 @@ async def sandbox_last_trap(
             return LastTrapResult(
                 target=target,
                 found=True,
+                ring_usable=True,
                 trap_kind=kind,
                 fingerprint=fp,
                 traptype_hex=hex_str,
@@ -1138,9 +1150,26 @@ async def sandbox_last_trap(
         if attempt + 1 < retry_count:
             await asyncio.sleep(retry_delay_s)
 
+    # Nothing found -- but "nothing happened" and "the ring cannot
+    # tell you" are opposite conclusions, and until now both returned
+    # found=False.
+    #
+    # The AmigaOS kernel debug buffer does not wrap: once full it stops
+    # accepting entries. On a real X5000 the graphics driver fills all
+    # ~80 KB of it during boot, before MCPd starts, so the ring holds
+    # no daemon output at all and never will until a reboot. A caller
+    # reading found=False there concludes the guest ran clean, when it
+    # may have died on a DSI.
+    #
+    # If the ring holds no trace of either MCPd or SandboxVM, it is not
+    # reporting on this daemon and should say so rather than implying
+    # calm.
+    ring_usable = any(("[MCPd]" in ln) or ("[sandboxvm]" in ln)
+                      for ln in last_lines)
     return LastTrapResult(
         target=target,
         found=False,
+        ring_usable=ring_usable,
         captured_at=last_captured_at,
         attempts=attempts,
     )
