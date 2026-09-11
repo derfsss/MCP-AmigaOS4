@@ -1,6 +1,6 @@
 # Change log
 
-## Unreleased
+## Unreleased — becomes v1.4
 
 ### Fixed
 
