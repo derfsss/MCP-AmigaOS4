@@ -216,3 +216,22 @@ def test_budget_alone_works_with_keep_disabled(tmp_path: Path) -> None:
     prune_logs(tmp_path, keep=0, max_total_bytes=150)
     left = sorted(f.name for f in tmp_path.glob("*.log"))
     assert left == ["1700000003.log"]
+
+
+def test_a_disabled_count_with_a_budget_still_prunes(tmp_path: Path) -> None:
+    """`serial_log_keep = None` with a budget set.
+
+    qemu.start passes `keep or 0` in that case, which reads like a
+    typo-guard but is load-bearing: it has to mean "no count limit",
+    not "keep nothing". The budget must still apply.
+    """
+    _make_logs(tmp_path, [100] * 8)
+    prune_logs(tmp_path, keep=0, max_total_bytes=350)
+    left = sorted(f.name for f in tmp_path.glob("*.log"))
+    assert left == ["1700000005.log", "1700000006.log", "1700000007.log"]
+
+
+def test_neither_limit_set_deletes_nothing(tmp_path: Path) -> None:
+    _make_logs(tmp_path, [100] * 5)
+    assert prune_logs(tmp_path, keep=0) == []
+    assert len(list(tmp_path.glob("*.log"))) == 5
