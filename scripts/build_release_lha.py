@@ -82,8 +82,10 @@ async def rm(fleet: Fleet, target: str, path: str, *,
     AmigaDOS `Delete` returns a warning (5) for a missing object even
     with QUIET, so the tidy-up calls must not treat that as failure.
     """
+    # Quoted: an AmigaOS path may legitimately contain a space
+    # ("RAM Disk:" being the one everybody has).
     await sh(fleet, target,
-             f'Delete >NIL: {path}{" ALL" if all_ else ""} QUIET',
+             f'Delete >NIL: "{path}"{" ALL" if all_ else ""} QUIET',
              allow_fail=True)
 
 
