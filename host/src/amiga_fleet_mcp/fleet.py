@@ -91,6 +91,16 @@ class Fleet:
         self._mcpd[name] = t
         return t
 
+    def mcpd_if_connected(self, name: str) -> McpdTransport | None:
+        """The MCPd transport for `name` only if one already exists.
+
+        Unlike `mcpd()`, this never creates one. Callers that want to
+        inspect connection state -- has anything been written to this
+        target? -- should not bring a transport into being merely by
+        asking.
+        """
+        return self._mcpd.get(name)
+
     def qmp(self, name: str) -> QmpTransport:
         """Return (lazy-connected) QMP transport for a QEMU target."""
         if name in self._qmp:

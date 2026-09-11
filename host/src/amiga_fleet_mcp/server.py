@@ -1344,19 +1344,35 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     @archived("qemu.stop", archive)
     async def qemu_stop(
         *,
-        target: str | None = None, qmp_timeout_s: float = 10.0
+        target: str | None = None, qmp_timeout_s: float = 10.0,
+        settle_s: float | None = None,
     ) -> qemu_tool.QemuStopResult:
-        """Stop QEMU. Tries QMP `quit`, falls back to terminate / kill."""
+        """Stop QEMU. Tries QMP `quit`, falls back to terminate / kill,
+        and works on a guest this process did not start. If anything
+        has been written to the target, the guest first gets settle_s
+        seconds (default 10) to write its filesystem cache back --
+        stopping QEMU is abrupt and an unflushed write is lost. A
+        target that was only read from waits not at all; pass
+        settle_s=0 to skip the wait entirely."""
         return await qemu_tool.qemu_stop(
             fleet, fleet.resolve_target(target),
-            qmp_timeout_s=qmp_timeout_s,
+            qmp_timeout_s=qmp_timeout_s, settle_s=settle_s,
         )
 
     @mcp.tool(name="qemu_reset", title="qemu.reset")
     @archived("qemu.reset", archive)
-    async def qemu_reset(*, target: str | None = None) -> qemu_tool.QemuResetResult:
-        """QMP `system_reset` (like pressing the reset button)."""
-        return await qemu_tool.qemu_reset(fleet, fleet.resolve_target(target))
+    async def qemu_reset(
+        *, target: str | None = None, system_reset: bool = False,
+    ) -> qemu_tool.QemuResetResult:
+        """Restart the guest: stop the QEMU process and start a fresh
+        one. That is the only restart an AmigaOS 4 guest reliably
+        survives -- QMP `system_reset` leaves its kernel stuck partway
+        through the reboot, so it is NOT the default. Pass
+        system_reset=True for the raw QMP command (non-AmigaOS guests,
+        or comparing the two). Settles before stopping so unflushed
+        guest writes are not lost."""
+        return await qemu_tool.qemu_reset(
+            fleet, fleet.resolve_target(target), system_reset=system_reset)
 
     @mcp.tool(name="qemu_status", title="qemu.status")
     @archived("qemu.status", archive)
