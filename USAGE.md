@@ -50,6 +50,19 @@ endpoint = "127.0.0.1:4422"
 endpoint = "127.0.0.1:14422"
 ```
 
+Each QEMU target needs its own host-side ports. The daemon inside a
+guest always binds 4322 (TCP) and 4323 (UDP discovery); the host side
+of those forwards is what must differ, or the second guest's QEMU
+refuses to start on a duplicate rule. The discovery forward follows
+the `endpoint` port automatically, so two targets that differ there
+can run side by side. Override it only if that number is taken:
+
+```toml
+[targets.qemu-pegasos2.channels.mcpd]
+endpoint       = "127.0.0.1:4422"
+discovery_port = 4999
+```
+
 Wire the server into the MCP client:
 
 ```sh
@@ -137,6 +150,15 @@ amiga-fleet-mcp --discover --discover-timeout-ms 5000
 The host broadcasts a UDP probe on the LAN. Every running MCPd
 responds with its IP, port, hostname, and method count. Use the
 output to populate `endpoint` fields in the configuration.
+
+Local QEMU guests are found too, even though a broadcast cannot
+reach them: `fleet.discover` also probes the forwarded discovery port
+of every configured QEMU target. Those responders come back with the
+endpoint the host can actually connect to and the name of the
+configured target they belong to, rather than the port the daemon
+binds inside the guest. Anything answering that is *not* already in
+the configuration is reported with `target: null` — which makes this
+the quick way to answer "what else is running on this network?".
 
 ## Tool surface
 

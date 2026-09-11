@@ -232,7 +232,7 @@ The captured QEMU serial output is exposed as the read-only resource
 | `fleet_barrier` | Same as `run_on_all` but with a per-target timeout. |
 | `fleet_quorum_run` | Require at least *N* of *M* targets to succeed. |
 | `fleet_relay` | Copy a file from one target to another via the host. |
-| `fleet_discover` | UDP-broadcast probe for MCPd instances. |
+| `fleet_discover` | Probe for MCPd instances: UDP broadcast for machines on the LAN, plus a direct probe to the forwarded discovery port of every configured QEMU target (a guest behind `hostfwd` cannot hear a broadcast). Each responder is reported with the endpoint the host can actually reach and, where it matches a configured forward, the `target` name; `target` is `null` for a daemon the config doesn't know about. |
 
 ### Notification helpers
 

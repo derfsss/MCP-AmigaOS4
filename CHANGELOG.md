@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Two QEMU targets can now run at the same time, and both are
+  discoverable.** Every QEMU target forwarded the UDP discovery port
+  with the same host-side number, so starting a second guest failed on
+  a duplicate `hostfwd` rule. The host side now follows the target's
+  `endpoint` port, which is already unique, and
+  `[targets.<name>.channels.mcpd] discovery_port` overrides it.
+- `fleet.discover` now finds local QEMU guests. It probes the
+  forwarded discovery port of each configured QEMU target as well as
+  broadcasting, because a guest behind `hostfwd` never hears a
+  broadcast. Responders matching a known forward are reported with the
+  endpoint the host can actually reach — previously they would have
+  come back announcing the port the daemon binds *inside* the guest —
+  and with the name of the configured `target` they belong to.
+  Daemons that answer but are not in the configuration are still
+  listed, with `target: null`.
+
 ### Added
 
 - **`scripts/build_release_lha.py`** — assembles the MCPd release

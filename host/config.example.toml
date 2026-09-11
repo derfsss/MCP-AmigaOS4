@@ -74,6 +74,12 @@ qemu_config  = "<absolute path to your QEMU machine's config.json>"
   [targets.qemu-pegasos2.channels.mcpd]
   enabled  = true
   endpoint = "127.0.0.1:4422"            # host-side hostfwd port
+  # Host-side UDP port for discovery. The guest always binds 4323, but
+  # the host side of the forward has to be unique per guest -- two
+  # guests claiming the same port means the second QEMU refuses to
+  # start. Defaults to the mcpd port above, which is already unique;
+  # set this only if that number is taken by something else.
+  # discovery_port = 4422
 
   [targets.qemu-pegasos2.channels.qmp]
   enabled  = true

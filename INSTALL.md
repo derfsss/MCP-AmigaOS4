@@ -545,9 +545,16 @@ A successful install reports:
 | 4323 | UDP | target → host (unicast) | Discovery response. |
 
 For QEMU targets these ports are forwarded via `slirp` `hostfwd`
-clauses. The host-side ports are configurable per target (the
-convention in this project is 4421 / 4422 / 4423 mapping to the
-in-guest 4321 / 4322 / 4323).
+clauses. The in-guest ports are always 4322 and 4323; the **host**
+side of each forward must be unique per guest, or the second QEMU
+refuses to start on a duplicate rule. Set the TCP one through the
+target's `endpoint`; the UDP discovery forward follows it
+automatically, and `[targets.<name>.channels.mcpd] discovery_port`
+overrides it if that number is already taken.
+
+`fleet.discover` knows about those forwards and probes them directly,
+so local guests show up alongside real hardware even though a
+broadcast never reaches them.
 
 ## Troubleshooting
 
