@@ -110,6 +110,7 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `fs.protect` | Set protection bits on a path. |
 | `fs.copy` | Copy a file *on the target* (preserves protection and date via `CLONE`). Both src and dst are paths on the same Amiga. |
 | `fs.hash` | Streaming SHA-256 of a file. |
+| `fs.sync` | Flush a filesystem's cached writes to disk and wait for the handler to confirm (`ACTION_FLUSH`). `path` (default `SYS:`) may name a volume, drawer or file. AmigaOS commits writes on its own schedule, so a write can still be only in RAM when a machine stops abruptly — a killed QEMU guest, a power cut, a cold reboot — and is then lost. `qemu.stop` calls this automatically. |
 
 ### `exec.*`
 
@@ -197,7 +198,7 @@ prints the live list.
 |---|---|
 | `proto_capabilities` | `proto.capabilities` |
 | `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_debug_ring` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
-| `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
+| `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_sync` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` introspection |
@@ -212,9 +213,9 @@ prints the live list.
 | Tool | Description |
 |---|---|
 | `qemu_start` | Boot a target from its `qemu_config`. |
-| `qemu_stop` | Stop the QEMU process via QMP. |
-| `qemu_reset` | QMP `system_reset` (note: AmigaOS 4 guests do not reliably survive this; prefer stop + start). |
-| `qemu_status` | Whether the QEMU process is alive. |
+| `qemu_stop` | Stop the guest. Works on one this process did not start (falls back to QMP `quit`). Flushes the guest's filesystem first via `fs.sync` when anything has been written to it, so an abrupt stop does not discard recent writes; `settle_s=0` skips that. The result's `settled` field says which happened. |
+| `qemu_reset` | Restart the guest by stopping and starting it — the only restart an AmigaOS 4 guest reliably survives. `system_reset=True` sends the raw QMP command instead, for non-AmigaOS guests. |
+| `qemu_status` | Whether a guest is alive, whoever started it, plus `owned` — true only when this process holds the QEMU handle (a `pid` is available only then). |
 | `qemu_screenshot` | PNG of the framebuffer via QMP `screendump`. |
 | `qemu_savevm` / `qemu_loadvm` / `qemu_list_snapshots` / `qemu_delete_snapshot` | Guest-state checkpoint / restore / inspect / delete. |
 
@@ -315,6 +316,8 @@ serial port + 38400 baud. Honours `[server] default_target`.
 | `power_on` | **yes** | Power up all supplies (`p`). Boots a powered-off X5000; **resets if already on**. |
 | `power_off` | **yes** | Shut down all supplies (`s`). |
 | `power_shell` | **yes** | Generic shell-command passthrough (escape hatch). |
+
+While a board is powered off, only `power.on` and `power.off` are safe to send: every other MCU command leaves a cold MCU unresponsive to everything, including `power.on`, until the PSU is switched off at the mains for about a minute. The query tools therefore refuse when the target's daemon is unreachable, which is the available evidence that a board is off. Pass `force=True` to override — a machine mid-boot, or one whose daemon died, looks the same from here.
 
 ### Sandbox harness (`sandbox.*`)
 

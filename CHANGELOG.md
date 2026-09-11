@@ -2,7 +2,60 @@
 
 ## Unreleased — becomes v1.4
 
+### Added
+
+- **`fs.sync`** — flush a filesystem's cached writes to disk and wait
+  for the handler to confirm (`ACTION_FLUSH`). AmigaOS commits writes
+  on its own schedule, so a write can still be only in RAM when a
+  machine stops abruptly. `qemu.stop` calls it automatically; call it
+  directly before a cold reboot or cutting power. 137 → 138 tools,
+  59 → 60 daemon methods.
+- **Archive retention** — `[server] archive_keep_runs` (default 50)
+  and `serial_log_keep` (default 20 per target). Neither was pruned
+  before; one development machine had accumulated 3.2 GB.
+- **`qemu.status` reports `owned`** — whether *this* process holds the
+  QEMU handle, as distinct from whether a guest is running at all.
+- **`power.*` refuses query commands on a board that looks powered
+  off**, with `force=True` to override. Only `power.on` / `power.off`
+  are safe to send to a cold MCU; anything else leaves it
+  unresponsive until the PSU is switched off at the mains.
+- **`sandbox.last_trap` reports `ring_usable`** — `found=False` with
+  `ring_usable=False` means "cannot tell", not "no trap".
+
 ### Fixed
+
+- **The daemon announced a port it might not be listening on.**
+  Discovery reported `tcp_port: 4322` literally, regardless of
+  `--port`, sending clients to an endpoint that could refuse the
+  connection or belong to a different machine.
+- **A four-byte frame header could reserve 32 MiB.** The payload was
+  allocated before any of the body arrived, with no receive timeout
+  and no cap on concurrent connection workers, so a wedged client held
+  both indefinitely. The body's first byte is now read before the
+  allocation, a 120 s silence timeout drops stalled connections, and
+  workers are capped at 16.
+- **The discovery responder answered any datagram**, making it a ~7x
+  UDP amplifier aimed at whatever return address a sender chose. A
+  probe must now be at least 64 bytes and carry the `v` field, which
+  the host's own 77-byte probe always has.
+- **`qemu.stop` could discard the guest's most recent writes** — it
+  now flushes first via `fs.sync`.
+- **`qemu.stop` / `qemu.status` reported a running guest as stopped**
+  when this process had not started it, so restart sequences silently
+  operated on a machine they believed they had replaced.
+- **`qemu.reset` sent the one command AmigaOS 4 guests do not
+  survive.** It now stops and starts the guest.
+- **A late cold-start warmup reply desynchronised the next request**,
+  surfacing as `MCPd response id=-100 != 5` on the first call after a
+  guest restart.
+- **Blocking `time.sleep()` in the upload retry path** froze the whole
+  event loop, including every other target, for up to 1.5 s a time.
+- **Base64 payloads were archived in full**, putting a second copy of
+  every uploaded file in the audit log (41 MB for a single run).
+- **`[targets.<name>.input] max_events` did nothing.** It is now
+  enforced, and `max_text_len` defaults to 128 — the length that
+  actually fits the event budget, where 512 was only ever typed in
+  part.
 
 - **Two QEMU targets can now run at the same time, and both are
   discoverable.** Every QEMU target forwarded the UDP discovery port

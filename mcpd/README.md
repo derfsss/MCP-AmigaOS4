@@ -48,7 +48,8 @@ src/
   methods/
     proto.c            proto.* (capability advertisement, version)
     sys.c              sys.* introspection (23 methods)
-    fs.c               fs.* filesystem operations (11 methods)
+    fs.c               fs.* filesystem operations (12 methods,
+                       including fs.sync -- ACTION_FLUSH)
     exec.c             exec.cmd
     wb.c               wb.* Workbench / Intuition queries
     screen.c           wb.screenshot (ReadPixelArray + PNG encode
@@ -71,7 +72,7 @@ install/
   MCPd-Disable-Input   close it again
 ```
 
-59 JSON-RPC methods in total. `COMMANDS.md` documents every one.
+60 JSON-RPC methods in total. `COMMANDS.md` documents every one.
 
 ## Direct command-line invocation
 

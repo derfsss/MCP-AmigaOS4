@@ -299,6 +299,27 @@ arbitrary address to module / function / source.
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
 
+## Making a write durable (`fs.sync`)
+
+AmigaOS commits writes to disk on its own schedule. That is invisible
+while a machine keeps running and decisive when it stops abruptly: a
+write made seconds earlier can still be only in RAM, and a killed QEMU
+guest, a power cut or a cold reboot loses it outright. Measured on a
+pegasos2 guest, a 312 KB write was still not on disk two seconds
+later — and the flush has enough jitter that no fixed delay is a
+guarantee.
+
+```python
+fs.sync()                      # flush SYS:
+fs.sync(path="Work:project")   # flush whatever volume that lives on
+```
+
+`fs.sync` sends `ACTION_FLUSH` and waits for the filesystem to answer,
+so when it returns the data is down. `qemu.stop` calls it for you
+before stopping a guest you have written to; reach for it directly
+before anything else abrupt, such as `sys.cold_reboot` or cutting
+power with `power.off`.
+
 ## Seeing the screen (`wb.screenshot`)
 
 Capture what is actually on the target's display, as a PNG:

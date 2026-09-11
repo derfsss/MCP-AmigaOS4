@@ -108,7 +108,7 @@ mcpd/
     methods/
       proto.c           proto.capabilities, proto.version
       sys.c             sys.* introspection (23 methods)
-      fs.c              fs.* (11 methods)
+      fs.c              fs.* (12 methods, incl. fs.sync)
       exec.c            exec.cmd
       wb.c              wb.* (4 introspection methods)
       screen.c          wb.screenshot (ReadPixelArray + PNG encode
