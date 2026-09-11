@@ -196,11 +196,12 @@ prints the live list.
 | Tool | Wraps |
 |---|---|
 | `proto_capabilities` | `proto.capabilities` |
-| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
+| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_debug_ring` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
 | `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
-| `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` |
+| `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` introspection |
+| `wb_screenshot` | `wb.screenshot` — capture a screen to PNG on the target, download it, optionally inline it as base64. Works on real hardware, unlike the QMP-based `qemu_screenshot`. |
 | `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
 | `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub) |
 | `events_wait` | `events.wait` (long-poll only). The other three `events.*` methods are exposed only as daemon RPC; clients invoke them via the transport directly. |

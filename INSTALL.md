@@ -33,9 +33,11 @@ different places:
 | AmigaOS 4.1 Final Edition (Update 1 or later) | Ships Kickstart 54.x and Workbench 53.x. Update 3 is the canonical test target. |
 | `bsdsocket.library` (Roadshow) | TCP/UDP stack. Bundled with AmigaOS 4.1 FE. |
 | `application.library` v53.11 or later | Used for `sys.applications`, `app.notify`, and AmiDock registration. Bundled with AmigaOS 4.1 FE. |
-| `dos.library` and `intuition.library` | Standard system libraries. |
+| `dos.library`, `intuition.library`, `graphics.library` | Standard system libraries. |
+| `z.library` v53 or later | Used for compressed uploads (`fs.upload`) and for PNG encoding in `wb.screenshot`. Bundled with AmigaOS 4.1 FE Update 2 and later. Without it, uploads fall back to uncompressed transfers and `wb.screenshot` is unavailable. |
+| `keymap.library` | Used by `input.type` for layout-correct typing. Bundled; a built-in US table is the fallback. |
 | `i2c.resource`, `performancemonitor.resource`, `xena.resource`, `acpi.resource`, `fsldma.resource` | **Optional.** Only required for the corresponding `sys.hardware.*` methods. Not all targets expose all resources. |
-| Free disk space | Approximately 200 KiB on the boot volume for `SYS:System/MCPd/`. |
+| Free disk space | Approximately 400 KiB on the boot volume for `SYS:System/MCPd/` (the daemon is ~300 KiB, plus the install scripts). |
 | Free memory | Approximately 1 MiB working set for the daemon plus its peer tasks. |
 | Network connectivity | Wired Ethernet or working WiFi via Roadshow. |
 
@@ -48,9 +50,9 @@ fully automatic. Boards currently recognised: X5000 (P5020), X1000
 The core surface (`fs.*`, `exec.cmd`, `sys.version` / `tasks` /
 `libraries` / `devices` / `ports` / `lastalert` / `uptime` / `memory`
 / `volumes` / `assigns` / `hardware` / `applications` /
-`alert_decode`, `wb.*`, `events.*`, `proto.*`) works on every
-supported target out of the box. The features below have additional
-requirements.
+`alert_decode`, `wb.*` introspection, `events.*`, `proto.*`) works on
+every supported target out of the box. The features below have
+additional requirements.
 
 ### `sys.hardware.i2c`
 
@@ -110,6 +112,57 @@ expect the connection to drop immediately afterwards. Reliable on
 real hardware. **Not** reliable on QEMU AmigaOS 4 guests — the
 guest's reboot path leaves QEMU in an unrecoverable state; kill the
 QEMU process and start a fresh one instead.
+
+### `wb.screenshot`
+
+`z.library` v53 or later, which ships with AmigaOS 4.1 FE Update 2 and
+later. The daemon encodes the PNG itself — AmigaOS 4.1 has no PNG
+*writer* datatype — so there is nothing else to install.
+
+Screens deeper than 8 bits per pixel are captured directly; the result
+reports the geometry and depth it actually read.
+
+### `input.*` (keyboard / mouse injection)
+
+No extra software, but **two deliberate acts** — this is the one part
+of the surface that is off until someone switches it on:
+
+1. **On the target.** Run `Execute SYS:System/MCPd/MCPd-Enable-Input`
+   from a Shell and restart MCPd. That creates
+   `SYS:System/MCPd/ENABLE-INPUT`, which the daemon reads once at
+   startup. `MCPd --enable-input` does the same for a single run, but
+   does not survive the watchdog relaunching the daemon.
+2. **In the host config.** Add to the target's block:
+
+   ```toml
+   [targets.<name>.input]
+   enabled = true
+   ```
+
+Until both are set, every `input.*` call is refused. The daemon-side
+gate is the real control — the host flag only prevents an agent
+firing input at the wrong machine. Read
+[SECURITY.md](SECURITY.md) before enabling either.
+
+`MCPd-Disable-Input` removes the sentinel again; both scripts are
+installed alongside the daemon but never run by the installer.
+
+### `sandbox.*` (crash-survivable program / driver runs)
+
+Requires the [SandboxVM](https://github.com/derfsss/SandboxVM) binary
+on the target — `sandbox.deploy` will upload it for you, or place it
+at `SYS:Tools/sandboxvm` by hand. `sandbox.probe` reports which of
+`SYS:Tools/sandboxvm`, `SYS:Utilities/sandboxvm`, or `C:sandboxvm` it
+found, and the path can be pinned per target:
+
+```toml
+[targets.<name>.sandbox]
+path = "Tools:sandboxvm"
+```
+
+The machine must have ExtMem, so this works on X5000 and A1222 but
+not on Pegasos2; `sandbox.probe` reports
+`SANDBOXVM_INCOMPATIBLE_TARGET` rather than failing obscurely.
 
 ### `wb.*` and `app.notify`
 
@@ -275,12 +328,6 @@ For a guided setup, run the wizard:
 amiga-fleet-mcp --init
 ```
 
-If an AI agent is doing the install, point it at
-[AGENTS_SETUP.md](AGENTS_SETUP.md) — that file is a deterministic
-spec (detection commands, decision tree, minimal config templates,
-validation steps, error → cause table) the agent can execute
-without further human input.
-
 It walks through every config block, validates the result through
 the same schema the server uses at startup, and writes
 `config.toml` to the platform default
@@ -300,6 +347,12 @@ uncomment and fill it in to give frequently-repeated parameters
 (`dest_volume`, `sources_dir`, `machine`, `iso_filename`) a
 fleet-wide default. See [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults) for the full list of keys.
+
+If an AI agent is doing the install, point it at
+[AGENTS_SETUP.md](AGENTS_SETUP.md) — a deterministic spec (detection
+commands, decision tree, minimal config templates, validation steps,
+and an error → cause table) it can execute without further human
+input.
 
 ## Installing MCPd on a target
 
@@ -479,3 +532,20 @@ in-guest 4321 / 4322 / 4323).
 - **Watchdog log empty** — the daemon's stdout is redirected to NIL
   by the watchdog launch line; structured events go through MCP.
   Inspect `T:MCPd-Watchdog.log` on the target for restart history.
+- **`input.*` returns `-32003`** — the daemon gate is shut. Run
+  `MCPd-Enable-Input` on the target and restart MCPd;
+  `proto.capabilities` then reports `input.enabled: true`. If it still
+  reports `false` after a reboot, check the sentinel really exists at
+  `SYS:System/MCPd/ENABLE-INPUT` — a `--enable-input` flag is lost
+  whenever the watchdog relaunches the daemon.
+- **`NotCapable: input injection is not enabled for this target`** —
+  that one is the *host* gate: add `[targets.<name>.input] enabled =
+  true` to your config.
+- **`sys.debug_ring` looks frozen** — the AmigaOS kernel debug buffer
+  does not wrap. Once full it stops accepting entries, so a machine
+  with a verbose driver can exhaust it during boot and show nothing
+  logged afterwards. Call `sys.debug_ring` twice a minute apart: if
+  `raw_size` doesn't grow on an active machine, the buffer is full.
+  Use a `serial.*` capture instead, which is not subject to it.
+- **`sandbox.probe` returns `SANDBOXVM_INCOMPATIBLE_TARGET`** — the
+  machine has no ExtMem. `sandbox.*` needs an X5000 or A1222.

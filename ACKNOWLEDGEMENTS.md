@@ -33,12 +33,24 @@ Compiled into MCPd, used at run time, or relied upon by the host:
   by the cross-compile toolchain.
 - **Public-domain SHA-256 reference implementation** — used by
   `fs.hash`. Inline in `mcpd/src/sha256.c`.
+- **z.library** — the AmigaOS 4 shared port of zlib, used for
+  compressed uploads and for encoding PNGs in `wb.screenshot`.
+- **SandboxVM** ([`derfsss/SandboxVM`](https://github.com/derfsss/SandboxVM))
+  — the in-process sandbox host the `sandbox.*` tools drive, which is
+  what lets a guest crash without taking the machine with it.
 - **Pydantic** — typed-data backbone of the host server.
 - **pyserial** — used by the host-side `serial.*` capture service
   for reading a target's debug UART.
 
 The full per-dependency licence index is in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Contributors
+
+- **[@cpm1](https://github.com/cpm1)** — the `input.*` namespace:
+  keyboard and mouse injection through `input.device`, along with the
+  gate design that keeps it off until an operator deliberately opens
+  it on the target.
 
 If a credit is missing or wrong, please open an issue at
 <https://github.com/derfsss/MCP-AmigaOS4/issues>.

@@ -153,8 +153,8 @@ breakdown.
 | `proto.*` | Capability and version reporting. |
 | `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
 | `exec.cmd` | Run an AmigaDOS command with optional `args[]`, `cwd`, and timeout. |
-| `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder. |
-| `wb.*` | Workbench introspection: screens, windows, public-screen registry, frontmost screen and window. |
+| `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, loaded modules, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
+| `wb.*` | Workbench: screens, windows, public-screen registry, frontmost screen and window, plus `wb.screenshot` — capture a screen to PNG on the target and bring it back to the host. Works on real hardware as well as QEMU. |
 | `debug.*` | Per-task and whole-system debug: task snapshot, symbolicated stack trace, address-to-symbol resolution, register and memory read / write, breakpoints, single step, continue, detach. |
 | `qemu.*` | QEMU lifecycle: start, stop, reset, status, screenshot, serial-log resource, snapshots (savevm / loadvm / list / delete). |
 | `fleet.*` | Multi-target operations: list targets, target status, run-on-all, barrier, quorum run, relay (cross-target file copy), discover. |
@@ -164,6 +164,8 @@ breakdown.
 | `installer.*` | Native AmigaOS 4.1 FE installer pipeline: list machines, scan host sources, preflight, mount / unmount ISO, recursive copy, LHA extraction, Kicklayout read / write / patch, staged upload, per-machine install (`installer.run` / `installer.install_x5000`), and post-install verification. |
 | `serial.*` | Host-side serial-capture lifecycle: start, stop, status, read, tail, clear. Captures a target's debug UART (e.g. X5000 rear-panel DB9) into a host-side log so kernel-debug output during boot or crash recovery can be read without a terminal program tying up the cable. |
 | `power.*` | Host-side X5000 / A1222 MCU debug-shell driver over the FTDI USB-TTL header (X5000 P18, A1222 P15). `power.on` boots a powered-off box; `power.off` shuts it down; `power.toggle_stream(watch_s)` captures continuous sensor blocks; plus `help`, `identify`, `identify_dates`, `sensors`, `shell`. The only software power-on path on real X5000 — bypasses MCPd entirely so it works when AOS is off or wedged. |
+| `input.*` | Keyboard and mouse injection: pointer state, type, key chords, move, click, drag, scroll. **Disabled by default at the daemon** — see [Driving the target's UI](#driving-the-targets-ui-input). |
+| `sandbox.*` | Run programs and drivers inside SandboxVM so a guest crash doesn't take the machine down: probe, deploy, run one guest, run a resident driver, run a batch, read the last trap. See [Driver / program iteration](#driver--program-iteration-via-sandboxvm-sandbox). |
 
 ## MCP resources
 
@@ -274,6 +276,30 @@ arbitrary address to module / function / source.
 
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
+
+## Seeing the screen (`wb.screenshot`)
+
+Capture what is actually on the target's display, as a PNG:
+
+```python
+wb.screenshot()                      # frontmost screen, inlined as base64
+wb.screenshot(screen_index=1)        # a specific screen
+wb.screenshot(save_path="shot.png")  # keep the file at a host path
+wb.screenshot(inline=False)          # skip the base64 in the result
+```
+
+The daemon grabs the screen with `graphics.library` `ReadPixelArray`
+and encodes the PNG on the Amiga; the host tool then downloads it and
+tidies up the temporary file on the target.
+
+Unlike `qemu.screenshot`, which goes through QMP and therefore only
+works for QEMU guests, this runs on the machine itself — so it is the
+way to see a real X5000 or A1222 desktop. It also fans out:
+`fleet.run_on_all` with `wb.screenshot` gives one image per machine.
+
+Pair it with `wb.windows` / `wb.frontmost` when you need the geometry
+behind what you are looking at, and with `input.*` below when you want
+to act on it.
 
 ## Driving the target's UI (`input.*`)
 
@@ -559,6 +585,10 @@ by target name.
 # Run all five validation rounds against any reachable MCPd
 python scripts/validate.py --endpoint <target-ip>:4322
 
+# Exercise the input.* gate end to end: refused by default, opened
+# only by the sentinel + a restart, injection verified, closed again
+python scripts/validate_input.py --target x5000 --restart-mode cold
+
 # End-to-end install + reboot test on QEMU pegasos2
 python scripts/qemu_install_test.py \
     --peg2-config /path/to/qemu/pegasos2/config.json \
@@ -581,12 +611,23 @@ When the daemon (or AmigaOS itself) emits debug output via `KPrintF`
 or `DebugPrintF` and there is no host serial cable attached, two
 options exist:
 
-- `C:DumpDebugBuffer` from a Shell on the target prints the current
-  contents of the kernel debug ring buffer.
+- `sys.debug_ring` returns the ring contents over MCP, so no Shell
+  access is needed. `C:DumpDebugBuffer` from a Shell on the target
+  does the same locally.
 - For richer detail, replace `kernel` with `kernel.debug` in
   `SYS:Kickstart/Kicklayout` and reboot. The verbose kernel logs
   memory tracking, library load events, and exception details at a
   modest runtime cost.
+
+**The debug buffer does not wrap.** Once full, the kernel stops
+adding entries rather than overwriting the oldest, so on a machine
+with a chatty driver the buffer can be exhausted during boot and
+nothing logged afterwards will appear — including MCPd's own startup
+beacon and any later trap. Compare `raw_size` across two
+`sys.debug_ring` calls a minute apart: no growth on an active machine
+means the buffer is full, not that the machine is quiet. A serial
+capture (`serial.*`) is not subject to the buffer and is the reliable
+option on such a machine.
 
 ## Stopping MCPd
 

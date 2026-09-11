@@ -1,5 +1,22 @@
 # Change log
 
+## Unreleased
+
+### Changed
+
+- Documentation pass across the README and everything it links to,
+  checked against the live tool surface rather than against itself.
+  `z.library`, `keymap.library` and `graphics.library` are now listed
+  as target requirements; `input.*`, `sandbox.*` and `wb.screenshot`
+  have per-feature prerequisite entries; the README gained a quick
+  start; and `CONTRIBUTING.md` now says to branch from `develop`
+  rather than the protected release branch.
+- Two behaviours that are easy to misread are now written down: the
+  AmigaOS kernel debug buffer does not wrap (so `sys.debug_ring` can
+  be blind to everything logged after boot on a machine with a
+  verbose driver), and only `power.on` / `power.off` are safe to send
+  to the MCU while a board is powered off.
+
 ## 1.3 — Sandboxed iteration, screen capture, and input injection
 
 ### Added

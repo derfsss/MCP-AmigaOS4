@@ -45,12 +45,54 @@ can:
   captured stdout/stderr; load `.device` / `.library` drivers in
   resident-init mode and chain a test program against them, all in
   a single tool call.
+- **See the screen** — `wb.screenshot` captures a Workbench screen to
+  PNG on the Amiga and returns it, on real hardware as well as QEMU.
+- **Drive the UI** — `input.*` synthesises keyboard and mouse events,
+  so an agent can dismiss a requester or click through a GUI
+  installer. Off by default, and openable only by a deliberate action
+  on the target itself; see [SECURITY.md](SECURITY.md).
 
-137 typed MCP tools, 8 live resources, validated end-to-end on QEMU
-pegasos2 and real AmigaOne X5000 hardware.
+**137 typed MCP tools across 14 namespaces, 8 live resources**,
+verified end-to-end on QEMU Pegasos2 and real AmigaOne X5000
+hardware.
 
-If that sounds useful, the rest of this README and the docs below
-will help you get going. If not, this probably isn't for you.
+## Quick start
+
+Three steps: install the host server, put the daemon on the Amiga,
+point your MCP client at it.
+
+```sh
+# 1. Host server (Python 3.11+)
+cd host && uv sync            # or: pip install -e .
+
+# 2. Tell it about your machines. The wizard writes a validated
+#    config.toml to the platform default location.
+uv run amiga-fleet-mcp --init
+
+# 3. Check it can reach them
+uv run amiga-fleet-mcp --health-check
+```
+
+The Amiga side needs `MCPd` running on each target. Download the
+binary from the [latest
+release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) and
+either run `MCPd-Install` from a Shell on the machine, or deploy it
+from the host:
+
+```sh
+python scripts/install_mcpd_autostart.py <target-ip>:4322
+```
+
+Either way MCPd lands in `SYS:System/MCPd/`, gains a watchdog, and
+auto-starts on boot. Then register the server with your client — for
+Claude Code:
+
+```sh
+claude mcp add amiga-fleet -- amiga-fleet-mcp
+```
+
+Full detail in [INSTALL.md](INSTALL.md); configuration options in
+[USAGE.md](USAGE.md).
 
 ## Documentation
 
@@ -93,11 +135,12 @@ A summary follows; the full list of tools, resources, methods, and
 helper scripts lives in [COMMANDS.md](COMMANDS.md), with narrative
 context in [USAGE.md](USAGE.md).
 
-- More than 120 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`,
-  `wb.*`, `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
+- 137 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`, `wb.*`,
+  `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
   `app.notify`, `notify.*`, `installer.*`, `serial.*`, `power.*`,
-  `sandbox.*`, and `input.*` (keyboard / mouse injection, disabled by
-  default at the daemon), plus a namespace dispatcher per group.
+  `sandbox.*`, and `input.*`, plus a namespace dispatcher per group.
+  Every tool takes a `target`, so the same call works against a QEMU
+  guest or a real machine.
   (`events.subscribe`, `events.unsubscribe`, and `events.test_emit`
   are exposed only as daemon RPC methods, not MCP tools — clients
   call them directly through the transport.)
@@ -113,16 +156,22 @@ context in [USAGE.md](USAGE.md).
 - Live system-state reporting: CPU model, caches, AttnFlags, resource
   probes, mounted volumes, active assigns, library list, public
   screens, application registry.
+- Crash-survivable program and driver iteration (`sandbox.*`): run a
+  guest ELF or a resident `.library` / `.device` inside SandboxVM and
+  get back a structured exit code, a trap classification, and the
+  captured output — without the machine going down with it.
+- Screen capture to PNG on the target (`wb.screenshot`) — works on
+  real hardware, where a QMP framebuffer dump is not an option.
+- Keyboard and mouse injection (`input.*`) for driving Workbench and
+  GUI installers, disabled by default at the daemon.
 - Server-pushed events (`events.subscribe`) plus a long-poll
   alternative (`events.wait`).
 - Auto-start install integration: a single command deploys MCPd to
   `SYS:System/MCPd/`, registers a watchdog wrapper, and patches
   `S:Network-Startup`. Boot-to-bind is approximately eleven seconds on
-  an AmigaOne X5000. On start the daemon writes a machine-readable
-  `[MCPd] ready name=… version=… build_date=… build_time=… port=…`
-  line to the kernel debug ring — readable via `sys.debug_ring` or a
-  `serial.*` capture — so a boot-time start is observable even though
-  the auto-start path sends stdout to `NIL:`. See
+  an AmigaOne X5000. The daemon announces itself in the kernel debug
+  ring once the port is actually accepting connections, so a
+  boot-time start is observable without a Shell — see
   [mcpd/README.md](mcpd/README.md#startup-beacon).
 - Per-tool parameter defaults via a `[defaults]` block in
   `config.toml` (`dest_volume`, `sources_dir`, `machine`,
@@ -144,21 +193,38 @@ context in [USAGE.md](USAGE.md).
 
 ## Supported targets
 
-- **QEMU**: Pegasos2 (validated end-to-end), AmigaOne, SAM460ex.
-- **Real hardware**: AmigaOne X5000 (validated, Freescale P5020 /
-  E5500); AmigaOne A1222 / Tabor and AmigaOne X1000 / Nemo are
-  recognised by board detection but not yet exercised in CI.
+| Target | Status |
+|---|---|
+| QEMU Pegasos2 | Verified end to end, including the installer pipeline |
+| QEMU AmigaOne, SAM460ex | Supported |
+| AmigaOne X5000 (Freescale P5020 / E5500) | Verified on hardware, including `power.*`, the SoC introspection methods, and UI injection |
+| AmigaOne A1222 / Tabor | Supported; board detection and the simplified install path are in place |
+| AmigaOne X1000 / Nemo | Recognised by board detection |
+
+`sandbox.*` needs a machine with ExtMem, so it is available on X5000
+and A1222 but not on Pegasos2. `power.*` and the QorIQ introspection
+methods are real-hardware features by nature.
 
 See [INSTALL.md](INSTALL.md) for runtime requirements per target and
 the auto-start install procedure, or [BUILD.md](BUILD.md) for
 cross-compiling MCPd from source.
 
-## Status
+## Requirements
 
-The host server has been driven against an AmigaOne X5000 and a QEMU
-pegasos2 guest **simultaneously** via the fleet fan-out methods, with
-auto-start integration validated on both. See
-[CHANGELOG.md](CHANGELOG.md) for the change log.
+**Host:** Python 3.11, 3.12, or 3.13, on Windows, Linux, or macOS.
+QEMU features additionally need a `qemu-system-ppc` binary;
+`power.*` needs an FTDI USB-TTL cable wired to the target's MCU
+header; `serial.*` needs a serial cable to the target's debug UART.
+
+**Target:** AmigaOS 4.1 Final Edition with TCP/IP (Roadshow) and
+`z.library` v53+. The daemon is a single ~300 KiB PowerPC
+executable with no other dependencies.
+
+Everything degrades per feature rather than per install: a target
+without the MCU cable simply reports `NotCapable` for `power.*` and
+keeps the rest of the surface. [INSTALL.md § Per-feature
+prerequisites](INSTALL.md#per-feature-prerequisites) lists what each
+group needs.
 
 ## Licence
 
