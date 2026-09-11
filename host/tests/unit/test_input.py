@@ -325,10 +325,46 @@ async def test_latin1_text_reaches_the_wire_verbatim() -> None:
 
 @pytest.mark.asyncio
 async def test_text_cap_counts_characters_not_bytes() -> None:
-    """512 accented characters is 1024 bytes of UTF-8 and must still
-    be accepted -- the daemon counts characters too (`_utf8_strlen`)."""
+    """128 accented characters is 256 bytes of UTF-8 and must still be
+    accepted -- both sides count characters (`_utf8_strlen`), and 128
+    is what fits the event budget."""
     fleet, fake = _enabled()
-    await input_tool.input_type(fleet, "x5000", text="é" * 512, confirm=True)
+    await input_tool.input_type(fleet, "x5000", text="é" * 128, confirm=True)
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_text_beyond_the_character_cap_is_refused() -> None:
+    """The default cap is now the length that can actually be typed,
+    so an over-long string is refused by length, with the clearer
+    message of the two."""
+    fleet, fake = _enabled()
+    with pytest.raises(InvalidParams, match="characters"):
+        await input_tool.input_type(
+            fleet, "x5000", text="x" * 400, confirm=True)
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_raising_max_text_len_alone_hits_the_event_budget() -> None:
+    """Raising the character cap without raising the event cap used to
+    mean the daemon typed as much as it could and reported
+    `truncated: true` -- half a line, into whatever window had focus.
+    The budget check turns that into a refusal instead."""
+    fleet, fake = _fleet(input_block=InputConfig(
+        enabled=True, max_text_len=512))      # max_events left at 256
+    with pytest.raises(InvalidParams, match="events"):
+        await input_tool.input_type(
+            fleet, "x5000", text="x" * 400, confirm=True)
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_drag_within_the_event_budget_is_allowed() -> None:
+    fleet, fake = _enabled()
+    await input_tool.input_drag(
+        fleet, "x5000", from_x=0, from_y=0, to_x=100, to_y=100,
+        steps=64, confirm=True)
     assert len(fake.calls) == 1
 
 

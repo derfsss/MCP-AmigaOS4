@@ -18,6 +18,13 @@
 log_level     = "info"                   # debug | info | warn | error
 log_dir       = "<absolute path to a writable log directory>"
 archive_root  = "<absolute path to a writable archive directory>"
+# How many past run directories to keep under archive_root,
+# and how many QEMU serial logs to keep per target. Neither
+# was pruned before and both grow without limit -- serial
+# logs in particular run to hundreds of megabytes per boot
+# with kernel debug enabled. Comment out to keep everything.
+archive_keep_runs = 50
+serial_log_keep   = 20
 mcp_transport = "stdio"                  # stdio | sse | streamable-http
 # mcp_http_addr = "127.0.0.1:7180"       # only set when mcp_transport != "stdio"
 
@@ -139,7 +146,11 @@ tags           = ["real-hw", "x5000"]
   # See SECURITY.md.
   # [targets.x5000-real.input]
   # enabled          = true
-  # max_text_len     = 512   # chars per input.type
-  # max_events       = 256   # events per call
+  # max_text_len     = 128   # chars per input.type -- typing costs
+  #                          # ~2 events per character, so this is
+  #                          # what fits max_events below. Raising it
+  #                          # without raising max_events means the
+  #                          # call is refused rather than half-typed.
+  # max_events       = 256   # input events per call (daemon's own cap)
   # default_delay_ms = 15    # inter-event pacing
   # allow_drag       = true  # false disables input.drag only

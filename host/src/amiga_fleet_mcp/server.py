@@ -2590,7 +2590,8 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
 
 def _build_runtime(config: Config) -> tuple[Fleet, Archive]:
     fleet = Fleet(config)
-    archive = Archive(Path(config.server.archive_root))
+    archive = Archive(Path(config.server.archive_root),
+                      keep_runs=config.server.archive_keep_runs)
     return fleet, archive
 
 

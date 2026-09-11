@@ -22,6 +22,14 @@ class ServerConfig(BaseModel):
     log_level: Literal["debug", "info", "warn", "error"] = "info"
     log_dir: Path = Path("logs")
     archive_root: Path = Path("archive")
+    #: How many past run directories to keep under `archive_root`.
+    #: Nothing pruned them before, and they accumulate for as long as
+    #: the project is used. None disables pruning.
+    archive_keep_runs: int | None = 50
+    #: How many QEMU serial logs to keep per target. One is written
+    #: per `qemu.start` and they are never small -- a chatty boot with
+    #: kernel debug on runs to hundreds of megabytes. None disables.
+    serial_log_keep: int | None = 20
     mcp_transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
     mcp_http_addr: str = "127.0.0.1:7180"
     # When set, MCP tool calls that omit `target` resolve to this
@@ -176,7 +184,15 @@ class InputConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool = False
-    max_text_len: int = 512
+    #: Characters per `input.type`. Lower than the daemon's own 512
+    #: on purpose: typing costs about two events per character, and
+    #: the event cap below binds first, so a longer string was only
+    #: ever typed in part and reported `truncated: true`. Agreeing
+    #: with the real limit beats advertising one that cannot be met.
+    max_text_len: int = 128
+    #: Input events per call, matching the daemon's cap. Enforced
+    #: there; checked here so an over-long call fails before half of
+    #: it has been typed into a live desktop.
     max_events: int = 256
     default_delay_ms: int = 15
     allow_drag: bool = True

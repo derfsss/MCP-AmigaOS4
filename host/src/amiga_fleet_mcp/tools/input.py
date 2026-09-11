@@ -143,6 +143,26 @@ def _require_confirm(confirm: bool, op: str) -> None:
         )
 
 
+def _check_events_budget(requested: int, cfg: InputConfig,
+                         op: str) -> None:
+    """Refuse a call that cannot fit in the target's event budget.
+
+    Advisory, like `max_text_len`: the daemon enforces its own cap and
+    truncates cleanly, returning `truncated: true`. Checking here turns
+    a half-finished action -- half a drag, half a typed line -- into an
+    error before anything reaches the target's UI, which is the more
+    useful failure for something that acts on a live desktop.
+    """
+    if requested > cfg.max_events:
+        raise InvalidParams(
+            f"input.{op} needs about {requested} input events; this "
+            f"target allows {cfg.max_events} per call "
+            f"([targets.<name>.input] max_events). Split it up, or "
+            f"raise the limit.",
+            data={"requested": requested, "max_events": cfg.max_events},
+        )
+
+
 def _check_delay(delay_ms: int | None) -> None:
     if delay_ms is not None and not (0 <= delay_ms <= 1000):
         raise InvalidParams(
@@ -323,6 +343,9 @@ async def input_type(
     cfg = _resolve_input(fleet, target)
     _check_delay(delay_ms)
     text = _encode_text(text, cfg)
+    # Two events per character (down, up); a dead-key sequence costs
+    # more, so this is the floor rather than the exact figure.
+    _check_events_budget(len(text) * 2, cfg, "type")
     if keymap not in ("system", "us"):
         raise InvalidParams('keymap must be "system" or "us"')
 
@@ -448,6 +471,7 @@ async def input_drag(
         raise InvalidParams('button must be "left", "right" or "middle"')
     if not 1 <= steps <= 64:
         raise InvalidParams("steps must be between 1 and 64")
+    _check_events_budget(steps + 3, cfg, "drag")
 
     raw = await fleet.mcpd(target).request("input.drag", {
         "from_x": int(from_x), "from_y": int(from_y),

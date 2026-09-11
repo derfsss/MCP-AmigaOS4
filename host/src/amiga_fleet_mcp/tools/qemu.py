@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from ..archive.store import prune_logs
 from ..errors import InternalError, InvalidParams, TargetError
 from ..fleet import Fleet
 from ..qemu import build_cmdline
@@ -140,6 +141,11 @@ async def qemu_start(fleet: Fleet, target: str) -> QemuStartResult:
     )
     archive_dir.mkdir(parents=True, exist_ok=True)
     serial_log_path = archive_dir / f"{int(time.time())}.log"
+    # One log per launch, none of them small, and nothing used to
+    # remove them -- 2.8 GB of old serial output on one machine.
+    keep = fleet.config.server.serial_log_keep
+    if keep is not None and keep > 0:
+        prune_logs(archive_dir, keep)
     # The child gets its own duplicate of the file descriptor; the
     # parent must close its handle once Popen has cloned it, otherwise
     # every qemu.start leaks one open fd.

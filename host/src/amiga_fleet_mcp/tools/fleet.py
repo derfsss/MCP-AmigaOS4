@@ -226,6 +226,12 @@ async def fleet_snapshot(
 
 # Registry of fan-outable methods. Each entry takes (fleet, target,
 # **params) and returns a coroutine.
+# `input.*` is deliberately absent, and stays absent: this is an
+# allowlist, so omission is the mechanism, but omission also looks
+# identical to an oversight. Typing the same string into every machine
+# in a fleet, or clicking the same coordinates on all of them, is not
+# something to make convenient -- the targets do not share a screen
+# layout, and a stray fan-out would act on all of them at once.
 _FANOUT: dict[str, Callable[..., Awaitable[Any]]] = {
     "fs.list": fs_tool.fs_list,
     "fs.stat": fs_tool.fs_stat,
