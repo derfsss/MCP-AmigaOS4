@@ -18,6 +18,7 @@ import itertools
 import json
 import logging
 import struct
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -54,6 +55,27 @@ DEFAULT_TIMEOUT_S = 30.0
 MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 
+#: Ids used by the cold-start warmup probes. Negative so they can
+#: never collide with the positive ids `request()` allocates.
+WARMUP_ID_BASE = -100
+
+
+def _is_warmup_id(rid: Any) -> bool:
+    return isinstance(rid, int) and rid <= WARMUP_ID_BASE
+
+
+#: Methods that can leave the target's filesystem dirty. AmigaOS
+#: writes back lazily, so a guest killed shortly after one of these
+#: can lose the write entirely -- the point is not to be exhaustive
+#: about which of them touched a disk, but to know that *something*
+#: might still be in flight.
+MUTATING_METHODS = frozenset({
+    "fs.write", "fs.write_chunk", "fs.delete", "fs.makedir",
+    "fs.rename", "fs.protect", "fs.copy",
+    "exec.cmd",
+})
+
+
 class McpdTransport:
     """One TCP connection to MCPd on a target."""
 
@@ -67,6 +89,12 @@ class McpdTransport:
             Callable[[dict[str, Any]], Awaitable[None] | None]
         ] = []
         self._notification_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        #: Monotonic timestamp of the last call that changed something
+        #: on the target's disk, or None if this connection has only
+        #: ever read. `qemu.stop` uses it to decide whether the guest
+        #: needs time to write back before the process is killed --
+        #: see MUTATING_METHODS.
+        self.last_write_at: float | None = None
 
     def subscribe_notifications(
         self,
@@ -160,7 +188,7 @@ class McpdTransport:
         """
         for i in range(2):
             try:
-                env = {"jsonrpc": "2.0", "id": -100 - i,
+                env = {"jsonrpc": "2.0", "id": WARMUP_ID_BASE - i,
                        "method": "sys.uptime"}
                 payload = json.dumps(env).encode("utf-8")
                 await self._send_frame(payload)
@@ -206,6 +234,8 @@ class McpdTransport:
                     # cold-start race window; prime the dispatch path
                     # before retrying the real request.
                     await self._warmup_locked()
+                if method in MUTATING_METHODS:
+                    self.last_write_at = time.monotonic()
                 rid = next(self._next_id)
                 env: dict[str, Any] = {
                     "jsonrpc": "2.0",
@@ -236,6 +266,18 @@ class McpdTransport:
                             break
                         if "id" not in obj:
                             await self._dispatch_notification(obj)
+                            continue
+                        if _is_warmup_id(obj.get("id")):
+                            # A late reply to a cold-start warmup probe.
+                            # The warmup reads with a short timeout, so
+                            # on a slow daemon its answer can arrive
+                            # after we moved on -- and then it is the
+                            # first thing in the stream for the next
+                            # real request. Discarding it is right;
+                            # treating it as a desync used to drop the
+                            # connection and surface as a spurious
+                            # "response id=-100 != 5" on the first call
+                            # after a guest restart.
                             continue
                         # id mismatch - the response stream is now
                         # ambiguous. Drop the connection so the next
