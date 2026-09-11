@@ -56,7 +56,9 @@ Echo ""
 Echo "MCPd-Install: done. Reboot to auto-launch MCPd on :4322."
 Echo "             Or launch immediately:  Run >NIL: <NIL: SYS:System/MCPd/MCPd"
 Echo ""
-Echo "Note: keyboard/mouse injection (input.*) is DISABLED. Clients"
+; '**' prints one literal asterisk: '*' is the AmigaDOS Echo escape
+; character, so "input.*)" would print as "input.)".
+Echo "Note: keyboard/mouse injection (input.**) is DISABLED. Clients"
 Echo "      get -32003 until you run MCPd-Enable-Input and restart"
 Echo "      MCPd. Read the warning in that script before you do."
 Quit 0

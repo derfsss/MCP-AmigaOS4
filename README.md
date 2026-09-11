@@ -73,15 +73,25 @@ uv run amiga-fleet-mcp --init
 uv run amiga-fleet-mcp --health-check
 ```
 
-The Amiga side needs `MCPd` running on each target. Download the
-binary from the [latest
-release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) and
-either run `MCPd-Install` from a Shell on the machine, or deploy it
+The Amiga side needs `MCPd` running on each target. Either deploy it
 from the host:
 
 ```sh
 python scripts/install_mcpd_autostart.py <target-ip>:4322
 ```
+
+or, on the Amiga itself, grab `MCPd-<version>.lha` from the [latest
+release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest):
+
+```
+LhA x MCPd-1.3.lha
+Execute MCPd/MCPd-Install
+```
+
+The archive is assembled on AmigaOS, so the protection bits are
+already correct — extract and the daemon runs. (A raw ELF copied over
+SMB or a USB stick arrives with the executable bit protected and has
+to be `Protect +rwed`-ed by hand.)
 
 Either way MCPd lands in `SYS:System/MCPd/`, gains a watchdog, and
 auto-starts on boot. Then register the server with your client — for

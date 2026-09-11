@@ -417,6 +417,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 |---|---|
 | `run_installer_x5000.py` | Drive an end-to-end X5000 install via `installer_run` (defaults to dry-run). |
 | `run_installer_stage.py` | Drive `installer_stage` to upload the ISO + Update LHAs + Enhancer + extras + MCPd to a target. |
+| `build_release_lha.py --target <name> [--version V] [--out DIR]` | Assemble the release archive on an AmigaOS target (a QEMU guest is fine) so the AmigaOS protection bits are baked into the file users download. Stages the daemon, the install scripts and a README, sets the executable and script bits, runs `LhA`, extracts the result again to prove the flags survived, then downloads the archive and tidies up after itself. |
 | `deploy_mcpd_x5000.py` | One-shot deploy of a freshly built MCPd to a running X5000 (auto-start install + watchdog). |
 
 ### Diagnostics and probes
