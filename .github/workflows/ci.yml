@@ -16,17 +16,23 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # Pinned exactly: astral-sh/setup-uv publishes moving
+        # major tags only up to v7, so `@v10` does not resolve.
+        uses: astral-sh/setup-uv@v10.1.0
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
       - name: Sync dependencies
         working-directory: host
-        run: uv sync --dev --python ${{ matrix.python-version }}
+        # --frozen: install exactly what host/uv.lock pins, and
+        # fail if the lock and pyproject disagree. Without a
+        # committed lock CI resolved fresh every run, which is how
+        # mcp 2.0 arrived unannounced and failed an unrelated PR.
+        run: uv sync --dev --frozen --python ${{ matrix.python-version }}
 
       - name: Lint (ruff)
         working-directory: host
@@ -49,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 

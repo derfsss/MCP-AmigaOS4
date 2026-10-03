@@ -23,6 +23,7 @@ counters useful for logging.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 import zlib
@@ -138,8 +139,11 @@ async def chunked_upload(
                 except Exception as e:
                     last_err = e
                     if attempt < retries:
-                        # Brief backoff
-                        time.sleep(0.5 * (attempt + 1))
+                        # Brief backoff. `await`, not time.sleep: this
+                        # runs on the event loop, and a blocking sleep
+                        # here freezes every other target's calls too --
+                        # exactly when one of them is already struggling.
+                        await asyncio.sleep(0.5 * (attempt + 1))
             if last_err is not None:
                 raise RuntimeError(
                     f"fs.write_chunk failed at offset={offset} "
@@ -231,7 +235,7 @@ async def chunked_download(
                 except Exception as e:
                     last_err = e
                     if attempt < retries:
-                        time.sleep(0.5 * (attempt + 1))
+                        await asyncio.sleep(0.5 * (attempt + 1))
             if last_err is not None:
                 raise RuntimeError(
                     f"fs.read failed at offset={offset} "

@@ -82,10 +82,17 @@ def fake_send():
 # ---- read-only tools (no confirm) -----------------------------------
 
 
+# These tests drive the MCU shell against a fake serial port, with a
+# target whose MCPd endpoint is deliberately unreachable. That is what
+# the cold-board guard looks for, so every call that is not *about*
+# the guard passes force=True: the subject here is the serial
+# behaviour, not the power state. The guard has its own tests below.
+
+
 @pytest.mark.asyncio
 async def test_power_help_reads_shell(fake_send):
     fleet = _fleet()
-    res = await power_tool.power_help(fleet, "x5000")
+    res = await power_tool.power_help(fleet, "x5000", force=True)
     assert res.cmd == "help"
     assert res.port == "COM5"
     assert res.baud == 38400
@@ -96,7 +103,7 @@ async def test_power_help_reads_shell(fake_send):
 @pytest.mark.asyncio
 async def test_power_identify(fake_send):
     fleet = _fleet()
-    res = await power_tool.power_identify(fleet, "x5000")
+    res = await power_tool.power_identify(fleet, "x5000", force=True)
     assert res.cmd == "id"
     assert "Cyrus Plus" in res.reply
 
@@ -104,7 +111,7 @@ async def test_power_identify(fake_send):
 @pytest.mark.asyncio
 async def test_power_identify_dates(fake_send):
     fleet = _fleet()
-    res = await power_tool.power_identify_dates(fleet, "x5000")
+    res = await power_tool.power_identify_dates(fleet, "x5000", force=True)
     assert res.cmd == "id date"
     assert fake_send == [("send", "COM5", "id date")]
 
@@ -112,7 +119,7 @@ async def test_power_identify_dates(fake_send):
 @pytest.mark.asyncio
 async def test_power_sensors(fake_send):
     fleet = _fleet()
-    res = await power_tool.power_sensors(fleet, "x5000")
+    res = await power_tool.power_sensors(fleet, "x5000", force=True)
     assert res.cmd == "v"
     assert "cpu_temp" in res.reply
 
@@ -176,7 +183,7 @@ async def test_power_off_with_confirm(fake_send):
 async def test_power_toggle_stream_immediate_with_confirm(fake_send):
     fleet = _fleet()
     res = await power_tool.power_toggle_stream(
-        fleet, "x5000", confirm=True,
+        fleet, "x5000", confirm=True, force=True,
     )
     assert isinstance(res, power_tool.ShellReply)
     assert res.cmd == "q"
@@ -187,7 +194,7 @@ async def test_power_toggle_stream_immediate_with_confirm(fake_send):
 async def test_power_toggle_stream_watch_returns_capture(fake_send):
     fleet = _fleet()
     res = await power_tool.power_toggle_stream(
-        fleet, "x5000", watch_s=2.5, confirm=True,
+        fleet, "x5000", watch_s=2.5, confirm=True, force=True,
     )
     assert isinstance(res, power_tool.StreamCapture)
     assert res.watch_s == 2.5
@@ -200,7 +207,7 @@ async def test_power_toggle_stream_watch_returns_capture(fake_send):
 async def test_power_shell_passthrough(fake_send):
     fleet = _fleet()
     res = await power_tool.power_shell(
-        fleet, "x5000", cmd="some-debug-cmd", confirm=True,
+        fleet, "x5000", force=True, cmd="some-debug-cmd", confirm=True,
     )
     assert res.cmd == "some-debug-cmd"
     assert fake_send == [("send", "COM5", "some-debug-cmd")]
@@ -249,3 +256,83 @@ async def test_active_capture_blocks_power_call(fake_send):
     fleet.serial_captures._captures[("x5000", "mcu")] = _FakeCapture()  # type: ignore[assignment]
     with pytest.raises(NotCapable, match="being captured"):
         await power_tool.power_help(fleet, "x5000")
+
+
+# ---- the cold-board guard ------------------------------------------
+#
+# Only `p` (on) and `s` (off) are safe to send to a powered-off MCU.
+# Anything else leaves it unresponsive to everything -- including
+# power.on -- until the PSU is switched off at the mains for about a
+# minute. It cost a real debugging session exactly that, so the guard
+# refuses the query commands when the board looks cold.
+#
+# "Looks cold" is inferred from the daemon being unreachable, which is
+# evidence and not proof, hence force=True.
+
+
+@pytest.mark.asyncio
+async def test_guard_refuses_queries_when_daemon_unreachable(
+    fake_send, monkeypatch,
+) -> None:
+    monkeypatch.setattr(power_tool, "_daemon_reachable",
+                        lambda *a, **k: False)
+    for call in (
+        lambda: power_tool.power_identify(fleet_for_guard(), "x5000"),
+        lambda: power_tool.power_sensors(fleet_for_guard(), "x5000"),
+        lambda: power_tool.power_help(fleet_for_guard(), "x5000"),
+    ):
+        with pytest.raises(NotCapable, match="looks powered off"):
+            await call()
+
+
+@pytest.mark.asyncio
+async def test_guard_allows_queries_when_daemon_answers(
+    fake_send, monkeypatch,
+) -> None:
+    """A running board is exactly when these are safe and useful."""
+    monkeypatch.setattr(power_tool, "_daemon_reachable",
+                        lambda *a, **k: True)
+    res = await power_tool.power_identify(fleet_for_guard(), "x5000")
+    assert res.cmd == "id"
+
+
+@pytest.mark.asyncio
+async def test_guard_can_be_overridden(fake_send, monkeypatch) -> None:
+    monkeypatch.setattr(power_tool, "_daemon_reachable",
+                        lambda *a, **k: False)
+    res = await power_tool.power_sensors(
+        fleet_for_guard(), "x5000", force=True)
+    assert res.cmd == "v"
+
+
+@pytest.mark.asyncio
+async def test_power_on_and_off_are_never_guarded(
+    fake_send, monkeypatch,
+) -> None:
+    """The two commands that recover a cold board must always get
+    through -- guarding them would make the wedge unrecoverable."""
+    monkeypatch.setattr(power_tool, "_daemon_reachable",
+                        lambda *a, **k: False)
+    on = await power_tool.power_on(fleet_for_guard(), "x5000", confirm=True)
+    off = await power_tool.power_off(fleet_for_guard(), "x5000", confirm=True)
+    assert (on.cmd, off.cmd) == ("p", "s")
+
+
+@pytest.mark.asyncio
+async def test_guard_lets_raw_power_commands_through_shell(
+    fake_send, monkeypatch,
+) -> None:
+    """power.shell is a passthrough, so `p` and `s` sent that way get
+    the same exemption -- and anything else does not."""
+    monkeypatch.setattr(power_tool, "_daemon_reachable",
+                        lambda *a, **k: False)
+    res = await power_tool.power_shell(
+        fleet_for_guard(), "x5000", cmd="p", confirm=True)
+    assert res.cmd == "p"
+    with pytest.raises(NotCapable, match="looks powered off"):
+        await power_tool.power_shell(
+            fleet_for_guard(), "x5000", cmd="v", confirm=True)
+
+
+def fleet_for_guard():
+    return _fleet()

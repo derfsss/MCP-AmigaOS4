@@ -8,6 +8,9 @@
 # in Amiga text viewers.
 mcpd/install/*      text eol=lf
 
+# Bundled resources are uploaded to targets byte-for-byte too.
+host/src/amiga_fleet_mcp/installer/resources/*   text eol=lf
+
 # The daemon sources are cross-compiled from the working tree by the
 # Docker toolchain; keep them LF for the same reason a Unix-side build
 # would expect.

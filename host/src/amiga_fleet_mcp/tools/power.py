@@ -23,6 +23,8 @@ cmd="s"`.
 
 from __future__ import annotations
 
+import socket
+
 from pydantic import BaseModel
 
 from ..config import SerialChannel
@@ -98,35 +100,85 @@ def _reply(target: str, cmd: str, ch: SerialChannel, reply: str) -> ShellReply:
     )
 
 
+def _refuse_if_board_cold(
+    fleet: Fleet, target: str, op: str, force: bool,
+) -> None:
+    """Refuse the MCU query commands while the board looks powered off.
+
+    Only `p` (on) and `s` (off) are safe to send to a cold MCU.
+    Anything else -- `id`, `v`, `help`, `q`, or a raw shell command --
+    leaves it unresponsive to everything, including `power.on`, and the
+    only way back is switching the PSU off at the mains for about a
+    minute. The failure is quiet and misleading: the first command may
+    answer normally, the next returns only its own echo, and every one
+    after that comes back empty, which reads like a cable fault and
+    invites exactly the retrying that cannot help.
+
+    "Powered off" is inferred from the daemon being unreachable, which
+    is evidence rather than proof -- a booting machine, or one whose
+    daemon died, looks the same. Erring toward refusal is the right
+    trade when being wrong costs a walk to the machine; `force=True`
+    is there for the operator who knows better.
+    """
+    if force:
+        return
+    ch = fleet.target_config(target).channels.mcpd
+    if ch is None or not ch.enabled:
+        return          # nothing to infer from; let the call through
+    if _daemon_reachable(ch.host, ch.port):
+        return
+    raise NotCapable(
+        f"refusing power.{op}: {target!r} looks powered off (its MCPd "
+        f"endpoint {ch.host}:{ch.port} is not answering), and any MCU "
+        f"command other than power.on / power.off wedges a cold MCU "
+        f"until the PSU is switched off at the mains for a minute. "
+        f"Boot the board first with power.on, then query it. Pass "
+        f"force=True if you know it is powered.",
+        data={"target": target, "op": op, "reason": "board_presumed_off"},
+    )
+
+
+def _daemon_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 # ---- read-only tools (no confirm) ----------------------------------
 
 
-async def power_help(fleet: Fleet, target: str) -> ShellReply:
+async def power_help(fleet: Fleet, target: str, *, force: bool = False) -> ShellReply:
     """List the MCU debug shell's commands (`help`)."""
     ch = _resolve_mcu_channel(fleet, target)
+    _refuse_if_board_cold(fleet, target, 'help', force)
     reply = await p18.send(ch.port, ch.baud, "help")
     return _reply(target, "help", ch, reply)
 
 
-async def power_identify(fleet: Fleet, target: str) -> ShellReply:
+async def power_identify(fleet: Fleet, target: str, *, force: bool = False) -> ShellReply:
     """MCU H/W + F/W revisions, build type (`id`)."""
     ch = _resolve_mcu_channel(fleet, target)
+    _refuse_if_board_cold(fleet, target, 'identify', force)
     reply = await p18.send(ch.port, ch.baud, "id")
     return _reply(target, "id", ch, reply)
 
 
-async def power_identify_dates(fleet: Fleet, target: str) -> ShellReply:
+async def power_identify_dates(fleet: Fleet, target: str, *, force: bool = False) -> ShellReply:
     """MCU + CPLD build date and time (`id date`)."""
     ch = _resolve_mcu_channel(fleet, target)
+    _refuse_if_board_cold(fleet, target, 'identify_dates', force)
     reply = await p18.send(ch.port, ch.baud, "id date")
     return _reply(target, "id date", ch, reply)
 
 
-async def power_sensors(fleet: Fleet, target: str) -> ShellReply:
+async def power_sensors(fleet: Fleet, target: str, *, force: bool = False) -> ShellReply:
     """One-shot voltage + temperature read (`v`). Reply is
     human-formatted ASCII -- the wire `$vXXYY...` form is on UART1
     (`sys.mcu_cmd cmd="v"`), not on the debug shell."""
     ch = _resolve_mcu_channel(fleet, target)
+    _refuse_if_board_cold(fleet, target, 'sensors', force)
     reply = await p18.send(ch.port, ch.baud, "v")
     return _reply(target, "v", ch, reply)
 
@@ -136,7 +188,7 @@ async def power_sensors(fleet: Fleet, target: str) -> ShellReply:
 
 async def power_toggle_stream(
     fleet: Fleet, target: str, *,
-    watch_s: float = 0.0, confirm: bool = False,
+    watch_s: float = 0.0, confirm: bool = False, force: bool = False,
 ) -> ShellReply | StreamCapture:
     """Toggle the MCU's continuous-emission state (`q`).
 
@@ -150,6 +202,7 @@ async def power_toggle_stream(
     """
     _require_confirm(confirm, "toggle_stream")
     ch = _resolve_mcu_channel(fleet, target)
+    _refuse_if_board_cold(fleet, target, "toggle_stream", force)
     if watch_s > 0:
         captured = await p18.stream_capture(ch.port, ch.baud, watch_s)
         return StreamCapture(
@@ -186,7 +239,7 @@ async def power_off(
 
 async def power_shell(
     fleet: Fleet, target: str, *,
-    cmd: str, confirm: bool = False,
+    cmd: str, confirm: bool = False, force: bool = False,
 ) -> ShellReply:
     """Generic MCU debug-shell passthrough. Anything other than the
     documented `help` / `id` / `id date` / `v` / `q` / `p` / `s`
@@ -196,6 +249,11 @@ async def power_shell(
     if not cmd or not cmd.strip():
         raise InvalidParams("cmd must be a non-empty shell command string")
     ch = _resolve_mcu_channel(fleet, target)
+    # `p` and `s` are the only commands a cold MCU
+    # survives; anything else gets the same guard as
+    # the query tools.
+    if cmd.strip().lower() not in ("p", "s"):
+        _refuse_if_board_cold(fleet, target, "shell", force)
     reply = await p18.send(ch.port, ch.baud, cmd)
     return _reply(target, cmd, ch, reply)
 

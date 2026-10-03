@@ -23,7 +23,7 @@
  * framing / error-code / notification semantics, not the daemon
  * build, and only changes when those become incompatible. Adding
  * methods is backward-compatible and does NOT bump it. */
-#define MCPD_VERSION_STR      "1.3"
+#define MCPD_VERSION_STR      "1.4"
 #define MCPD_PROTOCOL_VERSION "1.0"
 #define MCPD_SERVER_VERSION   "mcpd/" MCPD_VERSION_STR
 

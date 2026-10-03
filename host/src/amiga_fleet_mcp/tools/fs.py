@@ -234,6 +234,34 @@ async def fs_hash(
     return FsHashResult.model_validate(raw)
 
 
+class FsSyncResult(BaseModel):
+    path: str
+    #: False when the filesystem does not implement ACTION_FLUSH.
+    #: The call still returned; nothing was guaranteed.
+    flushed: bool
+
+
+async def fs_sync(
+    fleet: Fleet, target: str, path: str = "SYS:",
+) -> FsSyncResult:
+    """Flush a filesystem's cached writes to disk, and wait for it.
+
+    AmigaOS buffers writes and commits them on its own schedule, so a
+    write can still be only in RAM seconds after the call that made it
+    returned. That is fine until the machine stops abruptly -- a QEMU
+    guest killed, a power cut, a cold reboot -- at which point the
+    write is simply gone.
+
+    Call this when a write has to survive something abrupt. `path` can
+    name a volume, a drawer or a file; whatever filesystem it lives on
+    is flushed. `qemu.stop` calls it automatically.
+    """
+    raw = await fleet.mcpd(target).request(
+        "fs.sync", {"path": path}, timeout_s=60.0,
+    )
+    return FsSyncResult.model_validate(raw)
+
+
 async def fs_copy(
     fleet: Fleet, target: str, src: str, dst: str
 ) -> FsCopyResult:

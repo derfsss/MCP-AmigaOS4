@@ -232,6 +232,21 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         """Streaming SHA-256 of a file (only sha256 supported for now)."""
         return await fs_tool.fs_hash(fleet, fleet.resolve_target(target), path, algo)
 
+    @mcp.tool(name="fs_sync", title="fs.sync")
+    @archived("fs.sync", archive)
+    async def fs_sync(
+        *, path: str = "SYS:", target: str | None = None,
+    ) -> fs_tool.FsSyncResult:
+        """Flush a filesystem's cached writes to disk and wait for it.
+        AmigaOS commits writes on its own schedule, so a write can still
+        be only in RAM when the machine stops abruptly -- a killed QEMU
+        guest, a power cut, a cold reboot -- and is then lost. Call this
+        when a write has to survive something like that. `path` may name
+        a volume, drawer or file; its filesystem is flushed.
+        qemu.stop does this for you."""
+        return await fs_tool.fs_sync(
+            fleet, fleet.resolve_target(target), path)
+
     @mcp.tool(name="fs_upload", title="fs.upload")
     @archived("fs.upload", archive)
     async def fs_upload(
@@ -600,54 +615,74 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     @mcp.tool(name="power_help", title="power.help")
     @archived("power.help", archive)
     async def power_help(
-        *, target: str | None = None,
+        *, target: str | None = None, force: bool = False,
     ) -> power_tool.ShellReply:
         """List the MCU debug-shell commands (`help`). Talks to the
         host-side serial cable wired to the target's MCU header
         (X5000 P18 / A1222 P15) -- bypasses MCPd entirely. Requires
-        `[targets.<name>.channels.mcu]` configured."""
+        `[targets.<name>.channels.mcu]` configured.
+
+        Refused while the board looks powered off: any MCU
+        command except power.on / power.off wedges a cold MCU
+        until the PSU is switched off at the mains. Boot first,
+        then query; force=True overrides."""
         return await power_tool.power_help(
-            fleet, fleet.resolve_target(target),
+            fleet, fleet.resolve_target(target), force=force,
         )
 
     @mcp.tool(name="power_identify", title="power.identify")
     @archived("power.identify", archive)
     async def power_identify(
-        *, target: str | None = None,
+        *, target: str | None = None, force: bool = False,
     ) -> power_tool.ShellReply:
-        """MCU H/W + F/W revisions and build type (`id`)."""
+        """MCU H/W + F/W revisions and build type (`id`).
+
+        Refused while the board looks powered off: any MCU
+        command except power.on / power.off wedges a cold MCU
+        until the PSU is switched off at the mains. Boot first,
+        then query; force=True overrides."""
         return await power_tool.power_identify(
-            fleet, fleet.resolve_target(target),
+            fleet, fleet.resolve_target(target), force=force,
         )
 
     @mcp.tool(name="power_identify_dates", title="power.identify_dates")
     @archived("power.identify_dates", archive)
     async def power_identify_dates(
-        *, target: str | None = None,
+        *, target: str | None = None, force: bool = False,
     ) -> power_tool.ShellReply:
-        """MCU + CPLD build date and time (`id date`)."""
+        """MCU + CPLD build date and time (`id date`).
+
+        Refused while the board looks powered off: any MCU
+        command except power.on / power.off wedges a cold MCU
+        until the PSU is switched off at the mains. Boot first,
+        then query; force=True overrides."""
         return await power_tool.power_identify_dates(
-            fleet, fleet.resolve_target(target),
+            fleet, fleet.resolve_target(target), force=force,
         )
 
     @mcp.tool(name="power_sensors", title="power.sensors")
     @archived("power.sensors", archive)
     async def power_sensors(
-        *, target: str | None = None,
+        *, target: str | None = None, force: bool = False,
     ) -> power_tool.ShellReply:
         """One-shot voltage + temperature read via the debug shell
         (`v`). Reply is human-formatted ASCII; use `sys.mcu_cmd
         cmd="v"` instead for the wire `$vXXYY...` form parsed into
-        structured fields."""
+        structured fields.
+
+        Refused while the board looks powered off: any MCU
+        command except power.on / power.off wedges a cold MCU
+        until the PSU is switched off at the mains. Boot first,
+        then query; force=True overrides."""
         return await power_tool.power_sensors(
-            fleet, fleet.resolve_target(target),
+            fleet, fleet.resolve_target(target), force=force,
         )
 
     @mcp.tool(name="power_toggle_stream", title="power.toggle_stream")
     @archived("power.toggle_stream", archive)
     async def power_toggle_stream(
         *, target: str | None = None,
-        watch_s: float = 0.0, confirm: bool = False,
+        watch_s: float = 0.0, confirm: bool = False, force: bool = False,
     ) -> Any:
         """Toggle the MCU's continuous-emission state (`q`).
 
@@ -660,7 +695,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         Hardware-destructive: requires `confirm=True`."""
         return await power_tool.power_toggle_stream(
             fleet, fleet.resolve_target(target),
-            watch_s=watch_s, confirm=confirm,
+            watch_s=watch_s, confirm=confirm, force=force,
         )
 
     @mcp.tool(name="power_on", title="power.on")
@@ -692,15 +727,19 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     @archived("power.shell", archive)
     async def power_shell(
         *, target: str | None = None,
-        cmd: str, confirm: bool = False,
+        cmd: str, confirm: bool = False, force: bool = False,
     ) -> power_tool.ShellReply:
         """Generic MCU debug-shell passthrough. Anything other than
         the documented `help` / `id` / `id date` / `v` / `q` / `p`
         / `s` commands is untested. Hardware-destructive (could be
-        `s` etc.); requires `confirm=True`."""
+        `s` etc.); requires `confirm=True`.
+
+        Anything but `p` / `s` is refused while the board looks
+        powered off, because it would wedge a cold MCU until the PSU
+        is switched off at the mains; force=True overrides."""
         return await power_tool.power_shell(
             fleet, fleet.resolve_target(target),
-            cmd=cmd, confirm=confirm,
+            cmd=cmd, confirm=confirm, force=force,
         )
 
     @mcp.tool(name="app_notify", title="app.notify")
@@ -1344,19 +1383,35 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     @archived("qemu.stop", archive)
     async def qemu_stop(
         *,
-        target: str | None = None, qmp_timeout_s: float = 10.0
+        target: str | None = None, qmp_timeout_s: float = 10.0,
+        settle_s: float | None = None,
     ) -> qemu_tool.QemuStopResult:
-        """Stop QEMU. Tries QMP `quit`, falls back to terminate / kill."""
+        """Stop QEMU. Tries QMP `quit`, falls back to terminate / kill,
+        and works on a guest this process did not start. If anything
+        has been written to the target, the guest first gets settle_s
+        seconds (default 10) to write its filesystem cache back --
+        stopping QEMU is abrupt and an unflushed write is lost. A
+        target that was only read from waits not at all; pass
+        settle_s=0 to skip the wait entirely."""
         return await qemu_tool.qemu_stop(
             fleet, fleet.resolve_target(target),
-            qmp_timeout_s=qmp_timeout_s,
+            qmp_timeout_s=qmp_timeout_s, settle_s=settle_s,
         )
 
     @mcp.tool(name="qemu_reset", title="qemu.reset")
     @archived("qemu.reset", archive)
-    async def qemu_reset(*, target: str | None = None) -> qemu_tool.QemuResetResult:
-        """QMP `system_reset` (like pressing the reset button)."""
-        return await qemu_tool.qemu_reset(fleet, fleet.resolve_target(target))
+    async def qemu_reset(
+        *, target: str | None = None, system_reset: bool = False,
+    ) -> qemu_tool.QemuResetResult:
+        """Restart the guest: stop the QEMU process and start a fresh
+        one. That is the only restart an AmigaOS 4 guest reliably
+        survives -- QMP `system_reset` leaves its kernel stuck partway
+        through the reboot, so it is NOT the default. Pass
+        system_reset=True for the raw QMP command (non-AmigaOS guests,
+        or comparing the two). Settles before stopping so unflushed
+        guest writes are not lost."""
+        return await qemu_tool.qemu_reset(
+            fleet, fleet.resolve_target(target), system_reset=system_reset)
 
     @mcp.tool(name="qemu_status", title="qemu.status")
     @archived("qemu.status", archive)
@@ -1514,6 +1569,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "protect":     fs_tool.fs_protect,
             "copy":        fs_tool.fs_copy,
             "hash":        fs_tool.fs_hash,
+            "sync":        fs_tool.fs_sync,
             "upload":      fs_tool.fs_upload,
             "download":    fs_tool.fs_download,
         }, method, params or {})
@@ -2534,7 +2590,8 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
 
 def _build_runtime(config: Config) -> tuple[Fleet, Archive]:
     fleet = Fleet(config)
-    archive = Archive(Path(config.server.archive_root))
+    archive = Archive(Path(config.server.archive_root),
+                      keep_runs=config.server.archive_keep_runs)
     return fleet, archive
 
 

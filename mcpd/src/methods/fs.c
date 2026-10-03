@@ -22,6 +22,7 @@
 #include <proto/exec.h>
 #include <proto/z.h>
 #include <dos/dos.h>
+#include <dos/dosextens.h>
 #include <exec/memory.h>
 #include <exec/exectags.h>
 #include <libraries/z.h>
@@ -925,6 +926,57 @@ int fs_copy(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddStringToObject(r, "output", out);
     cJSON_AddBoolToObject(r, "ok", cJSON_True);
     free(out);
+    *out_result = r;
+    return 0;
+}
+
+
+/* ---- fs.sync ------------------------------------------------------ *
+ *
+ * Ask a filesystem to write its cache back to disk, and wait for it.
+ *
+ * AmigaOS filesystems buffer writes and flush them on their own
+ * schedule. That is invisible while the machine keeps running, and
+ * decisive when it does not: a QEMU guest killed shortly after a
+ * write loses it outright, and on real hardware the same applies to a
+ * power cut or a cold reboot. Measured on a pegasos2 guest, a 312 KB
+ * write was still only in the cache two seconds later, and the
+ * periodic flush has enough jitter that no fixed delay is a guarantee.
+ *
+ * ACTION_FLUSH is the packet that makes it deterministic: the handler
+ * commits everything outstanding before replying. GetDeviceProc gives
+ * the handler port for any path, so a caller can name a volume, a
+ * drawer, or a file and flush whatever filesystem it lives on.
+ *
+ * params: path (default "SYS:")
+ */
+int fs_sync(cJSON *params, cJSON **out_result, cJSON **out_err) {
+    cJSON *pv = cJSON_GetObjectItemCaseSensitive(params, "path");
+    const char *path = (cJSON_IsString(pv) && pv->valuestring
+                        && pv->valuestring[0]) ? pv->valuestring : "SYS:";
+
+    struct DevProc *dvp = IDOS->GetDeviceProc(path, NULL);
+    if (!dvp || !dvp->dvp_Port) {
+        if (dvp) IDOS->FreeDeviceProc(dvp);
+        cJSON *data = cJSON_CreateObject();
+        if (data) cJSON_AddStringToObject(data, "path", path);
+        *out_err = rpc_make_error(MCPD_ERR_TARGET,
+            "fs.sync: no handler for that path", data);
+        return 0;
+    }
+
+    /* DoPkt blocks until the handler replies, which is the whole
+     * point: when this returns, the data is down. A handler that
+     * doesn't implement ACTION_FLUSH answers DOSFALSE rather than
+     * hanging, so a filesystem without the packet degrades to
+     * "reported not flushed" instead of a stall. */
+    LONG rc = IDOS->DoPkt(dvp->dvp_Port, ACTION_FLUSH, 0, 0, 0, 0, 0);
+    IDOS->FreeDeviceProc(dvp);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "path", path);
+    cJSON_AddBoolToObject(r, "flushed", rc != DOSFALSE ? cJSON_True
+                                                       : cJSON_False);
     *out_result = r;
     return 0;
 }

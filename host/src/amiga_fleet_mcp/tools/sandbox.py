@@ -973,6 +973,14 @@ class LastTrapResult(BaseModel):
 
     target: str
     found: bool
+    #: Whether the debug ring is actually reporting on this daemon.
+    #: The AmigaOS kernel debug buffer does not wrap -- once full it
+    #: stops accepting entries -- so on a machine whose buffer filled
+    #: during boot (a verbose graphics driver will do it) nothing MCPd
+    #: or SandboxVM emits ever lands there. `found=False` with
+    #: `ring_usable=False` means "cannot tell", NOT "no trap": treat
+    #: it as unknown and read a serial capture instead.
+    ring_usable: bool = True
     trap_kind: str | None = None
     """One of DSI / ISI / alignment / program / fp_unavailable when
     the ring contained a recognised trap line."""
@@ -997,6 +1005,26 @@ class LastTrapResult(BaseModel):
 # Lines emitted by SandboxVM's tc_TrapCode trampoline carry an
 # explicit trap-type prefix. We match a generous regex so upstream
 # can change the exact prose without breaking the filter.
+def _ring_reports_daemon(lines: Sequence[str]) -> bool:
+    """Is the kernel debug ring reporting on this daemon at all?
+
+    The AmigaOS debug buffer does not wrap: once full, the kernel
+    stops accepting entries rather than overwriting the oldest. On a
+    machine whose buffer fills during boot -- a verbose graphics
+    driver will do it; a real X5000 was measured holding 711 lines,
+    all of them from the GPU driver, with no growth over 60 s while
+    two daemons ran -- nothing MCPd or SandboxVM writes ever lands
+    there.
+
+    Everything this module reads from the ring (trap signatures,
+    per-guest exit codes) is then permanently absent, which is a very
+    different thing from "the guest ran cleanly". If the ring carries
+    no trace of either program, it is not a source of truth about
+    them and callers are told so.
+    """
+    return any(("[MCPd]" in ln) or ("[sandboxvm]" in ln) for ln in lines)
+
+
 _RE_TRAPTYPE = re.compile(r"(?i)\btrap[_ ]?type\s*=\s*0x([0-9a-f]+)")
 _RE_SANDBOXVM_LINE = re.compile(r"(?i)\[sandbox(vm)?\]")
 _RE_TRAP_LINE = re.compile(
@@ -1105,8 +1133,11 @@ async def sandbox_last_trap(
     `since_s` and `max_lines` are forwarded to `sys.debug_ring`.
 
     Returns an empty `found=False` result when no trap signature is
-    visible after all retries — that's the genuine "no trap to
-    report" case, not an error."""
+    visible after all retries — but check `ring_usable` before reading
+    that as "no trap". The AmigaOS debug buffer does not wrap, so on a
+    machine whose buffer filled during boot the ring contains nothing
+    from MCPd or SandboxVM at all and cannot report a trap that did
+    happen. `ring_usable=False` means the answer is unknown."""
     if retry_count < 1:
         retry_count = 1
     if retry_delay_s < 0:
@@ -1128,6 +1159,7 @@ async def sandbox_last_trap(
             return LastTrapResult(
                 target=target,
                 found=True,
+                ring_usable=True,
                 trap_kind=kind,
                 fingerprint=fp,
                 traptype_hex=hex_str,
@@ -1138,9 +1170,25 @@ async def sandbox_last_trap(
         if attempt + 1 < retry_count:
             await asyncio.sleep(retry_delay_s)
 
+    # Nothing found -- but "nothing happened" and "the ring cannot
+    # tell you" are opposite conclusions, and until now both returned
+    # found=False.
+    #
+    # The AmigaOS kernel debug buffer does not wrap: once full it stops
+    # accepting entries. On a real X5000 the graphics driver fills all
+    # ~80 KB of it during boot, before MCPd starts, so the ring holds
+    # no daemon output at all and never will until a reboot. A caller
+    # reading found=False there concludes the guest ran clean, when it
+    # may have died on a DSI.
+    #
+    # If the ring holds no trace of either MCPd or SandboxVM, it is not
+    # reporting on this daemon and should say so rather than implying
+    # calm.
+    ring_usable = _ring_reports_daemon(last_lines)
     return LastTrapResult(
         target=target,
         found=False,
+        ring_usable=ring_usable,
         captured_at=last_captured_at,
         attempts=attempts,
     )
@@ -1175,6 +1223,11 @@ class BatchEntryResult(BaseModel):
     guest: str
     name: str
     exit_code: int
+    #: False when the exit code could not be read back and the 0 above
+    #: is a placeholder rather than a result. Happens when the kernel
+    #: debug ring rolled past this guest, and on any machine whose ring
+    #: was already full before MCPd started -- see `ring_usable`.
+    exit_code_known: bool = True
     trap_kind: str | None = None
     trap_fingerprint: str | None = None
     stdout: str = ""
@@ -1192,7 +1245,17 @@ class BatchRunResult(BaseModel):
     aggregate_exit_code: int
     """Mirrors SandboxVM's ``last_nonzero`` semantics: 0 when every
     guest returned 0, otherwise the last non-zero rc seen. Useful as
-    a quick "did the whole batch pass?" check."""
+    a quick "did the whole batch pass?" check. This comes from
+    SandboxVM's own exit status, so it is trustworthy even when the
+    per-guest breakdown below is not."""
+    ring_usable: bool = True
+    """Whether the kernel debug ring is reporting on this daemon at
+    all. The AmigaOS debug buffer does not wrap: once full it stops
+    accepting entries, and on a machine whose buffer filled during
+    boot nothing MCPd or SandboxVM writes ever reaches it. Per-guest
+    exit codes are parsed from that ring, so when this is False every
+    `entries[].exit_code` is a placeholder -- read
+    `aggregate_exit_code` instead."""
     all_clean: bool
     """Convenience: ``aggregate_exit_code == 0``."""
     duration_s: float
@@ -1365,6 +1428,12 @@ async def sandbox_run_batch(
             max_lines=2000,
         )
         per_guest_exits = _parse_per_guest_exits(ring.lines, len(specs))
+        # A ring that holds nothing from MCPd or SandboxVM is not
+        # reporting on this daemon -- it filled before the daemon
+        # started and stopped accepting entries. Every per-guest exit
+        # below is then a placeholder, and saying so beats handing
+        # back a batch of confident zeroes.
+        ring_usable = _ring_reports_daemon(ring.lines)
 
         # Per-guest captures. Names follow SandboxVM's
         # `T:sandboxvm-<gname>.{out,err}` convention.
@@ -1386,11 +1455,16 @@ async def sandbox_run_batch(
             # parsed are in batch order, but if the ring rotated
             # past older guests, the K we captured map to the LAST
             # K guests in the batch (oldest got dropped). Compute
-            # an alignment offset accordingly. Aggregate exit_code
-            # already covers the "did anything fail" question; the
-            # default-to-0 for missing entries is purely cosmetic.
+            # an alignment offset accordingly.
+            #
+            # A missing entry becomes 0 with exit_code_known=False.
+            # It used to become a bare 0, which reads as "this guest
+            # passed" -- and on a machine whose debug buffer filled
+            # before boot finished, that was every guest in the batch,
+            # every time, regardless of what actually happened.
             ring_offset = len(specs) - len(per_guest_exits)
-            if idx >= ring_offset:
+            known = ring_usable and idx >= ring_offset
+            if known:
                 exit_code = per_guest_exits[idx - ring_offset][1]
             else:
                 exit_code = 0
@@ -1407,6 +1481,7 @@ async def sandbox_run_batch(
                 guest=spec.guest,
                 name=gname,
                 exit_code=exit_code,
+                exit_code_known=known,
                 trap_kind=trap_kind,
                 trap_fingerprint=fingerprint,
                 stdout=stdout,
@@ -1419,10 +1494,15 @@ async def sandbox_run_batch(
         batch_name=batch_name,
         command=cmd,
         aggregate_exit_code=aggregate,
+        # Safe despite unknown per-guest codes: `aggregate` is
+        # SandboxVM's own status, and 0 there means every guest
+        # returned 0, so the placeholder zeroes agree with reality in
+        # exactly the case where this is True.
         all_clean=(aggregate == 0
                    and all(e.exit_code == 0 for e in entries)),
         duration_s=time.monotonic() - t0,
         entries=entries,
+        ring_usable=ring_usable,
     )
 
 

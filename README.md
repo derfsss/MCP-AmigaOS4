@@ -52,7 +52,7 @@ can:
   installer. Off by default, and openable only by a deliberate action
   on the target itself; see [SECURITY.md](SECURITY.md).
 
-**137 typed MCP tools across 14 namespaces, 8 live resources**,
+**138 typed MCP tools across 14 namespaces, 8 live resources**,
 verified end-to-end on QEMU Pegasos2 and real AmigaOne X5000
 hardware.
 
@@ -145,7 +145,7 @@ A summary follows; the full list of tools, resources, methods, and
 helper scripts lives in [COMMANDS.md](COMMANDS.md), with narrative
 context in [USAGE.md](USAGE.md).
 
-- 137 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`, `wb.*`,
+- 138 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`, `wb.*`,
   `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
   `app.notify`, `notify.*`, `installer.*`, `serial.*`, `power.*`,
   `sandbox.*`, and `input.*`, plus a namespace dispatcher per group.
