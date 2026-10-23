@@ -1,9 +1,54 @@
 # Change log
 
-## Unreleased — becomes v1.4
+## Unreleased
+
+## 2.0 — Tracked jobs, sandboxed commands, and the mcp 2 SDK
+
+2.0 is a major version because the host server moved to the mcp 2.x
+Python SDK; tools, parameters and config files carry over. On the
+daemon, every command now runs as a tracked job that can be followed,
+read and stopped after the call that started it has returned, and
+MCPd's connection workers now run above ordinary programs, so a busy
+program can no longer starve the daemon. A job can also run under SandboxVM, so a crashing
+program is contained and its trap reported. And a command that
+outlived its timeout is no longer run a second time: the host reports
+it as still running and never resends a request that may already have
+run. 143 tools in 15 namespaces, 8 resources, 64 daemon methods.
+
+v1.4 was never tagged or released; its changes are included here.
 
 ### Added
 
+- **Commands run as tracked jobs** (#25). Every `exec.cmd` gets a
+  `job_id`, a recorded process id, an exact exit code and `result2`
+  (IoErr). New daemon methods and tools: `exec.status`, `exec.output`
+  (read a job's output by offset, while it runs or after),
+  `exec.kill` (CTRL-C/D/E/F, checked against the live process list,
+  and it reports when a program ignored the break) and `exec.list`,
+  plus an `exec` dispatcher. 138 -> 143 tools; 60 -> 64 daemon
+  methods.
+- **Sandboxed jobs** (#25). `exec_cmd sandbox=true` runs a program
+  under SandboxVM as an ordinary tracked job (same id, status, output,
+  kill, priority), so a crash in it is contained and reported. The
+  result's `sandbox` block carries the guest's output, the trap kind
+  and SandboxVM's trap report from the debug ring (ip, dar, dsisr,
+  registers). That report is matched to the job by its unique name,
+  because `sandboxvm` exits 50 when its guest aborts rather than
+  passing the guest's code on. `exec_kill force=true` is accepted
+  only for sandboxed jobs and needs **SandboxVM 1.1**, which aborts a
+  guest on CTRL-F (derfsss/SandboxVM#1). `sandbox_probe` reads the
+  binary's `$VER` into `sandboxvm_version` and reports
+  `abort_supported`. With 1.1 the `sandbox` block also has
+  `end_reason` (exit / trap / aborted / timeout, from sandboxvm's exit
+  codes 50 / 51 / 52), and `sandbox_time_limit_s` passes SandboxVM's
+  new `-T` limit.
+- **Priority for started work** (#24). Jobs run at priority -2 by
+  default, can be set per call (`priority` on `exec_cmd`,
+  `tests.run_suite`, `sandbox.run_batch`) or in `[defaults]
+  exec_priority`, and are capped at 0, below MCPd's workers. Two
+  documented limits: programs a job starts with `Run` begin at
+  priority 0 whatever the job's priority, and a running job's output
+  often appears only when it ends (AmigaDOS buffers it).
 - **`fs.sync`** — flush a filesystem's cached writes to disk and wait
   for the handler to confirm (`ACTION_FLUSH`). AmigaOS commits writes
   on its own schedule, so a write can still be only in RAM when a
@@ -30,9 +75,138 @@
   `exit_code_known`** — the same distinction for per-guest exit codes,
   which are read from the same debug ring. `aggregate_exit_code` comes
   from SandboxVM itself and stays trustworthy either way.
+- **`scripts/build_release_lha.py`** — assembles the MCPd release
+  archive on an AmigaOS target (a QEMU guest will do), so the AmigaOS
+  protection bits are already correct in the file users download.
+  Protection bits belong to the file rather than the byte stream, and
+  no cross-platform container preserves them: a bare ELF moved onto an
+  Amiga over SMB, a USB stick, or a browser download arrives with the
+  executable bit protected and refuses to run. The script stages the
+  daemon, the install scripts and a README, sets the executable and
+  script bits, runs `LhA`, then extracts the archive again and checks
+  the flags came back before accepting it. `MCPd-1.3.lha` is attached
+  to the v1.3 release.
+
+### Changed
+
+- **The host server is ported to the mcp 2.x SDK** (#17), which is why
+  this release is 2.0. It runs on `mcp.server.mcpserver.MCPServer`
+  (mcp >= 2.3, < 3; pydantic >= 2.12) and reports its version to
+  clients. Two behaviours had to be kept on purpose:
+  - **Tool errors still reach the model as readable text.** mcp 2
+    hides the message of any exception that isn't its `ToolError`,
+    so every error now derives from `ToolError`. The text also
+    carries the error's data, for example
+    `Object not found [data: {"path": ...}]` or a still-running
+    `job_id`.
+  - `[server] mcp_http_addr` is now actually used for the `sse` and
+    `streamable-http` transports (1.x never passed it on).
+
+  Checked with the mcp 2 client over stdio against the real server
+  and a QEMU guest.
+- **A command that outlives its timeout keeps running and says so.**
+  The `exec_cmd` tool now returns `state: "running"` with its
+  `job_id` instead of failing, so it is never mistaken for a command
+  that did not start. On the daemon, `timeout_ms` is now enforced
+  (the old synchronous path ignored it). Without the new
+  `return_running` flag, a timeout is an error carrying the
+  `job_id`, which keeps the "ran to completion" meaning for internal
+  callers and older hosts.
+- **MCPd's connection workers run at +1**, above ordinary programs
+  and level with the listener, instead of -1. At -1, a program
+  spinning at 100% at priority 0 starved MCPd on the X5000 for its
+  whole run (a dEQP error path; the crash dump showed a worker stuck
+  in the Ready queue). Jobs default to -2 and are now capped at 0.
+  The ready beacon reports `worker_pri`.
+- Job shells run with requesters off (`pr_WindowPtr = -1`). An
+  asynchronous shell does not inherit that from the daemon, so a
+  command touching a missing volume opened "Please insert volume" on
+  the target's screen and blocked until someone answered it (seen on
+  the X5000; CTRL-C does not clear it). It now fails at once.
+- Config keys nothing read are gone: `[paths] combi_installer`,
+  `spe_tests` and `adtools_gdb`, and the target keys `master_image`
+  and `idle_timeout_s`. Old files that still have them load as before.
+- **qemu-runner is now a package dependency, not a local checkout.**
+  `host/pyproject.toml` installs it from
+  `git+https://github.com/derfsss/qemu-runner` at qemu-runner v1.3.1
+  (MIT; pinned by commit), and
+  the QMP transport and `scripts/` import `qmp_client` /
+  `serial_client` directly. `[paths] qemu_runner` and
+  `$QEMU_RUNNER_DIR` are gone; an old `qemu_runner = ...` line is
+  ignored. That commit also fixes a QMPClient bug: when an async event
+  and a reply arrived in one read, the reply was lost.
+- The setup wizard no longer asks for a qemu-runner path, and also
+  looks for `amiga_qemu_tests` under `~/Projects/Testing/`.
+- Documentation pass across the README and everything it links to,
+  checked against the live tool surface rather than against itself.
+  `z.library`, `keymap.library` and `graphics.library` are now listed
+  as target requirements; `input.*`, `sandbox.*` and `wb.screenshot`
+  have per-feature prerequisite entries; the README gained a quick
+  start; and `CONTRIBUTING.md` now says to branch from `develop`
+  rather than the protected release branch.
+- Two behaviours that are easy to misread are now written down: the
+  AmigaOS kernel debug buffer does not wrap (so `sys.debug_ring` can
+  be blind to everything logged after boot on a machine with a
+  verbose driver), and only `power.on` / `power.off` are safe to send
+  to the MCU while a board is powered off.
 
 ### Fixed
 
+- **`input.scroll` now sends AmigaOS 4's own wheel event** (#18).
+  It used to send NewMouse rawkey codes (0x7A-0x7D), which the AOS4
+  SDK doesn't define as wheel codes at all (`lowlevel.h` has 0x7A as
+  `RAWKEY_PORT0_JOY_DOWN`). On the X5000 an ordinary Intuition window
+  received nothing from them. The default is now
+  `IECLASS_MOUSEWHEEL`, which the window received as
+  `IDCMP_EXTENDEDMOUSE` wheel data (y +1 per click down, -1 up).
+  `style: "newmouse"` keeps the old codes for programs that read
+  them.
+- **`input.key` knows F11 and F12** (#18): 0x4B and 0x6F, taken from
+  the SDK's `RAWKEY_F11` / `RAWKEY_F12` and seen arriving as those
+  rawkeys in a window on the X5000.
+- **A command that outran its timeout was run a second time** (#22,
+  #23). The host transport handled `OSError` before `TimeoutError`, and
+  since Python 3.11 a timeout *is* an `OSError`. So a slow `exec.cmd`
+  looked like a dropped connection and was sent again. The second copy
+  typically failed with "unable to open redirection file" while the
+  first kept running, and two timeouts in a row surfaced as an empty
+  `MCPd I/O failed:`. Now:
+  - A timeout is reported as a timeout and never resent.
+  - After a request has gone out, only read-only methods are resent.
+  - Every transport error carries `data.may_have_run`.
+  - A connection the daemon has dropped, or that has been idle for
+    100 s, is replaced *before* sending, so the first call after an
+    idle spell still works without a resend.
+
+  The GDB transport had the same ordering bug, and would have repeated
+  a step or a memory write; it is fixed too.
+- **Several daemon booleans were always `true`.** `cJSON_False` is a
+  type flag (1), not a boolean, and it was passed where one was
+  expected. Affected: `exec.cmd` `truncated` / `streamed`, `fs.sync`
+  `flushed` (a failed flush reported success), `fs.delete` `recursive`
+  and `sys.crashhook_status` `registered`.
+- **`qemu.stop` could kill a guest with writes still in its cache.**
+  It flushed only when this process had written to the target, so
+  uploads by a script, another session or a job on the guest were
+  invisible to it, and it reported `settled: nothing-written`. It now
+  calls `fs.sync` first whenever the guest's MCPd answers, so the
+  guest's most recent writes are on disk before it is stopped.
+- **Board detection was wrong for Pegasos II and SAM440.** It guessed
+  from the CPU: a G4 Pegasos II came out as `amigaone` and a 440EP
+  SAM440 as `pegasos2`. `proto.capabilities` `board.detected` now comes
+  from expansion.library's `GetMachineInfo(GMIT_Machine)`, with the
+  OS's own name in the new `board.machine` field (for example "Pegasos
+  II"). The CPU guess is kept only as a fallback, and now says
+  `amigaone-or-pegasos2` when it can't tell them apart.
+- `proto.capabilities` `limits.max_concurrent_clients` said 1; it is 16.
+- **A call to a starved daemon could hang past its own timeout.**
+  Connecting and closing had no time limit. Against an X5000 whose
+  MCPd was starved by a priority-0 program spinning at 100% (a dEQP
+  error path), a reconnect stalled the caller about 30 s beyond its
+  10 s request timeout. Both now have limits: 10 s to connect, 2 s to
+  close.
+- `mcpd/Makefile` now rebuilds when a header changes. Before, editing
+  `rpc.h` left a stale binary until `make clean`.
 - **The daemon announced a port it might not be listening on.**
   Discovery reported `tcp_port: 4322` literally, regardless of
   `--port`, sending clients to an endpoint that could refuse the
@@ -59,10 +233,8 @@
   client could connect and get a reply shaped by a half-built daemon.
   The socket is still bound early — a port clash should fail fast —
   but nothing is accepted until every subsystem a request could reach
-  is up. The host-side warmup stays, since it is what lets a 1.4 host
+  is up. The host-side warmup stays, since it is what lets a 2.0 host
   talk to the 1.2 and 1.3 daemons already deployed.
-- **`qemu.stop` could discard the guest's most recent writes** — it
-  now flushes first via `fs.sync`.
 - **`qemu.stop` / `qemu.status` reported a running guest as stopped**
   when this process had not started it, so restart sequences silently
   operated on a machine they believed they had replaced.
@@ -79,7 +251,6 @@
   enforced, and `max_text_len` defaults to 128 — the length that
   actually fits the event budget, where 512 was only ever typed in
   part.
-
 - **Two QEMU targets can now run at the same time, and both are
   discoverable.** Every QEMU target forwarded the UDP discovery port
   with the same host-side number, so starting a second guest failed on
@@ -95,35 +266,6 @@
   and with the name of the configured `target` they belong to.
   Daemons that answer but are not in the configuration are still
   listed, with `target: null`.
-
-### Added
-
-- **`scripts/build_release_lha.py`** — assembles the MCPd release
-  archive on an AmigaOS target (a QEMU guest will do), so the AmigaOS
-  protection bits are already correct in the file users download.
-  Protection bits belong to the file rather than the byte stream, and
-  no cross-platform container preserves them: a bare ELF moved onto an
-  Amiga over SMB, a USB stick, or a browser download arrives with the
-  executable bit protected and refuses to run. The script stages the
-  daemon, the install scripts and a README, sets the executable and
-  script bits, runs `LhA`, then extracts the archive again and checks
-  the flags came back before accepting it. `MCPd-1.3.lha` is attached
-  to the v1.3 release.
-
-### Changed
-
-- Documentation pass across the README and everything it links to,
-  checked against the live tool surface rather than against itself.
-  `z.library`, `keymap.library` and `graphics.library` are now listed
-  as target requirements; `input.*`, `sandbox.*` and `wb.screenshot`
-  have per-feature prerequisite entries; the README gained a quick
-  start; and `CONTRIBUTING.md` now says to branch from `develop`
-  rather than the protected release branch.
-- Two behaviours that are easy to misread are now written down: the
-  AmigaOS kernel debug buffer does not wrap (so `sys.debug_ring` can
-  be blind to everything logged after boot on a machine with a
-  verbose driver), and only `power.on` / `power.off` are safe to send
-  to the MCU while a board is powered off.
 
 ## 1.3 — Sandboxed iteration, screen capture, and input injection
 

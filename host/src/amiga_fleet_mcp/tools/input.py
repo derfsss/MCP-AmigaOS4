@@ -300,8 +300,14 @@ async def input_scroll(
     fleet: Fleet, target: str, *,
     clicks: int = 1, direction: str = "down",
     delay_ms: int | None = None,
+    style: str = "native",
 ) -> MouseResult:
-    """Mouse wheel. No confirm — scrolling commits nothing."""
+    """Mouse wheel. No confirm — scrolling commits nothing.
+
+    `style` "native" sends AOS4's own wheel event (IECLASS_MOUSEWHEEL),
+    which applications receive as IDCMP_EXTENDEDMOUSE; "newmouse" sends
+    the older NewMouse rawkey codes for programs that only know those.
+    Daemons before 2.0 ignore `style` and always send NewMouse codes."""
     cfg = _resolve_input(fleet, target)
     _check_delay(delay_ms)
     if not 1 <= clicks <= 32:
@@ -310,10 +316,13 @@ async def input_scroll(
         raise InvalidParams(
             'direction must be "up", "down", "left" or "right"'
         )
+    if style not in ("native", "newmouse"):
+        raise InvalidParams('style must be "native" or "newmouse"')
 
     raw = await fleet.mcpd(target).request("input.scroll", {
         "clicks": clicks,
         "direction": direction,
+        "style": style,
         "delay_ms": delay_ms if delay_ms is not None
         else cfg.default_delay_ms,
     })

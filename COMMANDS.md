@@ -21,6 +21,9 @@ for diagnostics.
 | `--list-resources` | Print every registered MCP resource URI / template + title + mime type. Does not start MCP. |
 | `--discover` | UDP-broadcast probe for MCPd instances on the LAN. Prints discovered targets and exits. Does not start MCP. |
 | `--discover-timeout-ms N` | Window to wait for discovery responses. Default `1500`. |
+| `--init` | Interactive setup wizard: walks through every config block and writes a validated `config.toml` (to `--config` if given, else the platform default). Does not start MCP. |
+| `--non-interactive` | With `--init`: skip every prompt and write a server-only stub with no targets. |
+| `--force` | With `--init`: overwrite an existing config without asking. |
 
 ## MCPd command-line arguments
 
@@ -37,8 +40,9 @@ auto-start watchdog.
 
 ## RPC methods (daemon side)
 
-Every method advertised by `proto.capabilities`. JSON-RPC 2.0 over a
-4-byte big-endian length-prefix framed TCP socket on port 4322.
+Every method advertised by `proto.capabilities` — 64 in MCPd 2.0.
+JSON-RPC 2.0 over a 4-byte big-endian length-prefix framed TCP socket
+on port 4322.
 
 Some methods have target-specific prerequisites (Freescale QorIQ for
 the CCSR / TLB / read_pa methods, `i2c.resource` /
@@ -83,7 +87,6 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.read_pa` | DANGEROUS supervisor-mode read at any 36-bit physical address. No range checking; misuse can crash the connection-handling task (the daemon listener stays up by design). |
 | `sys.tlb_dump` | Dump all 64 TLB1 entries from a P5020 / P1022 target via `tlbre` / MAS registers. |
 | `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1). Documented commands `t` / `v` / `f` / `s` plus build-info `b`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
-| `sys.debug_ring` | Read the kernel debug ring via `c:DumpDebugBuffer`. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 
 ### `fs.*`
 
@@ -116,7 +119,23 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 
 | Method | Description |
 |---|---|
-| `exec.cmd` | Run an AmigaDOS command. Optional `args[]`, `cwd`, `timeout_ms`. |
+Every command runs as a **job** with an id (daemon 2.0+). A job
+outlives the call that started it, so a caller whose wait ran out can
+still follow it or stop it. Jobs run at priority **-2** by default and
+are capped at 0, one below MCPd's own connection workers, which run
+at +1 so a busy program at the normal priority can't starve MCPd. Programs a job starts itself with
+`Run` begin at priority 0 whatever the job's priority. MCPd keeps the
+last 32 job records; if all 32 are still running, a new job is
+refused. Job shells run with requesters off, so a command that touches
+a missing volume fails instead of opening "Please insert volume".
+
+| Method | Description |
+|---|---|
+| `exec.cmd` | Run an AmigaDOS command and wait up to `timeout_ms` (enforced). Optional `args[]`, `cwd`, `priority`, `stream`, `sandboxed` (the command runs a program under SandboxVM; set by the host's sandbox mode). Returns `output`, `exit_code`, `result2` (IoErr), `job_id`, `state`, `pid`, `priority`, `elapsed_ms`, `truncated` (output over 1 MiB). Still running at the deadline: an error (-32001) whose `data.job_id` names the job, or with `return_running: true` a normal result with `state: "running"` and `exit_code: null`. Either way the command **keeps running**. |
+| `exec.status` | A job's state without its output: running or exited, `exit_code`, `result2`, `pid`, `priority`, `elapsed_ms`, free memory before and after, the break signals sent. `job_id`. |
+| `exec.output` | Read a job's output from `offset` (up to `max_bytes`, default 64 KiB), running or finished; `eof` once it has exited and all of it was read. AmigaDOS often flushes a command's output only when the command ends, so a running job may show less than it has printed. Output that `exec.cmd` already returned in full is deleted. |
+| `exec.kill` | Send a running job a break signal (`signal` c, d, e or f; default c) and wait up to `wait_ms` (default 2000) for it to exit. A program that ignores breaks keeps running and comes back `exited: false`; nothing is removed by force. `force: true` is accepted only for a `sandboxed` job: it sends CTRL-F, SandboxVM's abort signal. The process id is checked against the live process list first. |
+| `exec.list` | Every job record, newest first, plus `worker_priority`, `default_priority` and `max_priority`. |
 
 ### `wb.*` (Workbench / Intuition)
 
@@ -149,14 +168,14 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 | `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
 | `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). Returns the pointer position actually achieved, as `mouse_move` and `drag` do. |
 | `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
-| `input.scroll` | — | Mouse wheel via NewMouse codes. `clicks` (1–32), `direction`. |
+| `input.scroll` | — | Mouse wheel. `clicks` (1–32), `direction`, `style`: `native` (default, AmigaOS 4's own `IECLASS_MOUSEWHEEL`, which applications receive as `IDCMP_EXTENDEDMOUSE` wheel data) or `newmouse` (the legacy NewMouse rawkey codes; on the X5000 an ordinary Intuition window receives nothing from these). |
 
 Per-call caps enforced by the daemon: 256 events, 20 s wall clock,
 512 characters of text, 64 drag steps, `delay_ms` 0–1000. A call that
 hits a cap stops cleanly and returns `truncated: true`.
 
 Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
-`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f10`; `esc`
+`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f12` (F11/F12 are the AOS4 SDK's `RAWKEY_F11` 0x4B / `RAWKEY_F12` 0x6F, checked on the X5000); `esc`
 `return` `tab` `backspace` `del` `help` `space` `up` `down` `left`
 `right`; `kp0`–`kp9` `kpdot` `kpenter` `kpminus` `kpplus` `kpmul`
 `kpdiv`. A single printable character (`"q"`) also works.
@@ -197,10 +216,12 @@ prints the live list.
 | Tool | Wraps |
 |---|---|
 | `proto_capabilities` | `proto.capabilities` |
-| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_debug_ring` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
+| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
+| `sys_debug_ring` | Host-side tool, not a daemon RPC method: runs `C:DumpDebugBuffer` through `exec.cmd` to read the kernel debug ring. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 | `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_sync` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
-| `exec_cmd` | `exec.cmd` |
+| `exec_cmd` | `exec.cmd`, except that a command still running at `timeout_s` returns `state: "running"` and its `job_id` instead of raising. **Do not re-run it**: follow it with `exec_status` / `exec_output`, or stop it with `exec_kill`. `priority` defaults to `[defaults] exec_priority`. `sandbox: true` runs `command` (a program path) under SandboxVM so a crash is contained: the result gains a `sandbox` block with the guest's output, `trap_kind` and SandboxVM's trap report (ip, dar, dsisr, registers) from the debug ring, plus `end_reason` (`exit` / `trap` / `aborted` / `timeout`). `sandbox_extmem_mb`, `sandbox_window_mb` and `sandbox_deny_libs` override the target's `[sandbox]` defaults; `sandbox_time_limit_s` passes SandboxVM's `-T` limit (SandboxVM 1.1+). ExtMem machines only. See [USAGE.md § Running commands](USAGE.md#running-commands-exec). |
+| `exec_status` / `exec_output` / `exec_kill` / `exec_list` | `exec.*` job follow-up (`exec_kill` takes `wait_s`; `force=True` only for sandboxed jobs, and only where `sandbox_probe` reports `abort_supported`, which needs SandboxVM 1.1 or later). |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` introspection |
 | `wb_screenshot` | `wb.screenshot` — capture a screen to PNG on the target, download it, optionally inline it as base64. Works on real hardware, unlike the QMP-based `qemu_screenshot`. |
 | `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
@@ -213,7 +234,7 @@ prints the live list.
 | Tool | Description |
 |---|---|
 | `qemu_start` | Boot a target from its `qemu_config`. |
-| `qemu_stop` | Stop the guest. Works on one this process did not start (falls back to QMP `quit`). Flushes the guest's filesystem first via `fs.sync` when anything has been written to it, so an abrupt stop does not discard recent writes; `settle_s=0` skips that. The result's `settled` field says which happened. |
+| `qemu_stop` | Stop the guest. Works on one this process did not start (falls back to QMP `quit`). Flushes the guest's filesystem first via `fs.sync` whenever the guest's MCPd answers, so an abrupt stop does not discard recent writes. Against a daemon without `fs.sync` it instead waits up to `settle_s` (default 10) after the last write made through this process; `settle_s=0` skips that wait. The result's `settled` field says which happened. |
 | `qemu_reset` | Restart the guest by stopping and starting it — the only restart an AmigaOS 4 guest reliably survives. `system_reset=True` sends the raw QMP command instead, for non-AmigaOS guests. |
 | `qemu_status` | Whether a guest is alive, whoever started it, plus `owned` — true only when this process holds the QEMU handle (a `pid` is available only then). |
 | `qemu_screenshot` | PNG of the framebuffer via QMP `screendump`. |
@@ -247,7 +268,7 @@ The captured QEMU serial output is exposed as the read-only resource
 | Tool | Description |
 |---|---|
 | `tests_list_suites` | Enumerate available test suites from the AmigaQemuTests harness. |
-| `tests_run_suite` | Run a specific suite. |
+| `tests_run_suite` | Run a specific suite. Optional `priority` for the jobs it starts (default `[defaults] exec_priority`). |
 | `tests_run_standard_dos_tests` | Convenience wrapper around the standard DOS test set. |
 | `tests_parse_output` | Parse harness output into structured pass / fail counts. |
 
@@ -340,11 +361,11 @@ Pegasos II is refused at probe time — SandboxVM requires ExtMem
 
 | Tool | Confirm | Description |
 |---|---|---|
-| `sandbox_probe` | — | Path resolution + executability + machine compatibility. Returns a structured `SandboxProbeResult`. Bypasses the in-process probe cache (60 s TTL). |
+| `sandbox_probe` | — | Path resolution + executability + machine compatibility. Returns a structured `SandboxProbeResult`, including `sandboxvm_version` (from the binary's `$VER`) and `abort_supported` (SandboxVM 1.1+, needed for `exec_kill force=True`). Bypasses the in-process probe cache (60 s TTL). |
 | `sandbox_deploy` | **yes** | Upload sandboxvm to the target. Convenience wrapper around `fs.upload`: source from `[paths] sandboxvm` (or explicit `source` arg), dest from `[targets.<name>.sandbox.path]` (defaults to `SYS:Tools/sandboxvm`). Verifies via SHA-256 and re-probes the just-uploaded path so the cache can't be shadowed by a legacy default-path binary. |
-| `sandbox_run_guest` | — | Run one guest ELF. Probe-gated, lock-serialised, `T:capture` files slurped + classified. Returns `exit_code` (signed: 0 clean, positive guest rc, negative trap), `trap_kind` (`DSI`/`ISI`/`alignment`/`program`/`fp_unavailable` when matched), `trap_fingerprint` (`kmod_libcall_null4` for the documented `HD_SCSICMD via DoIO` limitation), `stdout` / `stderr` / `capture_paths`. |
+| `sandbox_run_guest` | — | Run one guest ELF. Probe-gated, lock-serialised, `T:capture` files slurped + classified. Returns `exit_code` (sandboxvm's own: 0 clean, positive guest rc, negative trap type with SandboxVM 1.0; with 1.1 a guest's positive rc passes through capped at 127, every trap is 50, aborted 51, timed out 52; on 50 the trap kind is read from SandboxVM's report in the debug ring), `trap_kind` (`DSI`/`ISI`/`alignment`/`program`/`fp_unavailable` when matched), `trap_fingerprint` (`kmod_libcall_null4` for the documented `HD_SCSICMD via DoIO` limitation), `stdout` / `stderr` / `capture_paths`. |
 | `sandbox_run_driver` | — | Load a driver via SandboxVM resident-driver mode (`-r`). Scans the driver's `RTF_AUTOINIT` Resident, applies PPC ELF relocations, and calls `CLT_InitFunc` with the sandboxed `IExec`. With `test=` set, runs the test ELF as a follow-on guest in the same Guest context so `OpenLibrary(<driver-name>)` resolves through the resident-lib registry. Same return shape as `run_guest`. |
-| `sandbox_run_batch` | — | Run up to 16 guests sequentially in a single SandboxVM invocation. Returns a `BatchRunResult` with per-entry classification + the aggregate (last non-zero rc, mirrors SandboxVM's own convention). Per-guest argv and per-guest deny-lists are NOT supported (SandboxVM constraint); use `sandbox.run_guest` per-binary if you need either. |
+| `sandbox_run_batch` | — | Run up to 16 guests sequentially in a single SandboxVM invocation. Returns a `BatchRunResult` with per-entry classification + the aggregate (last non-zero rc, mirrors SandboxVM's own convention). Per-guest argv and per-guest deny-lists are NOT supported (SandboxVM constraint); use `sandbox.run_guest` per-binary if you need either. Optional `priority` for the batch's job. |
 | `sandbox_last_trap` | — | Filter the kernel debug ring for SandboxVM trap signatures. Wraps `sys.debug_ring` with a 3-attempt × 200 ms retry loop so a `last_trap` call immediately after a crashed `run_guest` doesn't race the kernel ring write. Returns the matched trap block plus structured `trap_kind` / `fingerprint` / `traptype_hex`. `found=False` is the legitimate "no trap to report" outcome. |
 
 For arbitrary AmigaDOS commands without the SandboxVM harness, use
@@ -361,6 +382,7 @@ to script an operation by method name rather than by tool name.
 | Dispatcher | Routes to |
 |---|---|
 | `fs` | `fs.*` |
+| `exec` | `exec.*` (`cmd` returns a running job at its timeout, like `exec_cmd`) |
 | `sys` | `sys.*` |
 | `wb` | `wb.*` |
 | `input` | `input.*` (disabled by default) |
@@ -392,13 +414,18 @@ Live, read-only data exposed under the `amiga://` URI scheme.
 
 ## Helper scripts
 
-Located in `scripts/`. Run with `python scripts/<name>.py`.
+Located in `scripts/`. Run with `python scripts/<name>.py`, using the
+Python from `host/.venv`: most scripts import `amiga_fleet_mcp`, and
+some import `qmp_client` / `serial_client` from the `qemu-runner`
+package, which is installed only as a host dependency.
 
 ### Install / lifecycle
 
 | Script | Description |
 |---|---|
 | `install_mcpd_autostart.py [endpoint] [binary]` | Drop MCPd at `SYS:System/MCPd/`, upload the watchdog, patch `S:Network-Startup`. Idempotent. |
+| `x5000_bootstrap_mcpd.py --host <ip>` | One-time bootstrap: upload `mcpd/MCPd` to `RAM:MCPd` on the target and launch it through a SerialShell already running there. |
+| `x5000_kill_mcpd.py --host <ip>` | Stop a running MCPd through SerialShell (`Break N C`) so a new build can be bootstrapped. |
 
 ### Validation
 
@@ -406,7 +433,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 |---|---|
 | `validate.py --endpoint host:port [--rounds 1,2,3,4,5]` | Parametric runner for the validation suites against any endpoint. |
 | `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Comprehensive capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, stress, and the host MCP protocol layer. |
-| `validate_input.py --target <name> [--shared-dir DIR] [--no-restart-cycles]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. Kills/relaunches QEMU for the restarts; use `--no-restart-cycles` on real hardware. |
+| `validate_input.py --target <name> [--shared-dir DIR] [--restart-mode qemu\|cold\|manual] [--keep-running]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. By default kills/relaunches QEMU for the restarts; on real hardware use `--restart-mode cold` (`sys.cold_reboot`, with an MCU power-cycle fallback) or `manual`. |
 | `validate_durability.py --endpoint host:port [--skip-long]` | Out-of-the-box durability sweep: raw-socket frame fuzzing, JSON-RPC envelope abuse, error-code coverage, connection lifecycle, long-running stability, filesystem corner cases, exec.cmd corners, subscription state transitions, concurrency, numeric boundaries, cross-method workflows, MCP resources, fleet host tools, CLI flags. |
 | `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, hardcoded for the canonical test endpoint. |
 | `qemu_install_test.py` | End-to-end: launch QEMU, bootstrap, install, kill+relaunch, verify auto-start, run all rounds. |

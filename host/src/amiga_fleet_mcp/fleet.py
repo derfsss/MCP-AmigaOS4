@@ -117,7 +117,7 @@ class Fleet:
                 "QMP only applies to qemu targets",
                 data={"target": name, "type": target.type},
             )
-        t = QmpTransport(ch, self._config.paths.qemu_runner)
+        t = QmpTransport(ch)
         self._qmp[name] = t
         return t
 

@@ -41,6 +41,7 @@ import asyncio
 import base64
 import os
 import re
+import secrets
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -49,8 +50,10 @@ from pydantic import BaseModel, Field
 
 from ..errors import InvalidParams, NotCapable, TargetError
 from ..fleet import Fleet
+from . import exec as exec_tool
 from . import fs as fs_tool
 from . import sys as sys_tool
+from .exec import SandboxJobInfo
 
 # ---------------------------------------------------------------------
 # Constants
@@ -86,6 +89,18 @@ build. Always points at the latest tagged release."""
 # host SandboxVM. Both `targets.<name>.machine` (QEMU) and
 # `targets.<name>.tags` (real-hw) are checked.
 INCOMPATIBLE_MACHINES = frozenset({"pegasos2"})
+
+# First SandboxVM version that aborts a guest on CTRL-F (and reaps what
+# it opened), which is what exec.kill force=true relies on. Requested in
+# derfsss/SandboxVM#1 and shipped in SandboxVM 1.1, which also has the
+# -T wall-clock limit and exits 51 (aborted) / 52 (timed out).
+SANDBOXVM_ABORT_MIN_VERSION: tuple[int, int] | None = (1, 1)
+
+#: sandboxvm's own exit codes (SandboxVM 1.1 main.c): 50 = a guest
+#: trapped, 51 = aborted by CTRL-C/F, 52 = the -T limit ran out.
+SANDBOXVM_RC_TRAP = 50
+SANDBOXVM_RC_ABORTED = 51
+SANDBOXVM_RC_TIMEOUT = 52
 
 # SandboxVM's exit-code convention: trap_type negated. See
 # upstream PROGRESS.md / README.md.
@@ -142,6 +157,13 @@ class SandboxProbeResult(BaseModel):
     hint: str | None = None
     """Human-readable next-step suggestion when ``available is
     False``."""
+    sandboxvm_version: str | None = None
+    """``major.minor`` from the binary's ``$VER`` (AmigaDOS
+    ``Version``), or ``None`` when it couldn't be read."""
+    abort_supported: bool = False
+    """True when this SandboxVM aborts a guest on CTRL-F, so
+    ``exec.kill force=True`` can stop a sandboxed job (see
+    `SANDBOXVM_ABORT_MIN_VERSION`)."""
 
 
 class DeployResult(BaseModel):
@@ -293,6 +315,30 @@ async def _execute_banner_probe(fleet: Fleet, target: str,
     return True, banner
 
 
+def _parse_version(text: str) -> tuple[int, int] | None:
+    """(major, minor) from AmigaDOS `Version` output such as
+    ``sandboxvm 1.0 (05.05.2026)``."""
+    m = re.search(r"(\d+)\.(\d+)", text)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _abort_supported(version: tuple[int, int] | None) -> bool:
+    return (SANDBOXVM_ABORT_MIN_VERSION is not None
+            and version is not None
+            and version >= SANDBOXVM_ABORT_MIN_VERSION)
+
+
+async def _read_version(fleet: Fleet, target: str,
+                        path: str) -> tuple[int, int] | None:
+    try:
+        raw = await fleet.mcpd(target).request(
+            "exec.cmd", {"command": f'Version "{path}"', "timeout_ms": 5000},
+            timeout_s=10.0)
+    except Exception:
+        return None
+    return _parse_version(str(raw.get("output", "")))
+
+
 async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
     """Eager probe — bypass the cache. Three checks, in order:
 
@@ -396,11 +442,14 @@ async def sandbox_probe(fleet: Fleet, target: str) -> SandboxProbeResult:
         )
         return result
 
+    version = await _read_version(fleet, target, found)
     result = SandboxProbeResult(
         target=target, available=True,
         path=found, searched=candidates,
         version_banner=banner,
         machine=machine, machine_ok=machine_ok,
+        sandboxvm_version=(f"{version[0]}.{version[1]}" if version else None),
+        abort_supported=_abort_supported(version),
     )
     _PROBE_CACHE[target] = (
         time.monotonic() + PROBE_CACHE_TTL_S, result,
@@ -662,7 +711,8 @@ def _build_command(sandboxvm_path: str, *,
                    deny_libs: Sequence[str],
                    name: str,
                    resident_driver: bool = False,
-                   test_elf: str | None = None) -> str:
+                   test_elf: str | None = None,
+                   time_limit_s: int | None = None) -> str:
     """Construct the AmigaDOS command line for one guest run.
 
     Plain guest mode:
@@ -687,6 +737,8 @@ def _build_command(sandboxvm_path: str, *,
     parts.extend(["-n", _shell_safe(name)])
     for lib in deny_libs:
         parts.extend(["-x", _shell_safe(lib)])
+    if time_limit_s:
+        parts.extend(["-T", str(int(time_limit_s))])  # SandboxVM >= 1.1
     if resident_driver:
         parts.append("-r")
     if test_elf:
@@ -862,6 +914,14 @@ async def _run_sandboxvm(
         stdout = wrapper_output
 
     trap_kind, fingerprint = _classify_exit(exit_code, stderr)
+    if trap_kind is None and exit_code == SANDBOXVM_RC_TRAP:
+        # sandboxvm 1.1 exits 50 for every trap rather than -(vector),
+        # so the kind comes from its report in the debug ring -- taken
+        # only if the report names this run.
+        trap = await sandbox_last_trap(fleet, target)
+        if trap.found and any(run_name in ln for ln in trap.raw_lines):
+            trap_kind = trap.trap_kind
+            fingerprint = fingerprint or trap.fingerprint
 
     capture_paths: list[str] = []
     if stdout_present:
@@ -882,6 +942,79 @@ async def _run_sandboxvm(
         duration_s=time.monotonic() - t0,
         capture_paths=capture_paths,
     )
+
+
+async def sandbox_job_command(
+    fleet: Fleet, target: str, *,
+    guest: str,
+    args: Sequence[str] | None,
+    extmem_mb: int | None,
+    window_mb: int | None,
+    deny_libs: Sequence[str] | None,
+    time_limit_s: int | None = None,
+) -> tuple[str, str]:
+    """Probe-gate the target and build the command line that runs
+    `guest` under SandboxVM, for `exec.cmd sandbox=True`. Returns
+    ``(command, name)``. The name gets a random suffix so concurrent
+    sandboxed jobs never share capture files (run_guest serialises on a
+    lock instead; a job may outlive its call, so a lock would not do)."""
+    probe = await _ensure_available(fleet, target)
+    assert probe.path is not None
+    cfg = fleet.target_config(target).sandbox
+    if extmem_mb is None:
+        extmem_mb = cfg.default_extmem_mb if cfg else 1024
+    if window_mb is None:
+        window_mb = cfg.default_window_mb if cfg else 256
+    merged_deny = list(cfg.deny_libs) if cfg and cfg.deny_libs else []
+    for lib in deny_libs or ():
+        if lib not in merged_deny:
+            merged_deny.append(lib)
+    name = f"{_derive_guest_name(guest)}-{secrets.token_hex(3)}"
+    cmd = _build_command(
+        probe.path, guest=guest, args=args,
+        extmem_mb=extmem_mb, window_mb=window_mb,
+        deny_libs=merged_deny, name=name, time_limit_s=time_limit_s)
+    return cmd, name
+
+
+async def sandbox_job_result(
+    fleet: Fleet, target: str, name: str, exit_code: int | None,
+) -> SandboxJobInfo:
+    """Collect a sandboxed job's guest output and trap classification.
+    With `exit_code` None (still running) only the capture paths are
+    filled in and nothing is read or deleted."""
+    out_path = f"T:sandboxvm-{name}.out"
+    err_path = f"T:sandboxvm-{name}.err"
+    info = SandboxJobInfo(name=name, capture_paths=[out_path, err_path])
+    if exit_code is None:
+        return info
+    info.stdout, out_present = await _read_capture(fleet, target, out_path)
+    info.stderr, err_present = await _read_capture(fleet, target, err_path)
+    await _delete_capture(fleet, target, out_path)
+    await _delete_capture(fleet, target, err_path)
+    info.capture_paths = [p for p, ok in ((out_path, out_present),
+                                          (err_path, err_present)) if ok]
+    info.trap_kind, info.trap_fingerprint = _classify_exit(
+        exit_code, info.stderr)
+    info.end_reason = {
+        0: "exit",
+        SANDBOXVM_RC_TRAP: "trap",
+        SANDBOXVM_RC_ABORTED: "aborted",
+        SANDBOXVM_RC_TIMEOUT: "timeout",
+    }.get(exit_code, "exit")
+    if exit_code == SANDBOXVM_RC_TRAP and info.trap_kind is None:
+        # The sandboxvm process exits with its own code (50 when a guest
+        # aborted, seen on QEMU AmigaOne), not the guest's -768, so the
+        # exit code alone often can't classify a trap. SandboxVM's trap
+        # report is in the debug ring, under this job's unique name.
+        trap = await sandbox_last_trap(fleet, target)
+        info.ring_usable = trap.ring_usable
+        if trap.found and any(name in line for line in trap.raw_lines):
+            info.trap_kind = trap.trap_kind
+            info.trap_fingerprint = info.trap_fingerprint or trap.fingerprint
+            info.trap_lines = [ln for ln in trap.raw_lines
+                               if ln.startswith("[sandboxvm/trap]")]
+    return info
 
 
 async def sandbox_run_guest(
@@ -1323,6 +1456,7 @@ async def sandbox_run_batch(
     deny_libs: Sequence[str] | None = None,
     name: str | None = None,
     timeout_s: float = 600.0,
+    priority: int | None = None,
 ) -> BatchRunResult:
     """Run up to 16 guests sequentially inside a single SandboxVM
     invocation.
@@ -1404,6 +1538,7 @@ async def sandbox_run_batch(
         name=batch_name,
     )
 
+    pri = exec_tool.job_priority(fleet, priority)
     lock = _lock_for(target)
     t0 = time.monotonic()
     async with lock:
@@ -1413,6 +1548,7 @@ async def sandbox_run_batch(
             {
                 "command": cmd,
                 "timeout_ms": int(timeout_s * 1000),
+                **({"priority": pri} if pri is not None else {}),
             },
             timeout_s=max(timeout_s + 5.0, 30.0),
         )

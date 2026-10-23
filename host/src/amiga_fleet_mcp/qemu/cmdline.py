@@ -82,7 +82,7 @@ def build_cmdline(
     """Build a fully-formed QEMU command line.
 
     Returns the argv plus a `ports` dict listing the ports we injected
-    (`serialshell`, `mcpd`, `qmp`) so callers can probe them.
+    (`mcpd`, `qmp`, `gdb`, `discovery`) so callers can probe them.
     """
     if not kyvos_config_path.exists():
         raise InternalError(f"kyvos config not found: {kyvos_config_path}")

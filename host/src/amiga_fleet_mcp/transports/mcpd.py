@@ -75,6 +75,51 @@ MUTATING_METHODS = frozenset({
     "exec.cmd",
 })
 
+#: Methods that are safe to send a second time when the first attempt
+#: may already have reached the daemon: they only read, or (fs.sync)
+#: repeating them changes nothing. Anything not listed here is never
+#: resent once its request has gone out -- resending exec.cmd after a
+#: timeout ran the command twice (#22, #23). sys.read_pa is left out
+#: on purpose: a bad address faults the handler, and resending it
+#: just faults another one.
+IDEMPOTENT_METHODS = frozenset({
+    "proto.capabilities", "proto.version",
+    "sys.version", "sys.tasks", "sys.libraries", "sys.devices",
+    "sys.modules", "sys.crashhook_status", "sys.ports", "sys.lastalert",
+    "sys.uptime", "sys.memory", "sys.volumes", "sys.assigns",
+    "sys.hardware", "sys.hardware.perfcounters",
+    "sys.executable.symbols", "sys.applications", "sys.alert_decode",
+    "sys.read_ccsr", "sys.tlb_dump",
+    "fs.list", "fs.stat", "fs.read", "fs.hash", "fs.sync",
+    "wb.screens", "wb.windows", "wb.publicscreens", "wb.frontmost",
+    "wb.screenshot",
+    "input.state",
+    "debug.task_snapshot", "debug.symbol", "debug.stacktrace",
+    "exec.status", "exec.output", "exec.list",
+})
+
+#: The daemon drops a connection that has sent nothing for
+#: MCPD_RECV_TIMEOUT_S (120 s, mcpd/src/main.c). A request written into
+#: a connection it has already dropped fails with EOF and was never
+#: run, but from here that looks the same as one that ran and lost its
+#: reply. So reconnect before sending once a connection has been idle
+#: this long, rather than find out afterwards.
+STALE_AFTER_S = 100.0
+
+#: Bounds on connecting and on closing. Neither had one, and against a
+#: daemon starved of CPU (a priority-0 program spinning on the X5000)
+#: a reconnect stalled a caller for 30 s past its own 10 s request
+#: timeout. The TCP handshake is done by the stack, not MCPd, so a
+#: healthy connect takes milliseconds; closing only waits for the
+#: socket to wind down and is abandoned, not failed, when it doesn't.
+CONNECT_TIMEOUT_S = 10.0
+CLOSE_TIMEOUT_S = 2.0
+
+
+def _describe(e: BaseException) -> str:
+    """str(e), or the exception's type when it has no message."""
+    return str(e) or type(e).__name__
+
 
 class McpdTransport:
     """One TCP connection to MCPd on a target."""
@@ -95,6 +140,9 @@ class McpdTransport:
         #: needs time to write back before the process is killed --
         #: see MUTATING_METHODS.
         self.last_write_at: float | None = None
+        #: Monotonic time of the last connect or completed exchange, for
+        #: the STALE_AFTER_S check. None while not connected.
+        self._last_io_at: float | None = None
 
     def subscribe_notifications(
         self,
@@ -137,13 +185,30 @@ class McpdTransport:
         if self._reader is not None and self._writer is not None:
             return
         try:
-            r, w = await asyncio.open_connection(self._channel.host, self._channel.port)
-        except (ConnectionRefusedError, OSError) as e:
+            r, w = await asyncio.wait_for(
+                asyncio.open_connection(self._channel.host, self._channel.port),
+                CONNECT_TIMEOUT_S,
+            )
+        except (ConnectionRefusedError, OSError) as e:  # incl. TimeoutError
             raise TargetError(
                 f"MCPd not reachable at {self._channel.endpoint}",
                 data={"endpoint": self._channel.endpoint, "error": str(e)},
             ) from e
         self._reader, self._writer = r, w
+        self._last_io_at = time.monotonic()
+
+    def _is_stale(self) -> bool:
+        """True when the open connection is known or likely to be dead:
+        the daemon closed it (EOF already seen), or it has been idle
+        long enough that the daemon will have."""
+        if self._reader is None:
+            return False
+        if self._reader.at_eof():
+            return True
+        return (
+            self._last_io_at is not None
+            and time.monotonic() - self._last_io_at > STALE_AFTER_S
+        )
 
     async def close(self) -> None:
         async with self._lock:
@@ -153,11 +218,12 @@ class McpdTransport:
         w = self._writer
         self._writer = None
         self._reader = None
+        self._last_io_at = None
         if w is not None:
             try:
                 w.close()
-                await w.wait_closed()
-            except OSError:
+                await asyncio.wait_for(w.wait_closed(), CLOSE_TIMEOUT_S)
+            except OSError:  # incl. TimeoutError
                 pass
 
     async def _read_frame(self, timeout_s: float) -> bytes:
@@ -218,16 +284,24 @@ class McpdTransport:
         """Send one JSON-RPC request and return its result.
 
         Raises a JsonRpcError subclass mirroring the daemon's error
-        code on failure. Reconnects with a warmup on EOF / connection-
-        reset before giving up. The warmup primes the daemon's
-        dispatch path - the first request after a cold daemon boot
-        otherwise drops occasionally.
+        code on failure. A connection that is already dead or has
+        been idle past STALE_AFTER_S is replaced before sending.
+
+        On EOF / connection reset the request is sent once more (after
+        a warmup that primes a cold daemon's dispatch path), but only
+        when that cannot run it twice: the send itself failed, or the
+        method is in IDEMPOTENT_METHODS. A timeout is never retried.
+        Every transport failure after the request went out carries
+        ``data["may_have_run"] = True``: the daemon may have acted on
+        it, so the caller must check before repeating it.
         """
         # Bind `resp` outside the for-loop so the post-loop check below
         # cannot trip an UnboundLocalError under any control-flow path.
         resp: dict[str, Any] | None = None
         async with self._lock:
             for attempt in range(2):
+                if self._is_stale():
+                    await self._close_locked()
                 await self._ensure_connected()
                 if attempt == 1:
                     # Reconnect after a failure - daemon may be in the
@@ -246,8 +320,10 @@ class McpdTransport:
                     env["params"] = params
 
                 payload = json.dumps(env, ensure_ascii=False).encode("utf-8")
+                sent = False
                 try:
                     await self._send_frame(payload)
+                    sent = True
                     # Read frames until we see one with our id. Frames
                     # that look like JSON-RPC notifications (no `id`)
                     # are dispatched to subscribers + queue. Server-push
@@ -286,7 +362,18 @@ class McpdTransport:
                         raise InternalError(
                             f"MCPd response id={obj.get('id')} != {rid}",
                         )
+                    self._last_io_at = time.monotonic()
                     break
+                # TimeoutError has been a subclass of OSError since
+                # Python 3.11, so it must be caught first: listed after
+                # OSError it was never reached, and a slow exec.cmd was
+                # treated as a dropped connection and sent again.
+                except TimeoutError as e:
+                    await self._close_locked()
+                    raise TargetError(
+                        f"MCPd request timed out after {timeout_s}s",
+                        data={"method": method, "may_have_run": sent},
+                    ) from e
                 except (
                     asyncio.IncompleteReadError,
                     ConnectionResetError,
@@ -294,17 +381,13 @@ class McpdTransport:
                     OSError,
                 ) as e:
                     await self._close_locked()
-                    if attempt == 1:
-                        raise TargetError(
-                            f"MCPd I/O failed: {e}",
-                            data={"method": method},
-                        ) from e
-                    continue
-                except TimeoutError as e:
-                    await self._close_locked()
+                    if attempt == 0 and (
+                        not sent or method in IDEMPOTENT_METHODS
+                    ):
+                        continue
                     raise TargetError(
-                        f"MCPd request timed out after {timeout_s}s",
-                        data={"method": method},
+                        f"MCPd I/O failed: {_describe(e)}",
+                        data={"method": method, "may_have_run": sent},
                     ) from e
 
         if resp is None:

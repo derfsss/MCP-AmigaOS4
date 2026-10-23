@@ -23,6 +23,7 @@
 #include "rpc.h"
 #include "discovery.h"
 #include "conn_ctx.h"
+#include "jobs.h"
 
 extern void applib_register(void);
 extern void applib_shutdown(void);
@@ -50,19 +51,12 @@ extern int input_is_enabled(void);
  * parks a worker Process for the uptime of the daemon. */
 #define MCPD_RECV_TIMEOUT_S 120
 
-/* Ceiling on live connection workers. Each is a Process with a 64 KiB
- * stack that may be holding a multi-megabyte frame, so an unbounded
- * count is an unbounded commitment -- and connections that are never
- * closed (a killed client, a NAT that dropped the flow) accumulate.
- * Normal use is one or two per client; 16 leaves room for a fan-out
- * plus a long-poll and still bounds the damage. */
-#define MCPD_MAX_CLIENTS 16
+/* MCPD_MAX_CLIENTS (live connection workers) is in rpc.h. */
 
 /* Priority of the listener process itself. The accept+spawn loop burns
  * almost no CPU, so running it just above Workbench (0) keeps MCPd
  * responsive to new connections even while the machine is loaded.
- * The per-connection workers stay at -1 (see spawn_client_worker) so
- * the actual heavy RPC work still yields to the user. */
+ * The per-connection workers run at the same +1 (jobs.c WORKER_PRI). */
 #define MCPD_LISTENER_PRI 1
 
 #ifndef MCPD_DATE
@@ -433,12 +427,12 @@ static int spawn_client_worker(int client_fd) {
         NP_Entry,        (Tag)client_task_entry,
         NP_Name,         (Tag)"MCPd Client",
         NP_StackSize,    65536,
-        /* -1 = below Workbench (priority 0) so heavy daemon work --
-         * chunked uploads, recursive copies, exec.cmd subprocesses --
-         * never competes with the user dragging windows. Idle clients
-         * sleep on socket Wait() so this only matters during active
-         * RPC work. */
-        NP_Priority,     -1,
+        /* +1, above ordinary programs, so one spinning at priority 0
+         * can't starve MCPd (seen on the X5000). Commands a worker
+         * starts run lower, as jobs (-2 by default, 0 at most). Idle
+         * clients sleep on socket Wait() so this only matters during
+         * active RPC work. */
+        NP_Priority,     jobs_worker_priority(),
         NP_UserData,     (Tag)(intptr_t)id,
         NP_Output,       (Tag)ZERO,
         NP_Input,        (Tag)ZERO,
@@ -528,6 +522,11 @@ int main(int argc, char **argv) {
      * an explicit InvalidParams. */
     (void)open_z_lib();
 
+    /* Job table for exec.*. */
+    if (jobs_init() != 0) {
+        IDOS->Printf("MCPd: job table unavailable - exec.* will fail\n");
+    }
+
     /* Bind now so a port clash fails immediately, before any of the
      * subsystems below are built. Accepting comes later. */
     int listen_sock = make_bound_socket(port);
@@ -606,10 +605,12 @@ int main(int argc, char **argv) {
      * Keep the "[MCPd] ready " prefix and the key=value shape stable:
      * they are parsed. */
     IExec->DebugPrintF("[MCPd] ready name=MCPd version=%s "
-                       "build_date=%s build_time=%s port=%lu input=%s\n",
+                       "build_date=%s build_time=%s port=%lu input=%s "
+                       "worker_pri=%ld\n",
                        MCPD_VERSION, MCPD_DATE, MCPD_TIME,
                        (unsigned long)port,
-                       input_is_enabled() ? "on" : "off");
+                       input_is_enabled() ? "on" : "off",
+                       (long)jobs_worker_priority());
 
     /* Multi-client: the parent task does nothing but
      * accept + spawn. Each child Process owns its own connection
@@ -655,6 +656,9 @@ int main(int argc, char **argv) {
     }
 
     ISocket->CloseSocket(listen_sock);
+    /* Jobs reply to memory in this binary, so it must not unload while
+     * any still run: jobs_shutdown breaks them and waits. */
+    jobs_shutdown();
     applib_shutdown();
     close_z_lib();
     close_socket_lib();

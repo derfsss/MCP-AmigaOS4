@@ -11,6 +11,8 @@
 #include <string.h>
 
 #include <proto/exec.h>
+#include <proto/expansion.h>
+#include <expansion/expansion.h>
 #include <proto/dos.h>
 #include <exec/lists.h>
 #include <exec/nodes.h>
@@ -255,7 +257,7 @@ extern int crashhook_registered(void);
 int sys_crashhook_status(cJSON *params, cJSON **out_result, cJSON **out_err) {
     (void)params; (void)out_err;
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "registered", crashhook_registered() ? cJSON_True : cJSON_False);
+    cJSON_AddBoolToObject(r, "registered", crashhook_registered() ? 1 : 0);
     cJSON_AddNumberToObject(r, "fire_count", (double)crashhook_fire_count());
     cJSON_AddNumberToObject(r, "exception_count", (double)crashhook_exception_count());
     *out_result = r;
@@ -783,12 +785,48 @@ int sys_hardware(cJSON *params, cJSON **out_result, cJSON **out_err) {
 }
 
 
-/* Best-effort board detection used by proto.capabilities.
- * Driven by GetCPUInfo Family/Model with resource probes as
- * tie-breakers. AOS4's AttnFlags no longer carry PowerPC bits
- * (AFF_OTHER is typically the only PPC indicator), so we treat
- * GetCPUInfo as authoritative. */
+/* Board detection used by proto.capabilities.
+ *
+ * Ask the OS first: expansion.library's GetMachineInfo(GMIT_Machine)
+ * names the machine outright. The CPU-based guess below is only a
+ * fallback for a kernel that answers MACHINETYPE_UNKNOWN; it used to be
+ * the whole story and got Pegasos II wrong (a G4, reported as
+ * "amigaone") and SAM440EP wrong (a 440EP, reported as "pegasos2"). */
+static const char *_board_from_machine_type(uint32 mt) {
+    switch (mt) {
+    case MACHINETYPE_BLIZZARDPPC:   return "blizzardppc";
+    case MACHINETYPE_CYBERSTORMPPC: return "cyberstormppc";
+    case MACHINETYPE_AMIGAONE:      return "amigaone";
+    case MACHINETYPE_SAM440:        return "sam440";
+    case MACHINETYPE_PEGASOS2:      return "pegasos2";
+    case MACHINETYPE_X1000:         return "x1000";
+    case MACHINETYPE_SAM460:        return "sam460";
+    case MACHINETYPE_CHUNYE:        return "chunye";
+    case MACHINETYPE_X5000_20:
+    case MACHINETYPE_X5000_40:      return "x5000";
+    case MACHINETYPE_A1222:         return "a1222";
+    default:                        return NULL;
+    }
+}
+
+/* The OS's own name for the machine, or NULL. */
+const char *sys_machine_string(void) {
+    STRPTR str = NULL;
+    if (IExpansion) {
+        IExpansion->GetMachineInfoTags(GMIT_MachineString, (Tag)&str,
+                                       TAG_END);
+    }
+    return (const char *)str;
+}
+
 const char *sys_detect_board(void) {
+    uint32 mt = MACHINETYPE_UNKNOWN;
+    if (IExpansion) {
+        IExpansion->GetMachineInfoTags(GMIT_Machine, (Tag)&mt, TAG_END);
+    }
+    const char *known = _board_from_machine_type(mt);
+    if (known) return known;
+
     uint32 ncpus, family, model, l1, l2, l3, vec, page, cline;
     uint64 fsb_hz, cpu_hz, tb_hz;
     const char *model_str = NULL;
@@ -802,38 +840,33 @@ const char *sys_detect_board(void) {
     if (model  == 18 /* CPUTYPE_PA6T_1682M */) return "x1000";
     if (family == 5  /* CPUFAMILY_PA6T     */) return "x1000";
 
-    /* E5500 covers both X5000 (Cyrus Plus, Freescale P5020) and
-     * A1222 (Tabor, Freescale T1042). Discriminate by model:
-     *   model=21 (CPUTYPE_P50XX = QorIQ P5xxx) -> X5000.
-     *   model=22 (CPUTYPE_P10XX = QorIQ P10xx) -> A1222.
-     * E500 (8) is a smaller derivative; reported by older T1xxx
-     * configurations - treat as A1222 unless we learn otherwise. */
+    /* X5000 (Cyrus, QorIQ P5020/P5040, e5500) and A1222 (Tabor, QorIQ
+     * P1022, e500v2 -- Tabor TRM 1.0.3 sec 3.1.1):
+     *   model=21 (CPUTYPE_P50XX) -> X5000.
+     *   model=22 (CPUTYPE_P10XX) -> A1222. */
     if (family == 7 /* CPUFAMILY_E5500 */ ||
         family == 8 /* CPUFAMILY_E500  */) {
         if (model == 21 /* P50XX */) return "x5000";
         if (model == 22 /* P10XX */) return "a1222";
-        /* Unknown E5500/E500 chip - fall through to model_string sniff. */
         if (model_str) {
             if (strstr(model_str, "P5020") || strstr(model_str, "P5040"))
                 return "x5000";
-            if (strstr(model_str, "T1042") || strstr(model_str, "T2080"))
-                return "a1222";
+            if (strstr(model_str, "P1022")) return "a1222";
         }
-        return "e5500-unknown";
+        return "qoriq-unknown";
     }
 
-    /* 4XX family = Pegasos2 (440EP) or SAM440/460 (440GX/460EX).
-     * fsldma ships on SAM460 onward. */
+    /* 4XX: SAM440 (440EP) or SAM460 (460EX); fsldma ships on SAM460. */
     if (family == 4 /* CPUFAMILY_4XX */) {
         if (has_fsldma) return "sam460";
-        if (model == 13 /* PPC440EP - Pegasos2 / SAM440EP */) return "pegasos2";
+        if (model == 13 /* PPC440EP */) return "sam440";
         return "sam460";
     }
 
-    /* 74XX = AmigaOne XE / Micro (G4-class). */
-    if (family == 3 /* CPUFAMILY_74XX */) return "amigaone";
-    /* 7X0 = G3 - older AmigaOnes. */
-    if (family == 2 /* CPUFAMILY_7X0 */)  return "amigaone";
+    /* 74XX (G4) and 7X0 (G3): AmigaOne XE / Micro, or Pegasos II. The
+     * CPU can't tell them apart; GetMachineInfo above normally does. */
+    if (family == 3 /* CPUFAMILY_74XX */ ||
+        family == 2 /* CPUFAMILY_7X0  */) return "amigaone-or-pegasos2";
 
     return "unknown";
 }

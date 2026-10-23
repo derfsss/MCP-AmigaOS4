@@ -44,13 +44,15 @@ src/
   b64.c, b64.h         base64 codec
   sha256.c, sha256.h   SHA-256 reference implementation
   discovery.c/h        UDP discovery responder peer task
+  jobs.c, jobs.h       job table for exec.* (last 32 jobs) and the
+                       job / worker priorities
   crashhook.c          IDebug crash hook
   methods/
     proto.c            proto.* (capability advertisement, version)
     sys.c              sys.* introspection (23 methods)
     fs.c               fs.* filesystem operations (12 methods,
                        including fs.sync -- ACTION_FLUSH)
-    exec.c             exec.cmd
+    exec.c             exec.* (cmd, status, output, kill, list)
     wb.c               wb.* Workbench / Intuition queries
     screen.c           wb.screenshot (ReadPixelArray + PNG encode
                        via z.library)
@@ -72,7 +74,7 @@ install/
   MCPd-Disable-Input   close it again
 ```
 
-60 JSON-RPC methods in total. `COMMANDS.md` documents every one.
+64 JSON-RPC methods in total. `COMMANDS.md` documents every one.
 
 ## Direct command-line invocation
 
@@ -94,21 +96,23 @@ On a successful start MCPd writes one line to the kernel debug ring
 via `IExec->DebugPrintF`:
 
 ```
-[MCPd] ready name=MCPd version=1.3 build_date=02.08.2026 build_time=18:18:04 port=4322 input=off
+[MCPd] ready name=MCPd version=2.0 build_date=02.08.2026 build_time=18:18:04 port=4322 input=off worker_pri=1
 ```
 
 `input=on|off` reports the keyboard / mouse injection gate, which is
 resolved once at startup; a companion `[MCPd] input_gate state=...
-source=...` line says where the setting came from.
+source=...` line says where the setting came from. `worker_pri`
+is the priority the per-connection workers run at (see [Process
+priorities](#process-priorities)).
 
 The line is emitted **after** `bind` + `listen` succeed, so its
 presence means the port is accepting connections — not merely that
 the binary loaded. Two companion lines cover the other outcomes:
 
 ```
-[MCPd] startup_failed version=1.3 reason=bsdsocket
-[MCPd] startup_failed version=1.3 reason=listen port=4322
-[MCPd] shutdown version=1.3
+[MCPd] startup_failed version=2.0 reason=bsdsocket
+[MCPd] startup_failed version=2.0 reason=listen port=4322
+[MCPd] shutdown version=2.0
 ```
 
 `shutdown` marks a clean exit, so a reader can distinguish a normal
@@ -151,15 +155,20 @@ available from `MCPd --version`, `proto.version`, and
 
 | Process | Priority |
 |---|---|
-| Listener (`main`) | **1** — above Workbench |
-| `MCPd Client` (one per connection) | **-1** |
+| Listener (`main`) | **1** — above ordinary programs |
+| `MCPd Client` (one per connection) | **1** |
 | `MCPd Discovery` | 0 |
+| Jobs started by `exec.cmd` | **-2** by default; per call or `[defaults] exec_priority`, capped at 0 |
 
 The accept + spawn loop costs almost nothing, so running it above
-Workbench keeps the daemon responsive to new connections on a loaded
-machine. The per-connection workers sit below Workbench so the actual
-RPC work — chunked uploads, recursive copies, `exec.cmd` subprocesses
-— yields to the user.
+ordinary programs keeps the daemon responsive to new connections on a
+loaded machine. The per-connection workers run at +1 too: at -1, a
+program spinning at 100% at the normal priority 0 starved MCPd on an
+X5000 for its whole run, while at +1 it answered every call. The work
+that can actually take a long time — commands run by `exec.cmd` —
+runs as separate jobs below the workers, so it yields to the user and
+never stops the daemon answering. Programs a job starts with `Run`
+begin at 0 whatever the job's priority.
 
 The listener sets its own priority at startup, so it does not matter
 what priority the launching Shell had.

@@ -20,7 +20,7 @@ available, the host-side build alone is sufficient.
 
 | Requirement | Version | Purpose |
 |---|---|---|
-| `git` | 2.20 or later | Submodule fetch (`third-party/cjson`). |
+| `git` | 2.20 or later | Submodule fetch (`third-party/cjson`), and installing the host's `qemu-runner` dependency, which comes straight from GitHub at a pinned commit. |
 | Disk space | 1 GiB free | Build artefacts, Docker layers, virtualenvs. |
 
 ### MCPd (Amiga-side daemon)
@@ -61,7 +61,7 @@ make docker-build
 ```
 
 The Makefile mounts the project root into the container at `/src` and
-runs `make all` inside. Output: `mcpd/MCPd` (approximately 220 KiB
+runs `make all` inside. Output: `mcpd/MCPd` (approximately 300 KiB
 PowerPC ELF, including the cJSON parser and the full RPC method
 registry).
 
@@ -103,13 +103,15 @@ mcpd/
     b64.c, b64.h        base64 codec
     sha256.c, sha256.h  public-domain SHA-256 reference impl
     discovery.c/h       UDP discovery responder peer task
+    jobs.c, jobs.h      job table for exec.* (32 records), job and
+                        worker priorities
     crashhook.c         IDebug crash hook (captures DAR + register
                         state on user-task DSI / ISI faults)
     methods/
       proto.c           proto.capabilities, proto.version
       sys.c             sys.* introspection (23 methods)
       fs.c              fs.* (12 methods, incl. fs.sync)
-      exec.c            exec.cmd
+      exec.c            exec.* (cmd, status, output, kill, list)
       wb.c              wb.* (4 introspection methods)
       screen.c          wb.screenshot (ReadPixelArray + PNG encode
                         through z.library)
@@ -170,8 +172,9 @@ uv sync
 
 and commit the resulting `uv.lock` with whatever the upgrade required.
 The versions in `pyproject.toml` carry upper bounds on the majors
-(`mcp[cli]<2`, `pydantic<3`) because the server is written against
-those APIs; lifting a bound is a porting change, not a version bump.
+(`mcp[cli]>=2.3,<3`, `pydantic>=2.12,<3`) because the server is
+written against those APIs — since 2.0, the mcp 2.x `MCPServer` API;
+lifting a bound is a porting change, not a version bump.
 
 ### Using `pip`
 
@@ -197,7 +200,7 @@ matching sdist.
 
 ```sh
 cd host
-uv run pytest tests/unit -q                  # unit tests (≈170)
+uv run pytest tests/unit -q                  # unit tests (≈380)
 uv run mypy src                              # type-check
 uv run ruff check src tests                  # lint
 ```

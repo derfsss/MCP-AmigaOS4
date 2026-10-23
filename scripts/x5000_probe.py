@@ -7,29 +7,21 @@ fine for the first run) or a writable disk volume (persists).
 
 Configuration:
   --host <ip>            Target IP (default $X5000_HOST or required)
-  $QEMU_RUNNER_DIR       qemu-runner checkout
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import sys
 
-from _paths import find_qemu_runner
+from serial_client import SerialClient  # from the qemu-runner package
 
-QEMU_RUNNER = find_qemu_runner()
 PORT = 4321
 
 
 def _serial_client(host: str):
-    spec = importlib.util.spec_from_file_location(
-        "_serial", QEMU_RUNNER / "serial_client.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.SerialClient(host=host, port=PORT)
+    return SerialClient(host=host, port=PORT)
 
 
 def main() -> int:

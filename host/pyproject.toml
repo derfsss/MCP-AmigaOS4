@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amiga-fleet-mcp"
-version = "1.4"
+version = "2.0"
 description = "MCP server for driving AmigaOS 4 fleets (QEMU + real hardware)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,16 +24,17 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  # Upper-bounded on purpose. This server is written against the 1.x
-  # FastMCP API (`from mcp.server.fastmcp import FastMCP`), which mcp
-  # 2.0 removed -- CI resolves fresh on every run (uv.lock is not
-  # committed), so an unbounded requirement silently upgraded to
-  # mcp 2.2.0 and broke the type-check for reasons unrelated to any
-  # change in this repo. Lift the cap in a change that actually ports
-  # to the 2.x API and is tested against it.
-  "mcp[cli]>=1.0.0,<2",
-  "pydantic>=2.0,<3",
+  # Upper-bounded on purpose: written against the mcp 2.x MCPServer API
+  # (ported from 1.x FastMCP in v2.0, #17). A new major will break it
+  # the same way 2.0 broke 1.x, so lift the cap only in a change that
+  # ports to it and is tested against it. mcp 2 needs pydantic >= 2.12.
+  "mcp[cli]>=2.3,<3",
+  "pydantic>=2.12,<3",
   "pyserial>=3.5",
+  # QMPClient (and SerialClient for the scripts/) come from qemu-runner,
+  # installed straight from GitHub at a pinned commit, so no local
+  # clone or paths.qemu_runner is needed. Bump the commit deliberately.
+  "qemu-runner @ git+https://github.com/derfsss/qemu-runner@bb727303c992038351c84b6f3b56a09d9a104ce2",
 ]
 
 [dependency-groups]
@@ -49,6 +50,10 @@ amiga-fleet-mcp = "amiga_fleet_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/derfsss/MCP-AmigaOS4"
+
+[tool.hatch.metadata]
+# Needed for the git-URL qemu-runner dependency.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amiga_fleet_mcp"]
@@ -78,6 +83,11 @@ check_untyped_defs = true
 # stubs package no one else in the ecosystem uses consistently.
 [[tool.mypy.overrides]]
 module = "serial.*"
+ignore_missing_imports = true
+
+# qemu-runner ships plain top-level modules with no py.typed marker.
+[[tool.mypy.overrides]]
+module = ["qmp_client", "serial_client"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

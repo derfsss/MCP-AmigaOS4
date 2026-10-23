@@ -18,6 +18,10 @@ can:
 - **Browse and edit files** on the target Amiga, **run AmigaDOS
   commands** with captured stdout, **upload large binaries** with zlib
   compression and resumable chunks.
+- **Follow long-running commands** — every command is a tracked job
+  with an id, exit code and IoErr. One that outlives its timeout keeps
+  running and can be checked, read or stopped later. The daemon's
+  workers run above ordinary programs, so a busy one cannot starve it.
 - **Inspect live state** — running tasks, opened libraries, mounted
   volumes, public screens, the last alert (decoded), CPU + cache +
   AttnFlags.
@@ -52,7 +56,7 @@ can:
   installer. Off by default, and openable only by a deliberate action
   on the target itself; see [SECURITY.md](SECURITY.md).
 
-**138 typed MCP tools across 14 namespaces, 8 live resources**,
+**143 typed MCP tools across 15 namespaces, 8 live resources**,
 verified end-to-end on QEMU Pegasos2 and real AmigaOne X5000
 hardware.
 
@@ -84,7 +88,7 @@ or, on the Amiga itself, grab `MCPd-<version>.lha` from the [latest
 release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest):
 
 ```
-LhA x MCPd-1.3.lha
+LhA x MCPd-<version>.lha
 Execute MCPd/MCPd-Install
 ```
 
@@ -145,7 +149,7 @@ A summary follows; the full list of tools, resources, methods, and
 helper scripts lives in [COMMANDS.md](COMMANDS.md), with narrative
 context in [USAGE.md](USAGE.md).
 
-- 138 typed MCP tools across `fs.*`, `exec.cmd`, `sys.*`, `wb.*`,
+- 143 typed MCP tools across `fs.*`, `exec.*`, `sys.*`, `wb.*`,
   `debug.*`, `qemu.*`, `fleet.*`, `tests.*`, `events.wait`,
   `app.notify`, `notify.*`, `installer.*`, `serial.*`, `power.*`,
   `sandbox.*`, and `input.*`, plus a namespace dispatcher per group.
@@ -169,7 +173,10 @@ context in [USAGE.md](USAGE.md).
 - Crash-survivable program and driver iteration (`sandbox.*`): run a
   guest ELF or a resident `.library` / `.device` inside SandboxVM and
   get back a structured exit code, a trap classification, and the
-  captured output — without the machine going down with it.
+  captured output — without the machine going down with it. Any
+  `exec_cmd` can also run its program sandboxed, as a tracked job.
+- Tracked command jobs (`exec.*`): status, incremental output, break
+  signals, and a per-call or configured task priority.
 - Screen capture to PNG on the target (`wb.screenshot`) — works on
   real hardware, where a QMP framebuffer dump is not an option.
 - Keyboard and mouse injection (`input.*`) for driving Workbench and
@@ -185,7 +192,7 @@ context in [USAGE.md](USAGE.md).
   [mcpd/README.md](mcpd/README.md#startup-beacon).
 - Per-tool parameter defaults via a `[defaults]` block in
   `config.toml` (`dest_volume`, `sources_dir`, `machine`,
-  `iso_filename`). Set frequently-repeated values once and skip
+  `iso_filename`, `exec_priority`). Set frequently-repeated values once and skip
   them in subsequent tool calls; explicit per-call values always
   override. See [USAGE.md § Per-tool
   defaults](USAGE.md#per-tool-defaults).
@@ -211,8 +218,8 @@ context in [USAGE.md](USAGE.md).
 | AmigaOne A1222 / Tabor | Supported; board detection and the simplified install path are in place |
 | AmigaOne X1000 / Nemo | Recognised by board detection |
 
-`sandbox.*` needs a machine with ExtMem, so it is available on X5000
-and A1222 but not on Pegasos2. `power.*` and the QorIQ introspection
+`sandbox.*` needs a machine with ExtMem, so it is available on X5000,
+A1222, X1000 and QEMU AmigaOne but not on Pegasos2. `power.*` and the QorIQ introspection
 methods are real-hardware features by nature.
 
 See [INSTALL.md](INSTALL.md) for runtime requirements per target and
@@ -221,7 +228,9 @@ cross-compiling MCPd from source.
 
 ## Requirements
 
-**Host:** Python 3.11, 3.12, or 3.13, on Windows, Linux, or macOS.
+**Host:** Python 3.11, 3.12, or 3.13, on Windows, Linux, or macOS,
+with `git` on PATH at install time. The server is built on the mcp 2.x
+Python SDK.
 QEMU features additionally need a `qemu-system-ppc` binary;
 `power.*` needs an FTDI USB-TTL cable wired to the target's MCU
 header; `serial.*` needs a serial cable to the target's debug UART.

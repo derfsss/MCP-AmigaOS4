@@ -1,6 +1,6 @@
 """MCP server entry + tool registration.
 
-Wires the JSON-RPC method surface into FastMCP. Tool names are
+Wires the JSON-RPC method surface into the MCP server (MCPServer). Tool names are
 flattened (`fs_list`, etc.) for the MCP layer; the dotted JSON-RPC
 names (`fs.list`, `fs.stat`, ...) live in the proto.capabilities
 advertisement.
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from . import __version__
 from .archive import Archive
@@ -49,14 +49,14 @@ def build_server(
     archive: Archive,
     *,
     name: str = SERVER_NAME,
-) -> FastMCP:
-    """Construct a FastMCP instance with phase-1 tools registered."""
-    mcp = FastMCP(name)
+) -> MCPServer:
+    """Construct the MCP server with every tool and resource registered."""
+    mcp = MCPServer(name, version=__version__)
     register_tools(mcp, fleet, archive)
     return mcp
 
 
-def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
+def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     def _default(value: str | None, attr: str, param_name: str) -> str:
         """If `value` is set (not None / not empty), return it. Else
         fall back to fleet.config.defaults.<attr>. Raise InvalidParams
@@ -78,7 +78,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def proto_capabilities() -> sys_tool.CapabilitiesResult:
         """Advertise the methods the host MCP server has wired.
 
-        Method list is auto-derived from the live FastMCP tool registry
+        Method list is auto-derived from the live MCPServer tool registry
         - whatever is currently registered with @mcp.tool(...,
         title="...") gets advertised. No hand-maintained list to drift
         out of date.
@@ -335,14 +335,108 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         args: list[str] | None = None,
         cwd: str | None = None,
         timeout_s: float = 30.0,
+        priority: int | None = None,
+        sandbox: bool = False,
+        sandbox_extmem_mb: int | None = None,
+        sandbox_window_mb: int | None = None,
+        sandbox_deny_libs: list[str] | None = None,
+        sandbox_time_limit_s: int | None = None,
     ) -> exec_tool.ExecResult:
-        """Run an AmigaDOS command, capture stdout. `args` (if given)
-        are appended with conservative AmigaDOS quoting; `cwd` (if
-        given) is locked + swapped in for the duration of the call."""
+        """Run an AmigaDOS command as a tracked job and wait up to
+        `timeout_s` for it. `args` (if given) are appended with
+        conservative AmigaDOS quoting; `cwd` (if given) is the
+        command's current directory.
+
+        Every result carries a `job_id`. If the command is still
+        running at the deadline the result has `state="running"` and
+        `exit_code=None`, and the command KEEPS RUNNING: do not run it
+        again. Follow it with exec_status / exec_output, or stop it
+        with exec_kill.
+
+        `priority` is the job's task priority (default `[defaults]
+        exec_priority`, else -2). MCPd caps it one below its own
+        workers so a busy job never stops MCPd answering. Programs the
+        command itself starts with `Run` begin at 0 regardless.
+
+        `sandbox=True`: `command` is a program path, run under SandboxVM
+        so that if it crashes the machine survives. The result gains a
+        `sandbox` block (the guest's stdout/stderr and trap kind), and
+        exec_kill(force=True) can stop it where SandboxVM supports that.
+        ExtMem machines only (X5000, A1222, X1000, QEMU AmigaOne);
+        `sandbox_*` override the target's [sandbox] defaults.
+        `sandbox_time_limit_s` makes SandboxVM itself abort the guest
+        after that many seconds (SandboxVM 1.1+); `sandbox.end_reason`
+        then says "timeout"."""
         return await exec_tool.exec_cmd(
             fleet, fleet.resolve_target(target), command,
             args=args, cwd=cwd, timeout_s=timeout_s,
+            priority=priority, return_running=True,
+            sandbox=sandbox, sandbox_extmem_mb=sandbox_extmem_mb,
+            sandbox_window_mb=sandbox_window_mb,
+            sandbox_deny_libs=sandbox_deny_libs,
+            sandbox_time_limit_s=sandbox_time_limit_s,
         )
+
+    @mcp.tool(name="exec_status", title="exec.status")
+    @archived("exec.status", archive)
+    async def exec_status(
+        *, target: str | None = None, job_id: int,
+    ) -> exec_tool.JobStatus:
+        """State of a job started by exec_cmd: running or exited,
+        exit_code, pid, priority, elapsed_ms, free memory before and
+        after, and the break signals sent to it."""
+        return await exec_tool.exec_status(
+            fleet, fleet.resolve_target(target), job_id)
+
+    @mcp.tool(name="exec_output", title="exec.output")
+    @archived("exec.output", archive)
+    async def exec_output(
+        *,
+        target: str | None = None,
+        job_id: int,
+        offset: int = 0,
+        max_bytes: int = 65536,
+    ) -> exec_tool.JobOutput:
+        """Read a job's output from `offset`. Works while it runs, but
+        AmigaDOS often flushes a command's output only when the command
+        ends. `eof` is true once the job has exited and everything has
+        been read. Output that exec_cmd already returned in full is
+        deleted and can't be read again."""
+        return await exec_tool.exec_output(
+            fleet, fleet.resolve_target(target), job_id,
+            offset=offset, max_bytes=max_bytes)
+
+    @mcp.tool(name="exec_kill", title="exec.kill")
+    @archived("exec.kill", archive)
+    async def exec_kill(
+        *,
+        target: str | None = None,
+        job_id: int,
+        signal: str = "c",
+        wait_s: float = 2.0,
+        force: bool = False,
+    ) -> exec_tool.KillResult:
+        """Ask a running job to stop with a break signal (c = CTRL-C,
+        or d / e / f) and wait up to `wait_s` for it to exit. A program
+        that ignores breaks keeps running: the result says
+        `exited=False`.
+
+        `force=True` only for a job started with sandbox=True: SandboxVM
+        aborts the guest and frees everything it opened. Refused when
+        the installed SandboxVM can't (sandbox_probe abort_supported).
+        An ordinary process is never removed by force -- on AmigaOS
+        that leaks its memory and locks."""
+        return await exec_tool.exec_kill(
+            fleet, fleet.resolve_target(target), job_id,
+            signal=signal, wait_s=wait_s, force=force)
+
+    @mcp.tool(name="exec_list", title="exec.list")
+    @archived("exec.list", archive)
+    async def exec_list(*, target: str | None = None) -> exec_tool.JobList:
+        """Every job record MCPd holds (the last 32), newest first,
+        plus its worker priority and the default and highest job
+        priority."""
+        return await exec_tool.exec_list(fleet, fleet.resolve_target(target))
 
     @mcp.tool(name="sys_version", title="sys.version")
     @archived("sys.version", archive)
@@ -968,13 +1062,17 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         clicks: int = 1,
         direction: str = "down",
         delay_ms: int | None = None,
+        style: str = "native",
         target: str | None = None,
     ) -> input_tool.MouseResult:
         """Mouse wheel. Requires input injection enabled on both host
-        config and daemon. No confirm: scrolling commits nothing."""
+        config and daemon. No confirm: scrolling commits nothing.
+        `style` "native" (AOS4's IECLASS_MOUSEWHEEL, delivered to apps as
+        IDCMP_EXTENDEDMOUSE) or "newmouse" (legacy NewMouse rawkeys)."""
         return await input_tool.input_scroll(
             fleet, fleet.resolve_target(target),
             clicks=clicks, direction=direction, delay_ms=delay_ms,
+            style=style,
         )
 
     # ---------- phase 5c (partial): GDB-stub debug --------------------
@@ -1491,10 +1589,14 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def tests_run_suite(
         *,
         target: str | None = None, suite: str, skip_uploads: bool = False,
+        priority: int | None = None,
     ) -> tests_tool.SuiteRunResult:
-        """Run a project suite (config/projects/<suite>.json) on a target."""
+        """Run a project suite (config/projects/<suite>.json) on a target.
+        `priority` is the task priority each test command runs at
+        (default `[defaults] exec_priority`, else -2)."""
         return await tests_tool.tests_run_suite(
             fleet, fleet.resolve_target(target), suite, skip_uploads=skip_uploads,
+            priority=priority,
         )
 
     # ============================================================
@@ -1668,6 +1770,40 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             "publicscreens": wb_tool.wb_publicscreens,
             "frontmost":     wb_tool.wb_frontmost,
             "screenshot":    wb_tool.wb_screenshot,
+        }, method, params or {})
+
+    async def _exec_cmd_running(
+        fleet: Fleet, target: str, **kwargs: Any,
+    ) -> exec_tool.ExecResult:
+        # Same contract as the exec_cmd tool: a timeout returns the
+        # running job rather than raising.
+        return await exec_tool.exec_cmd(
+            fleet, target, return_running=True, **kwargs)
+
+    @mcp.tool(name="exec", title="exec.dispatch")
+    @archived("exec.dispatch", archive)
+    async def exec_ns(*, method: str, params: dict[str, Any] | None = None) -> Any:
+        """exec.* (commands run as tracked jobs) dispatcher. `method`
+        is one of:
+
+          cmd(target, command, args=None, cwd=None, timeout_s=30,
+              priority=None, sandbox=False, sandbox_extmem_mb=None,
+              sandbox_window_mb=None, sandbox_deny_libs=None)
+          status(target, job_id)
+          output(target, job_id, offset=0, max_bytes=65536)
+          kill(target, job_id, signal="c", wait_s=2, force=False)
+          list(target)
+
+        A cmd still running at its timeout returns state="running" and
+        its job_id, and keeps running: follow it with status / output,
+        or stop it with kill. Never re-run it to "retry".
+        """
+        return await _ns({
+            "cmd":    _exec_cmd_running,
+            "status": exec_tool.exec_status,
+            "output": exec_tool.exec_output,
+            "kill":   exec_tool.exec_kill,
+            "list":   exec_tool.exec_list,
         }, method, params or {})
 
     @mcp.tool(name="input", title="input.dispatch")
@@ -2505,9 +2641,11 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
         deny_libs: list[str] | None = None,
         name: str | None = None,
         timeout_s: float = 600.0,
+        priority: int | None = None,
     ) -> sandbox_tool.BatchRunResult:
         """Run up to 16 guests sequentially in a single SandboxVM
-        invocation.
+        invocation. `priority` is the task priority SandboxVM runs at
+        (default `[defaults] exec_priority`, else -2).
 
         `guests` is a list of `{guest: <aos-path>, name?: <override>}`
         objects. Per-guest argv and per-guest deny-lists are NOT
@@ -2522,6 +2660,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
             guests=guests,
             extmem_mb=extmem_mb, window_mb=window_mb,
             deny_libs=deny_libs, name=name, timeout_s=timeout_s,
+            priority=priority,
         )
 
     @mcp.tool(name="sandbox", title="sandbox.dispatch")
@@ -2713,11 +2852,18 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     server = build_server(fleet, archive)
-    server.run(transport=config.server.mcp_transport)
+    transport = config.server.mcp_transport
+    if transport == "stdio":
+        server.run(transport="stdio")
+    else:
+        # mcp 2 takes the bind address on run(); under 1.x
+        # [server] mcp_http_addr was never passed on at all.
+        host, _, port = config.server.mcp_http_addr.rpartition(":")
+        server.run(transport=transport, host=host, port=int(port))
     return 0
 
 
-async def _print_tools(server: FastMCP) -> None:
+async def _print_tools(server: MCPServer) -> None:
     tools = await server.list_tools()
     width = max((len(t.name) for t in tools), default=0)
     for t in tools:
@@ -2729,23 +2875,23 @@ async def _print_tools(server: FastMCP) -> None:
     print(f"\n  ({len(tools)} tools registered)")
 
 
-async def _print_resources(server: FastMCP) -> None:
+async def _print_resources(server: MCPServer) -> None:
     concrete = await server.list_resources()
     templates = await server.list_resource_templates()
 
     if concrete:
         print("Concrete resources:")
         for r in concrete:
-            mime = getattr(r, "mimeType", None) or "?"
+            mime = getattr(r, "mime_type", None) or "?"
             title = getattr(r, "title", None) or r.name
             print(f"  {r.uri!s:42}  [{title}]  ({mime})")
 
     if templates:
         print("\nTemplates:")
         for t in templates:
-            mime = getattr(t, "mimeType", None) or "?"
+            mime = getattr(t, "mime_type", None) or "?"
             title = getattr(t, "title", None) or t.name
-            print(f"  {t.uriTemplate:42}  [{title}]  ({mime})")
+            print(f"  {t.uri_template:42}  [{title}]  ({mime})")
 
     n = len(concrete) + len(templates)
     print(f"\n  ({len(concrete)} concrete + {len(templates)} templates "

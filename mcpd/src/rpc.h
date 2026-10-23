@@ -23,9 +23,18 @@
  * framing / error-code / notification semantics, not the daemon
  * build, and only changes when those become incompatible. Adding
  * methods is backward-compatible and does NOT bump it. */
-#define MCPD_VERSION_STR      "1.4"
+#define MCPD_VERSION_STR      "2.0"
 #define MCPD_PROTOCOL_VERSION "1.0"
 #define MCPD_SERVER_VERSION   "mcpd/" MCPD_VERSION_STR
+
+/* Ceiling on live connection workers. Each is a Process with a 64 KiB
+ * stack that may be holding a multi-megabyte frame, so an unbounded
+ * count is an unbounded commitment -- and connections that are never
+ * closed (a killed client, a NAT that dropped the flow) accumulate.
+ * Normal use is one or two per client; 16 leaves room for a fan-out
+ * plus a long-poll and still bounds the damage. Advertised in
+ * proto.capabilities limits. */
+#define MCPD_MAX_CLIENTS 16
 
 typedef int (*method_handler_fn)(cJSON *params,
                                  cJSON **out_result,

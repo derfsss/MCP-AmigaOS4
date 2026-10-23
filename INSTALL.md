@@ -21,6 +21,7 @@ different places:
 | Operating system | Linux, macOS, or Windows 10+ | Any platform that runs Python and (optionally) Docker. |
 | Python | 3.11 or later | Host server runtime. The server uses the standard library `tomllib`, which is 3.11+. |
 | `uv` *or* `pip` | current | Python dependency manager. `uv` is recommended for reproducibility; plain `pip` works. |
+| `git` | current | Needed at install time: the `qemu-runner` dependency is installed straight from GitHub at a pinned commit. |
 | Docker Desktop | current | **Optional.** Required only if you intend to cross-compile MCPd from source rather than use a pre-built binary. |
 | QEMU PPC | 8.0 or later | **Optional.** Required only for QEMU targets. The binary `qemu-system-ppc` (Linux/macOS) or `qemu-system-ppc.exe` (Windows). |
 | MCP client | per client | Claude Code, Claude Desktop, or any other MCP-aware client capable of launching a stdio server. |
@@ -41,13 +42,14 @@ different places:
 | Free memory | Approximately 1 MiB working set for the daemon plus its peer tasks. |
 | Network connectivity | Wired Ethernet or working WiFi via Roadshow. |
 
-The daemon does not require any specific board model; CPU detection is
-fully automatic. Boards currently recognised: X5000 (P5020), X1000
-(PA6T-1682M), A1222 (T1042), Pegasos2, SAM440/460, AmigaOne XE/Micro.
+The daemon does not require any specific board model; board detection
+is automatic (from `expansion.library` `GetMachineInfo`, with a CPU
+guess as the fallback). Boards currently recognised: X5000 (P5020), X1000
+(PA6T-1682M), A1222 (P1022), Pegasos2, SAM440/460, AmigaOne XE/Micro.
 
 ## Per-feature prerequisites
 
-The core surface (`fs.*`, `exec.cmd`, `sys.version` / `tasks` /
+The core surface (`fs.*`, `exec.*`, `sys.version` / `tasks` /
 `libraries` / `devices` / `ports` / `lastalert` / `uptime` / `memory`
 / `volumes` / `assigns` / `hardware` / `applications` /
 `alert_decode`, `wb.*` introspection, `events.*`, `proto.*`) works on
@@ -91,7 +93,7 @@ Talks the documented MCU protocol directly via AOS's `serial.device`
 These methods read SoC-internal state through TLB1-mapped supervisor
 addresses. They require:
 
-- A Freescale QorIQ CPU: P5020 (X5000) or P1022 / T1042 (A1222).
+- A Freescale QorIQ CPU: P5020 (X5000) or P1022 (A1222).
   Will return errors on any other PowerPC variant.
 - Real hardware. QEMU's e500 model does not implement the full CCSR
   aperture, the MCU UART, or some of the perfmon counters.
@@ -160,9 +162,16 @@ found, and the path can be pinned per target:
 path = "Tools:sandboxvm"
 ```
 
-The machine must have ExtMem, so this works on X5000 and A1222 but
-not on Pegasos2; `sandbox.probe` reports
-`SANDBOXVM_INCOMPATIBLE_TARGET` rather than failing obscurely.
+The machine must have ExtMem, so this works on X5000, A1222, X1000
+and QEMU AmigaOne but not on Pegasos2; `sandbox.probe` reports
+`SANDBOXVM_INCOMPATIBLE_TARGET` rather than failing obscurely. The
+same applies to `exec_cmd sandbox=true`.
+
+Stopping a sandboxed job with `exec_kill force=True`, and
+`exec_cmd`'s `sandbox_time_limit_s`, need **SandboxVM 1.1** or later.
+`sandbox.probe` reports the installed `sandboxvm_version` and
+`abort_supported`; an older binary still runs guests, it just cannot
+be aborted from outside.
 
 ### `wb.*` and `app.notify`
 
@@ -185,7 +194,8 @@ AmigaOS 4.1 FE installs.
 QEMU's GDB Remote Serial Protocol stub.
 
 - Requires a `[targets.<name>.channels.gdb]` block in the config
-  with `enabled = true` and a `port` (typically `tcp::1234`).
+  with `enabled = true` and an `endpoint` (typically
+  `127.0.0.1:1234`).
 - The host server auto-injects `-gdb tcp::PORT` into the QEMU
   command line when a `gdb` channel is present.
 - Real hardware has no GDB stub; these tools are QEMU-only.
@@ -239,7 +249,8 @@ Requirements:
 - A serial port wired to the target's debug UART. For X5000, that
   is the rear-panel DB9 (visible to the host as `/dev/ttyUSBn` or
   `COMn`); for A1222 it is the equivalent header. The port name is
-  configured per target under `[targets.<name>.channels.serial]`.
+  configured per target under `[targets.<name>.channels.uboot]` (the
+  default channel; `[targets.<name>.channels.mcu]` is the other one).
 - Operating-system permission to open the port. On Linux that
   usually means membership of the `dialout` (Debian/Ubuntu) or
   `uucp` (Arch) group.
@@ -376,14 +387,14 @@ your environment.
 - **Web browser on the target.** If you have a working browser
   on the Amiga (IBrowse, OWB, NetSurf, AWeb-AP1, ...) and
   Roadshow is up, just download the binary directly from the
-  GitHub release:
+  GitHub release page:
 
   ```
-  https://github.com/derfsss/MCP-AmigaOS4/releases/latest/download/MCPd
+  https://github.com/derfsss/MCP-AmigaOS4/releases/latest
   ```
 
-  Save it somewhere writable, then proceed to the launch step
-  below. Easiest option for users who already have an Amiga on
+  The bare binary is the `MCPd-<version>` asset. Save it somewhere
+  writable as `MCPd`, then proceed to the launch step below. Easiest option for users who already have an Amiga on
   the LAN.
 - **USB stick.** Copy `mcpd/MCPd` onto a FAT-formatted USB stick
   on the host workstation, plug it into the target, then copy
@@ -402,6 +413,8 @@ your environment.
   python scripts/x5000_bootstrap_mcpd.py --host <target-ip>
   ```
 
+  Run it with the Python from `host/.venv`, which has the
+  `qemu-runner` package the script's SerialShell client comes from.
   This is the most automated option — the script uploads the
   binary to `RAM:MCPd` and launches it in a single command.
   SerialShell is a third-party tool; MCPd doesn't depend on
@@ -412,8 +425,8 @@ your environment.
 - **Web browser on the guest.** Same idea as real hardware —
   if the guest image includes a browser (IBrowse, OWB,
   NetSurf, ...) and the SLIRP NAT lets it reach
-  `github.com`, fetch
-  `https://github.com/derfsss/MCP-AmigaOS4/releases/latest/download/MCPd`
+  `github.com`, fetch the `MCPd-<version>` asset from
+  `https://github.com/derfsss/MCP-AmigaOS4/releases/latest`
   from inside the guest.
 - **USB share.** Hand the binary to the guest by attaching a
   host file as a USB-storage device on the QEMU command line,
@@ -478,7 +491,7 @@ release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) onto
 the Amiga and, from a Shell:
 
 ```
-LhA x MCPd-1.3.lha
+LhA x MCPd-<version>.lha
 Execute MCPd/MCPd-Install
 ```
 
@@ -563,8 +576,10 @@ broadcast never reaches them.
   bind still fails, reboot the target or temporarily run on an
   alternative port via `MCPd --port 4422`.
 - **`Method not found`** — the deployed binary is older than the
-  client's wire schema. Rebuild and redeploy with
-  `scripts/install_mcpd_autostart.py`.
+  client's wire schema. `exec.status`, `exec.output`, `exec.kill` and
+  `exec.list` need MCPd 2.0; `exec_cmd` itself still works against an
+  older daemon, without job fields. Install the latest release, or
+  rebuild and redeploy with `scripts/install_mcpd_autostart.py`.
 - **Watchdog log empty** — the daemon's stdout is redirected to NIL
   by the watchdog launch line; structured events go through MCP.
   Inspect `T:MCPd-Watchdog.log` on the target for restart history.
@@ -584,4 +599,13 @@ broadcast never reaches them.
   `raw_size` doesn't grow on an active machine, the buffer is full.
   Use a `serial.*` capture instead, which is not subject to it.
 - **`sandbox.probe` returns `SANDBOXVM_INCOMPATIBLE_TARGET`** — the
-  machine has no ExtMem. `sandbox.*` needs an X5000 or A1222.
+  machine has no ExtMem. `sandbox.*` needs an X5000, A1222, X1000 or
+  QEMU AmigaOne.
+- **`exec_kill force=True` returns `NotCapable`** — the SandboxVM on
+  the target cannot abort a guest. Install SandboxVM 1.1 or later
+  (`sandbox.deploy`). A plain break signal (`force=False`) still
+  works.
+- **A command "timed out" but is still running** — that is by design:
+  `exec_cmd` returns `state: "running"` and the `job_id`. Follow it
+  with `exec_status` / `exec_output` or stop it with `exec_kill`; do
+  not run it again.

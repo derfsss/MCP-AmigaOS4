@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
 import os
 import shutil
 import socket
@@ -36,7 +35,7 @@ HOST_SRC = HERE.parent / "host" / "src"
 sys.path.insert(0, str(HOST_SRC))
 sys.path.insert(0, str(HERE))
 
-from _paths import find_qemu_runner  # noqa: E402
+from serial_client import SerialClient  # noqa: E402  (qemu-runner package)
 from amiga_fleet_mcp.archive import Archive  # noqa: E402
 from amiga_fleet_mcp.config import (  # noqa: E402
     Config, McpdChannel, PathsConfig, QmpChannel,
@@ -44,7 +43,6 @@ from amiga_fleet_mcp.config import (  # noqa: E402
 )
 from amiga_fleet_mcp.fleet import Fleet  # noqa: E402
 
-QEMU_RUNNER = find_qemu_runner()
 MCPD_BINARY = HERE.parent / "mcpd" / "MCPd"
 
 # Populated from CLI in main().
@@ -61,7 +59,7 @@ QMP_PORT = 14422
 def make_config(archive_root: Path) -> Config:
     return Config(
         server=ServerConfig(archive_root=archive_root),
-        paths=PathsConfig(qemu_runner=QEMU_RUNNER, qemu_binary=QEMU_BINARY),
+        paths=PathsConfig(qemu_binary=QEMU_BINARY),
         targets={
             "qemu-pegasos2": TargetConfig(
                 type="qemu", display_name="QEMU Pegasos2",
@@ -119,14 +117,7 @@ def wait_for_port(port: int, host: str = "127.0.0.1",
 
 
 def _serial_client():
-    spec = importlib.util.spec_from_file_location(
-        "_serial", QEMU_RUNNER / "serial_client.py"
-    )
-    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod.SerialClient(  # type: ignore[attr-defined]
-        host="127.0.0.1", port=SERIALSHELL_PORT,
-    )
+    return SerialClient(host="127.0.0.1", port=SERIALSHELL_PORT)
 
 
 def bootstrap_guest_mcpd() -> None:

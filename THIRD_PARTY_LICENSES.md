@@ -61,15 +61,19 @@ no source is vendored into this repository.
 
 | Name | Min version | Licence (SPDX) | Used for |
 |---|---|---|---|
-| `mcp[cli]` | 1.0 (capped below 2.0) | MIT | Model Context Protocol SDK. The server targets the 1.x FastMCP API. |
-| `pydantic` | 2.0 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
+| `mcp[cli]` | 2.3 (capped below 3.0) | MIT | Model Context Protocol SDK. The server targets the 2.x `MCPServer` API. |
+| `pydantic` | 2.12 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
 | `pyserial` | 3.5 | BSD-3-Clause | Serial-console bootstrap and the `serial.*` / `power.*` host channels. |
+| [`qemu-runner`](https://github.com/derfsss/qemu-runner) | v1.3.1 (pinned commit `bb72730`), installed from GitHub | MIT ([LICENSE](https://github.com/derfsss/qemu-runner/blob/main/LICENSE)) | QMP client for the `qemu.*` tools, and the serial client some `scripts/` use. |
 
 ## AmigaOS shared libraries linked at run time
 
 These ship with AmigaOS or with separately-installed packages on the
 target. The project does not bundle them; it loads them dynamically.
 Listed for completeness and licence transparency.
+[SandboxVM](https://github.com/derfsss/SandboxVM) (BSD-3-Clause) is
+likewise a separate program on the target, uploaded by
+`sandbox.deploy` from a copy you supply; it is not bundled.
 
 | Library | Version | Licence | Notes |
 |---|---|---|---|

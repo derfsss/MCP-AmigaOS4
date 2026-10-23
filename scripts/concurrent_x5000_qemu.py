@@ -14,7 +14,6 @@ Configuration:
   --qemu-binary <path>   qemu-system-ppc binary (default $QEMU_BINARY
                          or `qemu-system-ppc` on PATH)
   --peg2-config <path>   QEMU pegasos2 config.json (required)
-  $QEMU_RUNNER_DIR       qemu-runner checkout
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ HOST_SRC = HERE.parent / "host" / "src"
 sys.path.insert(0, str(HOST_SRC))
 sys.path.insert(0, str(HERE))
 
-from _paths import find_qemu_runner  # noqa: E402
 from amiga_fleet_mcp.archive import Archive  # noqa: E402
 from amiga_fleet_mcp.config import (  # noqa: E402
     Config, McpdChannel, PathsConfig, QmpChannel,
@@ -46,7 +44,6 @@ from amiga_fleet_mcp.tools import fleet as fleet_tool  # noqa: E402
 from amiga_fleet_mcp.tools import fs as fs_tool  # noqa: E402
 from amiga_fleet_mcp.tools import sys as sys_tool  # noqa: E402
 
-QEMU_RUNNER = find_qemu_runner()
 
 X5000_MCPD_PORT = 4322
 QEMU_MCPD_PORT = 4422  # host-side hostfwd; -> guest 4322
@@ -61,7 +58,7 @@ X5000_HOST: str = ""
 def make_config(archive_root: Path) -> Config:
     return Config(
         server=ServerConfig(archive_root=archive_root),
-        paths=PathsConfig(qemu_runner=QEMU_RUNNER, qemu_binary=QEMU_BINARY),
+        paths=PathsConfig(qemu_binary=QEMU_BINARY),
         targets={
             "qemu-pegasos2": TargetConfig(
                 type="qemu", display_name="QEMU Pegasos2",

@@ -114,6 +114,7 @@ Resolution order on every call:
 | `sources_dir`   | `installer.scan_sources`, `installer.preflight`, `installer.install_x5000`, `installer.run`, `installer.stage` |
 | `machine`       | `installer.required_files`, `installer.preflight`, `installer.run`, `installer.stage`, `installer.verify` |
 | `iso_filename`  | `installer.install_x5000`, `installer.run`, `installer.stage` (auto-detected when omitted) |
+| `exec_priority` | `exec_cmd`, `tests.run_suite`, `sandbox.run_batch` — task priority for the jobs they start (default -2; see [Priorities](#priorities)) |
 
 Per-call overrides always win, so a single config can serve a
 multi-machine fleet — set the most common values in `[defaults]`
@@ -133,9 +134,13 @@ already-running target via `fs.*` / `exec.*` / `sys.*` / `wb.*` /
 
 | `[paths]` key      | Required by                                                                                                                        | What to point it at |
 |---|---|---|
-| `qemu_runner`      | `qemu.*` lifecycle tools (`start` / `stop` / `reset` / `screenshot` / `savevm` / `loadvm` / `list_snapshots` / `delete_snapshot`) and the QMP transport. | An absolute path to a checkout of `derfsss/qemu-runner`. |
 | `amiga_qemu_tests` | `tests.*` orchestration (`tests.list_suites`, `tests.run_suite`, `tests.run_standard_dos_tests`, `tests.parse_output`).             | An absolute path to a checkout of `derfsss/AmigaQemuTests`. |
 | `qemu_binary`      | `qemu.start` only.                                                                                                                  | An absolute path to `qemu-system-ppc` (`qemu-system-ppc.exe` on Windows). |
+
+The `qemu.*` lifecycle tools and the QMP transport need no path entry.
+They use [`derfsss/qemu-runner`](https://github.com/derfsss/qemu-runner),
+installed from GitHub as a package dependency at a pinned commit (see
+`host/pyproject.toml`). An old `qemu_runner = ...` line is ignored.
 
 When a tool needs one of these and it's missing, the call returns
 an `InvalidParams` error naming the missing key, e.g.
@@ -173,8 +178,8 @@ breakdown.
 | Namespace | Description |
 |---|---|
 | `proto.*` | Capability and version reporting. |
-| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
-| `exec.cmd` | Run an AmigaDOS command with optional `args[]`, `cwd`, and timeout. |
+| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256), sync (flush cached writes to disk). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
+| `exec.*` | Run AmigaDOS commands as tracked jobs: `cmd` (optional `args[]`, `cwd`, timeout, priority, sandbox), then `status`, `output`, `kill` and `list` for a job that is still running. See [Running commands](#running-commands-exec). |
 | `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, loaded modules, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
 | `wb.*` | Workbench: screens, windows, public-screen registry, frontmost screen and window, plus `wb.screenshot` — capture a screen to PNG on the target and bring it back to the host. Works on real hardware as well as QEMU. |
 | `debug.*` | Per-task and whole-system debug: task snapshot, symbolicated stack trace, address-to-symbol resolution, register and memory read / write, breakpoints, single step, continue, detach. |
@@ -299,6 +304,87 @@ arbitrary address to module / function / source.
 For QEMU targets, the `gdb` channel exposes whole-system register and
 memory access through QEMU's GDB stub.
 
+## Running commands (`exec.*`)
+
+Every `exec_cmd` runs as a **job** on the target. The result carries
+a `job_id`, the process id, the exact exit code and `result2` (the
+command's IoErr):
+
+```python
+exec_cmd(command="List", args=["SYS:C"])
+# -> { state: "exited", exit_code: 0, result2: 0, job_id: 17,
+#      output: "...", ... }
+```
+
+**A timeout does not stop the command.** If it is still running when
+`timeout_s` (default 30) runs out, the result comes back with
+`state: "running"`, `exit_code: null` and its `job_id`, and the
+command carries on. Do not run it again — that starts a second copy.
+Follow it up instead:
+
+```python
+exec_status(job_id=17)            # running or exited, exit code, elapsed time
+exec_output(job_id=17, offset=0)  # read its output so far, then from `offset`
+exec_kill(job_id=17)              # send CTRL-C (signal="d"/"e"/"f" for the others)
+exec_list()                       # the last 32 jobs, newest first
+```
+
+Two limits are worth knowing. AmigaDOS often writes a command's
+output out only when the command ends, so `exec_output` on a running
+job may show less than it has printed. And `exec_kill` only sends a
+break signal: a program that ignores breaks keeps running, and the
+result says `exited: false`.
+
+The host never resends a request that may already have run; an error
+that leaves that open says so in `data.may_have_run`.
+
+### Priorities
+
+Jobs run at task priority **-2** by default, below ordinary programs
+at 0. MCPd's connection workers run at **+1**, so the daemon keeps
+answering even while a job — or anything else at the normal
+priority — uses the whole CPU. Set a job's priority per call with
+`priority` (on `exec_cmd`, `tests.run_suite` and `sandbox.run_batch`),
+or for every call in the config:
+
+```toml
+[defaults]
+exec_priority = -2
+```
+
+The daemon caps a job's priority at 0, one below its workers, and
+at -20 at the bottom. Programs a job starts with `Run` begin at
+priority 0 whatever the job's priority.
+
+### Sandboxed commands
+
+`sandbox=true` runs `command` — a program path, not a Shell line —
+under [SandboxVM](#driver--program-iteration-via-sandboxvm-sandbox),
+as an ordinary job with the same id, status, output, kill and
+priority. If the program crashes, the machine and MCPd survive, and
+the result's `sandbox` block reports what happened:
+
+```python
+exec_cmd(command="RAM:my_test", sandbox=True, timeout_s=60)
+# -> { ..., sandbox: { name: "...", end_reason: "trap", trap_kind: "DSI",
+#      trap_lines: [<ip / dar / dsisr / registers>], stdout: "...", stderr: "" } }
+```
+
+`end_reason` is `exit`, `trap`, `aborted` or `timeout`. `trap_lines`
+is SandboxVM's own trap report, taken from the kernel debug ring.
+Optional `sandbox_extmem_mb`, `sandbox_window_mb` and
+`sandbox_deny_libs` override the target's `[targets.<name>.sandbox]`
+defaults, and `sandbox_time_limit_s` makes SandboxVM itself abort the
+program after that many seconds.
+
+A sandboxed job that ignores break signals can be stopped with
+`exec_kill(job_id=..., force=True)`. That needs **SandboxVM 1.1** or
+later (it aborts the guest and frees what it opened);
+`sandbox_probe` reports the installed `sandboxvm_version` and
+`abort_supported`. `force` is refused for jobs that are not
+sandboxed. Sandboxed commands need an ExtMem machine (X5000, A1222,
+X1000, QEMU AmigaOne), not Pegasos II.
+
 ## Making a write durable (`fs.sync`)
 
 AmigaOS commits writes to disk on its own schedule. That is invisible
@@ -316,7 +402,7 @@ fs.sync(path="Work:project")   # flush whatever volume that lives on
 
 `fs.sync` sends `ACTION_FLUSH` and waits for the filesystem to answer,
 so when it returns the data is down. `qemu.stop` calls it for you
-before stopping a guest you have written to; reach for it directly
+whenever the guest's MCPd answers; reach for it directly
 before anything else abrupt, such as `sys.cold_reboot` or cutting
 power with `power.off`.
 
@@ -555,13 +641,21 @@ sandbox.run_guest(target="x5000", guest="RAM:my_test")
 
 # on a crash:
 sandbox.run_guest(target="x5000", guest="RAM:crashy")
-# -> { exit_code: -768, trap_kind: "DSI", ... }
+# -> { exit_code: -768, trap_kind: "DSI", ... }     (SandboxVM 1.0)
+# -> { exit_code: 50, trap_kind: "DSI", ... }       (SandboxVM 1.1: 50 = any trap; kind read from the debug ring)
 sandbox.last_trap(target="x5000")
 # -> { found: true, trap_kind: "DSI", traptype_hex: "0x300",
 #      raw_lines: [<full trap dump from the kernel ring>], ... }
 # -- daemon survived the crash; the next sandbox call works
 # without intervention.
 ```
+
+SandboxVM 1.1 passes a guest's own positive return code through
+(capped at 127) but exits 50 for any trap, 51 when aborted and 52 when
+its `-T` time limit runs out. On a 50, `run_guest` / `run_driver` (and
+`exec_cmd` with `sandbox=true`, see
+[Sandboxed commands](#sandboxed-commands)) read the trap kind from
+SandboxVM's report in the debug ring, matched to the run by its name.
 
 ### Driver iteration
 
@@ -619,6 +713,9 @@ by target name.
 - `sys.debug_ring` is the underlying primitive `sandbox.last_trap`
   filters against. Useful well outside sandbox: post-install
   forensics, hardware bring-up.
+- `exec_cmd` with `sandbox=true` runs one program sandboxed as a
+  tracked job you can poll and stop — see
+  [Sandboxed commands](#sandboxed-commands).
 - `tests.run_suite` is the right tool for JSON-config-driven
   multi-step test bundles **without** the SandboxVM harness.
 
@@ -643,7 +740,10 @@ python scripts/concurrent_x5000_qemu.py \
     --peg2-config /path/to/qemu/pegasos2/config.json
 ```
 
-Each script accepts `--help` for the full flag list. `--endpoint`
+Run the scripts with the Python from `host/.venv`: most import
+`amiga_fleet_mcp`, and some import `qmp_client` / `serial_client` from
+the `qemu-runner` package, which is installed only as a host
+dependency. Each script accepts `--help` for the full flag list. `--endpoint`
 also reads `$MCPD_ENDPOINT`; `--x5000` reads `$X5000_HOST`; the
 QEMU binary is auto-detected on PATH but can be pinned via
 `--qemu-binary` or `$QEMU_BINARY`.

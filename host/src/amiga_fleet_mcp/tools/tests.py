@@ -289,6 +289,7 @@ async def tests_run_suite(
     fleet: Fleet, target: str, suite: str,
     *,
     skip_uploads: bool = False,
+    priority: int | None = None,
 ) -> SuiteRunResult:
     data = _load_suite(fleet, suite)
     entries: list[SuiteEntry] = []
@@ -332,7 +333,8 @@ async def tests_run_suite(
 
         t0 = asyncio.get_event_loop().time()
         try:
-            r = await exec_tool.exec_cmd(fleet, target, cmd, timeout_s=timeout)
+            r = await exec_tool.exec_cmd(fleet, target, cmd, timeout_s=timeout,
+                                         priority=priority)
             output = r.output
             err: str | None = None
         except TargetError as e:

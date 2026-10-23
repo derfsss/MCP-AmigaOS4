@@ -135,25 +135,34 @@ class GdbTransport:
                         timeout_s: float = DEFAULT_TIMEOUT_S) -> bytes:
         async with self._lock:
             for attempt in range(2):
+                sent = False
                 try:
                     await self._ensure_connected()
                     await self._send(payload, timeout_s)
+                    sent = True
                     return await self._recv(timeout_s)
-                except (asyncio.IncompleteReadError, ConnectionResetError,
-                        BrokenPipeError, OSError) as e:
-                    await self._close_locked()
-                    if attempt == 1:
-                        raise TargetError(
-                            f"GDB stub I/O failed: {e}",
-                            data={"payload": payload[:80].decode(
-                                "ascii", errors="replace")},
-                        ) from e
+                # TimeoutError is a subclass of OSError (Python 3.11+),
+                # so it must come first or it is handled as I/O failure.
                 except TimeoutError as e:
                     await self._close_locked()
                     raise TargetError(
                         f"GDB stub request timed out after {timeout_s}s",
                         data={"payload": payload[:80].decode(
-                            "ascii", errors="replace")},
+                            "ascii", errors="replace"),
+                            "may_have_run": sent},
+                    ) from e
+                except (asyncio.IncompleteReadError, ConnectionResetError,
+                        BrokenPipeError, OSError) as e:
+                    await self._close_locked()
+                    # Only resend a packet the stub never received:
+                    # step / continue / memory writes must not repeat.
+                    if attempt == 0 and not sent:
+                        continue
+                    raise TargetError(
+                        f"GDB stub I/O failed: {str(e) or type(e).__name__}",
+                        data={"payload": payload[:80].decode(
+                            "ascii", errors="replace"),
+                            "may_have_run": sent},
                     ) from e
         raise InternalError("unreachable")
 

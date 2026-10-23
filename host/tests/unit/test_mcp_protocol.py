@@ -1,7 +1,8 @@
 """End-to-end MCP protocol smoke test.
 
-Spins up the FastMCP server with no real targets configured, then
-acts as an MCP client over the in-memory transport. Exercises:
+Spins up the MCP server with no real targets configured, then acts as
+an MCP client over the in-memory JSON-RPC transport (mode="legacy", so
+requests really are framed and parsed, not dispatched directly). Exercises:
   - tools/list
   - resources/list (templates + concrete URIs)
   - reading amiga://fleet/targets
@@ -17,7 +18,7 @@ import json
 from pathlib import Path
 
 import pytest
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp import Client
 
 from amiga_fleet_mcp.archive import Archive
 from amiga_fleet_mcp.config import (
@@ -29,6 +30,10 @@ from amiga_fleet_mcp.config import (
 )
 from amiga_fleet_mcp.fleet import Fleet
 from amiga_fleet_mcp.server import build_server
+
+
+def _client(server: object) -> Client:
+    return Client(server, mode="legacy")  # type: ignore[arg-type]
 
 
 def _build_with_two_targets(tmp_path: Path) -> tuple[Fleet, Archive]:
@@ -60,8 +65,7 @@ async def test_mcp_tools_list_includes_phase_method_set(
 ) -> None:
     fleet, archive = _build_with_two_targets(tmp_path)
     server = build_server(fleet, archive)
-    async with create_connected_server_and_client_session(server) as client:
-        await client.initialize()
+    async with _client(server) as client:
         tools = await client.list_tools()
         names = {t.name for t in tools.tools}
         # Spot-check tools from each phase that we registered.
@@ -87,13 +91,12 @@ async def test_mcp_resources_include_fleet_targets(
 ) -> None:
     fleet, archive = _build_with_two_targets(tmp_path)
     server = build_server(fleet, archive)
-    async with create_connected_server_and_client_session(server) as client:
-        await client.initialize()
+    async with _client(server) as client:
         resources = await client.list_resources()
         # Concrete (non-template) resources should include
         # amiga://runs/ and amiga://fleet/targets.
         uris = {str(r.uri) for r in resources.resources}
-        # FastMCP normalises URIs - allow either with or without
+        # The server may normalise URIs - allow either with or without
         # trailing slash.
         assert any("amiga://runs/" in u for u in uris) or \
                any("amiga://runs" in u for u in uris)
@@ -110,8 +113,7 @@ async def test_mcp_read_serial_log(tmp_path: Path) -> None:
     log_path.write_text("hello qemu\nline 2\n", encoding="utf-8")
     fleet._serial_log_paths["qemu-pegasos2"] = log_path
     server = build_server(fleet, archive)
-    async with create_connected_server_and_client_session(server) as client:
-        await client.initialize()
+    async with _client(server) as client:
         r = await client.read_resource("amiga://qemu-pegasos2/qemu/serial_log")
         text = r.contents[0].text  # type: ignore[union-attr]
         assert "hello qemu" in text
@@ -125,8 +127,7 @@ async def test_mcp_read_serial_log(tmp_path: Path) -> None:
 async def test_mcp_read_amiga_fleet_targets(tmp_path: Path) -> None:
     fleet, archive = _build_with_two_targets(tmp_path)
     server = build_server(fleet, archive)
-    async with create_connected_server_and_client_session(server) as client:
-        await client.initialize()
+    async with _client(server) as client:
         result = await client.read_resource("amiga://fleet/targets")
         assert result.contents
         # Parse the JSON content.
@@ -138,3 +139,20 @@ async def test_mcp_read_amiga_fleet_targets(tmp_path: Path) -> None:
         x5000 = next(r for r in rows if r["name"] == "x5000-real")
         assert x5000["mcpd_endpoint"] == "192.168.0.25:4322"
         assert x5000["qmp_endpoint"] is None
+
+
+@pytest.mark.asyncio
+async def test_tool_errors_reach_the_model_as_tool_results(
+    tmp_path: Path,
+) -> None:
+    """A failing tool must come back as an isError result whose text the
+    model can read. mcp 2 hides the text of any exception that is not a
+    ToolError ("Error executing tool <name>" only), so our errors derive
+    from ToolError, and their data rides along in the text."""
+    fleet, archive = _build_with_two_targets(tmp_path)
+    server = build_server(fleet, archive)
+    async with _client(server) as client:
+        r = await client.call_tool(
+            "exec_status", {"target": "no-such-target", "job_id": 1})
+        assert r.is_error
+        assert "no-such-target" in r.content[0].text  # type: ignore[union-attr]

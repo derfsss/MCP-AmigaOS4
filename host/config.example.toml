@@ -36,11 +36,9 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 # Optional helper paths. Each entry is consumed by a specific tool
 # surface; omit any entry whose tools you do not use. None of these
 # are required for `fs.*` / `exec.*` / `sys.*` / `wb.*` / `power.*`
-# against an already-running target.
+# against an already-running target. The QMP transport needs no path:
+# it uses the qemu-runner package, installed as a dependency.
 #
-# qemu_runner      Required by `qemu.*` lifecycle (start / stop / reset /
-#                  screenshot / savevm / loadvm) and by the QMP transport.
-#                  Path to a checkout of derfsss/qemu-runner.
 # amiga_qemu_tests Required by `tests.*` orchestration. Path to a checkout
 #                  of derfsss/AmigaQemuTests.
 # qemu_binary      Required by `qemu.start`. Absolute path to
@@ -49,7 +47,6 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  when no explicit `source` arg is given. Absolute path
 #                  to a built `bin/sandboxvm` (PPC AOS4 binary).
 #
-# qemu_runner      = "<absolute path to qemu-runner checkout>"
 # amiga_qemu_tests = "<absolute path to AmigaQemuTests checkout>"
 # qemu_binary      = "<absolute path to qemu-system-ppc(.exe)>"
 # sandboxvm        = "<absolute path to SandboxVM/VM-OS4/bin/sandboxvm>"
@@ -68,10 +65,16 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  stage / run / verify (e.g. "X5000", "A1222").
 #   iso_filename   Default ISO filename inside sources_dir; rarely
 #                  useful since the installer auto-detects it.
+#   exec_priority  Task priority for commands MCPd starts (exec_cmd,
+#                  tests.run_suite, sandbox.run_batch). Unset = the
+#                  daemon's default, -2. MCPd caps it at 0, one below
+#                  its own workers (+1), so a busy job can't stop it
+#                  answering. A per-call `priority` overrides it.
 #
 # dest_volume   = "BootTest:"
 # sources_dir   = "<absolute path to your AmigaOS source tree>"
 # machine       = "X5000"
+# exec_priority = -2
 
 # ---- Example: QEMU Pegasos2 target -------------------------------
 
@@ -121,12 +124,24 @@ tags           = ["real-hw", "x5000"]
   # port    = "COM5"             # or /dev/ttyUSB1 on Linux/macOS
   # baud    = 38400
 
+  # Optional: serial cable to the rear-panel DB9 (U-Boot console +
+  # AOS4 kernel debug). Used by the `serial.*` capture tools, whose
+  # default channel is `uboot`.
+  # [targets.x5000-real.channels.uboot]
+  # enabled = true
+  # port    = "COM7"             # or /dev/ttyUSB0 on Linux/macOS
+  # baud    = 115200
+
   # Optional: SandboxVM overrides for this target. The `sandbox.*`
   # namespace runs guest ELFs inside SandboxVM (an in-process
   # sandbox host that survives guest crashes). When omitted,
   # `sandbox.probe` searches SYS:Tools/sandboxvm,
   # SYS:Utilities/sandboxvm, then C:sandboxvm; default extmem
-  # window is 1024 MB and default vmem window is 256 MB.
+  # window is 1024 MB and default vmem window is 256 MB. These are
+  # also the defaults for `exec_cmd sandbox=true` (whose
+  # sandbox_extmem_mb / sandbox_window_mb / sandbox_deny_libs override
+  # them per call). Stopping a sandboxed job with exec_kill force=true
+  # needs SandboxVM 1.1 or later on the target.
   # [targets.x5000-real.sandbox]
   # path              = "Tools:sandboxvm"
   # default_extmem_mb = 1024

@@ -38,7 +38,7 @@ SDK_VERSION ?= AmigaOS 4.1 FE SDK 54.16 + GCC 11.5 (walkero/amigagccondocker:os4
 MCPD_CFLAGS += -DMCPD_SDK_VERSION="\"$(SDK_VERSION)\""
 
 # Distribution
-VERSION = 1.4
+VERSION = 2.0
 
 SRC_DIR = src
 METHODS_DIR = $(SRC_DIR)/methods
@@ -50,6 +50,7 @@ SRCS = \
   $(SRC_DIR)/sha256.c \
   $(SRC_DIR)/discovery.c \
   $(SRC_DIR)/crashhook.c \
+  $(SRC_DIR)/jobs.c \
   $(METHODS_DIR)/helpers.c \
   $(METHODS_DIR)/amigautil.c \
   $(METHODS_DIR)/proto.c \
@@ -66,6 +67,11 @@ SRCS = \
   $(METHODS_DIR)/applib.c \
   $(METHODS_DIR)/mcu.c \
   ../third-party/cjson/cJSON.c
+
+# Every source is compiled in one command, so the binary depends on the
+# headers directly. Without this, changing rpc.h (the version string,
+# the method table) left a stale MCPd until `make clean`.
+HDRS = $(wildcard $(SRC_DIR)/*.h $(METHODS_DIR)/*.h) ../third-party/cjson/cJSON.h
 
 # Docker Desktop image used for cross-compilation.
 DOCKER       ?= docker
@@ -90,7 +96,7 @@ endif
 
 all: MCPd
 
-MCPd: $(SRCS)
+MCPd: $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) $(MCPD_CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
 
 # Run `make all` inside the cross-compile container. Invoke from the
