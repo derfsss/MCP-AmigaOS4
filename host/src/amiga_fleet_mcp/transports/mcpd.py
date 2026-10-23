@@ -106,6 +106,15 @@ IDEMPOTENT_METHODS = frozenset({
 #: this long, rather than find out afterwards.
 STALE_AFTER_S = 100.0
 
+#: Bounds on connecting and on closing. Neither had one, and against a
+#: daemon starved of CPU (a priority-0 program spinning on the X5000)
+#: a reconnect stalled a caller for 30 s past its own 10 s request
+#: timeout. The TCP handshake is done by the stack, not MCPd, so a
+#: healthy connect takes milliseconds; closing only waits for the
+#: socket to wind down and is abandoned, not failed, when it doesn't.
+CONNECT_TIMEOUT_S = 10.0
+CLOSE_TIMEOUT_S = 2.0
+
 
 def _describe(e: BaseException) -> str:
     """str(e), or the exception's type when it has no message."""
@@ -176,8 +185,11 @@ class McpdTransport:
         if self._reader is not None and self._writer is not None:
             return
         try:
-            r, w = await asyncio.open_connection(self._channel.host, self._channel.port)
-        except (ConnectionRefusedError, OSError) as e:
+            r, w = await asyncio.wait_for(
+                asyncio.open_connection(self._channel.host, self._channel.port),
+                CONNECT_TIMEOUT_S,
+            )
+        except (ConnectionRefusedError, OSError) as e:  # incl. TimeoutError
             raise TargetError(
                 f"MCPd not reachable at {self._channel.endpoint}",
                 data={"endpoint": self._channel.endpoint, "error": str(e)},
@@ -210,8 +222,8 @@ class McpdTransport:
         if w is not None:
             try:
                 w.close()
-                await w.wait_closed()
-            except OSError:
+                await asyncio.wait_for(w.wait_closed(), CLOSE_TIMEOUT_S)
+            except OSError:  # incl. TimeoutError
                 pass
 
     async def _read_frame(self, timeout_s: float) -> bytes:

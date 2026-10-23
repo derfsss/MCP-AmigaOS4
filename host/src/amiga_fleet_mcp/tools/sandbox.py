@@ -92,9 +92,15 @@ INCOMPATIBLE_MACHINES = frozenset({"pegasos2"})
 
 # First SandboxVM version that aborts a guest on CTRL-F (and reaps what
 # it opened), which is what exec.kill force=true relies on. Requested in
-# derfsss/SandboxVM#1; no release has it yet, so forcing stays off.
-# Set this to that release's (major, minor) once it ships.
-SANDBOXVM_ABORT_MIN_VERSION: tuple[int, int] | None = None
+# derfsss/SandboxVM#1 and shipped in SandboxVM 1.1, which also has the
+# -T wall-clock limit and exits 51 (aborted) / 52 (timed out).
+SANDBOXVM_ABORT_MIN_VERSION: tuple[int, int] | None = (1, 1)
+
+#: sandboxvm's own exit codes (SandboxVM 1.1 main.c): 50 = a guest
+#: trapped, 51 = aborted by CTRL-C/F, 52 = the -T limit ran out.
+SANDBOXVM_RC_TRAP = 50
+SANDBOXVM_RC_ABORTED = 51
+SANDBOXVM_RC_TIMEOUT = 52
 
 # SandboxVM's exit-code convention: trap_type negated. See
 # upstream PROGRESS.md / README.md.
@@ -705,7 +711,8 @@ def _build_command(sandboxvm_path: str, *,
                    deny_libs: Sequence[str],
                    name: str,
                    resident_driver: bool = False,
-                   test_elf: str | None = None) -> str:
+                   test_elf: str | None = None,
+                   time_limit_s: int | None = None) -> str:
     """Construct the AmigaDOS command line for one guest run.
 
     Plain guest mode:
@@ -730,6 +737,8 @@ def _build_command(sandboxvm_path: str, *,
     parts.extend(["-n", _shell_safe(name)])
     for lib in deny_libs:
         parts.extend(["-x", _shell_safe(lib)])
+    if time_limit_s:
+        parts.extend(["-T", str(int(time_limit_s))])  # SandboxVM >= 1.1
     if resident_driver:
         parts.append("-r")
     if test_elf:
@@ -934,6 +943,7 @@ async def sandbox_job_command(
     extmem_mb: int | None,
     window_mb: int | None,
     deny_libs: Sequence[str] | None,
+    time_limit_s: int | None = None,
 ) -> tuple[str, str]:
     """Probe-gate the target and build the command line that runs
     `guest` under SandboxVM, for `exec.cmd sandbox=True`. Returns
@@ -955,7 +965,7 @@ async def sandbox_job_command(
     cmd = _build_command(
         probe.path, guest=guest, args=args,
         extmem_mb=extmem_mb, window_mb=window_mb,
-        deny_libs=merged_deny, name=name)
+        deny_libs=merged_deny, name=name, time_limit_s=time_limit_s)
     return cmd, name
 
 
@@ -978,7 +988,13 @@ async def sandbox_job_result(
                                           (err_path, err_present)) if ok]
     info.trap_kind, info.trap_fingerprint = _classify_exit(
         exit_code, info.stderr)
-    if exit_code != 0 and info.trap_kind is None:
+    info.end_reason = {
+        0: "exit",
+        SANDBOXVM_RC_TRAP: "trap",
+        SANDBOXVM_RC_ABORTED: "aborted",
+        SANDBOXVM_RC_TIMEOUT: "timeout",
+    }.get(exit_code, "exit")
+    if exit_code == SANDBOXVM_RC_TRAP and info.trap_kind is None:
         # The sandboxvm process exits with its own code (50 when a guest
         # aborted, seen on QEMU AmigaOne), not the guest's -768, so the
         # exit code alone often can't classify a trap. SandboxVM's trap

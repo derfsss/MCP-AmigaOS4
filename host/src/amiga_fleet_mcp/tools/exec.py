@@ -23,6 +23,9 @@ class SandboxJobInfo(BaseModel):
     name: str
     """SandboxVM ``-n`` name; also names the ``T:sandboxvm-<name>.*``
     capture files."""
+    #: How the guest ended: exit (returned, its own rc), trap, aborted
+    #: (exec_kill force / CTRL-C) or timeout (sandbox_time_limit_s).
+    end_reason: str | None = None
     trap_kind: str | None = None
     trap_fingerprint: str | None = None
     #: SandboxVM's trap report from the kernel debug ring (trap type,
@@ -128,6 +131,7 @@ async def exec_cmd(
     sandbox_extmem_mb: int | None = None,
     sandbox_window_mb: int | None = None,
     sandbox_deny_libs: Sequence[str] | None = None,
+    sandbox_time_limit_s: int | None = None,
 ) -> ExecResult:
     """Run an AmigaDOS command on `target` and wait up to `timeout_s`.
 
@@ -157,7 +161,7 @@ async def exec_cmd(
         command, sandbox_name = await sandbox_tool.sandbox_job_command(
             fleet, target, guest=command, args=args,
             extmem_mb=sandbox_extmem_mb, window_mb=sandbox_window_mb,
-            deny_libs=sandbox_deny_libs)
+            deny_libs=sandbox_deny_libs, time_limit_s=sandbox_time_limit_s)
         args = None  # passed to the guest inside the SandboxVM command
     params: dict[str, object] = {
         "command": command,

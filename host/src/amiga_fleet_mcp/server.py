@@ -340,6 +340,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         sandbox_extmem_mb: int | None = None,
         sandbox_window_mb: int | None = None,
         sandbox_deny_libs: list[str] | None = None,
+        sandbox_time_limit_s: int | None = None,
     ) -> exec_tool.ExecResult:
         """Run an AmigaDOS command as a tracked job and wait up to
         `timeout_s` for it. `args` (if given) are appended with
@@ -362,7 +363,10 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         `sandbox` block (the guest's stdout/stderr and trap kind), and
         exec_kill(force=True) can stop it where SandboxVM supports that.
         ExtMem machines only (X5000, A1222, X1000, QEMU AmigaOne);
-        `sandbox_*` override the target's [sandbox] defaults."""
+        `sandbox_*` override the target's [sandbox] defaults.
+        `sandbox_time_limit_s` makes SandboxVM itself abort the guest
+        after that many seconds (SandboxVM 1.1+); `sandbox.end_reason`
+        then says "timeout"."""
         return await exec_tool.exec_cmd(
             fleet, fleet.resolve_target(target), command,
             args=args, cwd=cwd, timeout_s=timeout_s,
@@ -370,6 +374,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
             sandbox=sandbox, sandbox_extmem_mb=sandbox_extmem_mb,
             sandbox_window_mb=sandbox_window_mb,
             sandbox_deny_libs=sandbox_deny_libs,
+            sandbox_time_limit_s=sandbox_time_limit_s,
         )
 
     @mcp.tool(name="exec_status", title="exec.status")

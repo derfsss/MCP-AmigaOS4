@@ -227,3 +227,35 @@ async def test_gdb_step_is_never_resent(
         await g._exchange(b"s")
     assert sent == [b"s"]
     assert ei.value.data["may_have_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_connect_and_close_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connect or close that never completes must not hang the caller."""
+    monkeypatch.setattr(mcpd_mod, "CONNECT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(mcpd_mod, "CLOSE_TIMEOUT_S", 0.05)
+
+    async def _never(*_a: Any, **_k: Any) -> Any:
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(asyncio, "open_connection", _never)
+    t = McpdTransport(McpdChannel(endpoint="127.0.0.1:4322"))
+    t0 = time.monotonic()
+    with pytest.raises(TargetError, match="not reachable"):
+        await t._ensure_connected()
+    assert time.monotonic() - t0 < 2
+
+    class _StuckWriter:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            await asyncio.sleep(60)
+
+    t._writer = _StuckWriter()  # type: ignore[assignment]
+    t._reader = object()  # type: ignore[assignment]
+    t0 = time.monotonic()
+    await t._close_locked()
+    assert time.monotonic() - t0 < 2 and t._writer is None

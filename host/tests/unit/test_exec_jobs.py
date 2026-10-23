@@ -201,9 +201,13 @@ def test_abort_support_follows_the_minimum_version(
 
     assert sb._parse_version("sandboxvm 1.0 (05.05.2026)") == (1, 0)
     assert sb._parse_version("no version here") is None
-    assert not sb._abort_supported((9, 9))  # no release has it yet
-    monkeypatch.setattr(sb, "SANDBOXVM_ABORT_MIN_VERSION", (1, 1))
+    # SandboxVM 1.1 added the CTRL-F abort and -T; 1.0 (and the 0.1.0
+    # builds that carried no $VER) did not.
+    assert sb.SANDBOXVM_ABORT_MIN_VERSION == (1, 1)
     assert not sb._abort_supported((1, 0))
+    monkeypatch.setattr(sb, "SANDBOXVM_ABORT_MIN_VERSION", None)
+    assert not sb._abort_supported((9, 9))
+    monkeypatch.setattr(sb, "SANDBOXVM_ABORT_MIN_VERSION", (1, 1))
     assert sb._abort_supported((1, 1))
     assert not sb._abort_supported(None)
 
