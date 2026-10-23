@@ -11,9 +11,31 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from ..errors import InvalidParams, NotCapable
 from ..fleet import Fleet
+
+
+class SandboxJobInfo(BaseModel):
+    """What `exec.cmd sandbox=True` adds to its result."""
+
+    name: str
+    """SandboxVM ``-n`` name; also names the ``T:sandboxvm-<name>.*``
+    capture files."""
+    trap_kind: str | None = None
+    trap_fingerprint: str | None = None
+    #: SandboxVM's trap report from the kernel debug ring (trap type,
+    #: ip, dar, dsisr, registers), when this job's guest trapped.
+    trap_lines: list[str] = Field(default_factory=list)
+    #: False when the debug ring could not be read for a trap (see
+    #: sandbox.last_trap ring_usable): "no trap" is then unknown.
+    ring_usable: bool | None = None
+    stdout: str = ""
+    stderr: str = ""
+    capture_paths: list[str] = Field(default_factory=list)
+    """The guest's capture files. Read once the job has exited, then
+    deleted; still listed (and not yet written) while it runs."""
 
 
 class ExecResult(BaseModel):
@@ -30,6 +52,8 @@ class ExecResult(BaseModel):
     pid: int | None = None
     priority: int | None = None
     elapsed_ms: int | None = None
+    #: Set for `sandbox=True`: the guest's own output and any trap.
+    sandbox: SandboxJobInfo | None = None
 
 
 class JobStatus(BaseModel):
@@ -71,6 +95,7 @@ class KillResult(BaseModel):
     signal: str
     sent: bool
     exited: bool
+    forced: bool = False
 
 
 class JobList(BaseModel):
@@ -99,6 +124,10 @@ async def exec_cmd(
     timeout_s: float = 30.0,
     priority: int | None = None,
     return_running: bool = False,
+    sandbox: bool = False,
+    sandbox_extmem_mb: int | None = None,
+    sandbox_window_mb: int | None = None,
+    sandbox_deny_libs: Sequence[str] | None = None,
 ) -> ExecResult:
     """Run an AmigaDOS command on `target` and wait up to `timeout_s`.
 
@@ -113,12 +142,29 @@ async def exec_cmd(
     and any output so far; without it a TargetError is raised whose
     data carries the `job_id`. Either way the command keeps running --
     see exec_status / exec_kill.
+
+    `sandbox=True` runs `command` -- then the path of a program, not a
+    shell line -- under SandboxVM, so a crash in it is contained. The
+    job is the same kind (id, status, kill), the result gains a
+    `sandbox` block with the guest's own output and any trap, and
+    `exec_kill(force=True)` becomes possible where SandboxVM supports
+    aborting a guest. Needs an ExtMem machine (not Pegasos II).
     """
     t = fleet.mcpd(target)
+    sandbox_name: str | None = None
+    if sandbox:
+        from . import sandbox as sandbox_tool  # sandbox imports this module
+        command, sandbox_name = await sandbox_tool.sandbox_job_command(
+            fleet, target, guest=command, args=args,
+            extmem_mb=sandbox_extmem_mb, window_mb=sandbox_window_mb,
+            deny_libs=sandbox_deny_libs)
+        args = None  # passed to the guest inside the SandboxVM command
     params: dict[str, object] = {
         "command": command,
         "timeout_ms": int(timeout_s * 1000),
     }
+    if sandbox:
+        params["sandboxed"] = True
     if args:
         params["args"] = list(args)
     if cwd:
@@ -133,7 +179,13 @@ async def exec_cmd(
         params,
         timeout_s=max(timeout_s + 5.0, 30.0),
     )
-    return ExecResult.model_validate(raw)
+    result = ExecResult.model_validate(raw)
+    if sandbox_name is not None:
+        from . import sandbox as sandbox_tool
+        result.sandbox = await sandbox_tool.sandbox_job_result(
+            fleet, target, sandbox_name,
+            result.exit_code if result.state == "exited" else None)
+    return result
 
 
 async def exec_status(fleet: Fleet, target: str, job_id: int) -> JobStatus:
@@ -163,15 +215,38 @@ async def exec_kill(
     job_id: int,
     signal: str = "c",
     wait_s: float = 2.0,
+    force: bool = False,
 ) -> KillResult:
     """Send a running job a break signal (c, d, e or f) and wait up to
     `wait_s` for it to exit. A program that ignores breaks keeps
-    running and comes back with `exited=False`; nothing is forced."""
-    wait_ms = int(wait_s * 1000)
+    running and comes back with `exited=False`; nothing is forced.
+
+    `force=True` is for jobs started with `sandbox=True` only: it asks
+    SandboxVM to abort the guest, which frees everything the guest
+    opened. It needs a SandboxVM that supports that (sandbox.probe
+    `abort_supported`; requested in derfsss/SandboxVM#1)."""
+    params: dict[str, object] = {
+        "job_id": job_id, "signal": signal, "wait_ms": int(wait_s * 1000),
+    }
+    if force:
+        from . import sandbox as sandbox_tool
+        probe = await sandbox_tool.sandbox_probe(fleet, target)
+        if not probe.available:
+            raise InvalidParams(
+                "exec.kill force=True needs SandboxVM on the target",
+                data={"code": probe.code, "target": target})
+        if not probe.abort_supported:
+            raise NotCapable(
+                "exec.kill force=True needs a SandboxVM that aborts a guest "
+                "on request; the installed one "
+                f"({probe.sandboxvm_version or 'unknown version'}) does not. "
+                "See derfsss/SandboxVM#1. A break signal (force=False) "
+                "still works.",
+                data={"target": target,
+                      "sandboxvm_version": probe.sandboxvm_version})
+        params["force"] = True
     raw = await fleet.mcpd(target).request(
-        "exec.kill",
-        {"job_id": job_id, "signal": signal, "wait_ms": wait_ms},
-        timeout_s=max(wait_s + 10.0, 30.0),
+        "exec.kill", params, timeout_s=max(wait_s + 10.0, 30.0),
     )
     return KillResult.model_validate(raw)
 

@@ -37,6 +37,7 @@ struct job_info {
     uint32_t mem_free_before;
     uint32_t mem_free_after;    /* 0 while running */
     int      output_deleted;
+    int      sandboxed;         /* started under SandboxVM */
     uint32_t signals_sent;      /* SIGBREAKF_* mask sent so far */
     char     out_path[40];
     char     command[96];       /* truncated copy, for listings */
@@ -58,11 +59,12 @@ int jobs_default_priority(void);
 int jobs_max_priority(void);
 
 /* Start `cmd` as a job at `priority` (clamped to jobs_max_priority).
- * The current directory of the calling process is inherited. On
- * success returns 0 and the id in *out_id; on failure returns -1 and
- * an RPC error in *out_err. */
-int jobs_start(const char *cmd, int priority, uint32_t *out_id,
-               int *out_priority, cJSON **out_err);
+ * `sandboxed` marks a command that runs a program under SandboxVM,
+ * which is the only kind exec.kill may force. The current directory
+ * of the calling process is inherited. On success returns 0 and the id
+ * in *out_id; on failure returns -1 and an RPC error in *out_err. */
+int jobs_start(const char *cmd, int priority, int sandboxed,
+               uint32_t *out_id, int *out_priority, cJSON **out_err);
 
 /* Copy a job's state into *out. Returns 0, or -1 for an unknown id. */
 int jobs_get(uint32_t id, struct job_info *out);

@@ -46,6 +46,7 @@ struct job {
     int               priority;
     uint32_t          signals_sent;
     int               output_deleted;
+    int               sandboxed;
     uint32_t          mem_free_before;
     uint32_t          mem_free_after;
     struct DateStamp  t_start;
@@ -119,6 +120,7 @@ static void _fill_info(const struct job *j, struct job_info *o) {
     o->mem_free_before = j->mem_free_before;
     o->mem_free_after = j->mem_free_after;
     o->output_deleted = j->output_deleted;
+    o->sandboxed = j->sandboxed;
     o->signals_sent = j->signals_sent;
     strncpy(o->out_path, j->out_path, sizeof(o->out_path) - 1);
     o->out_path[sizeof(o->out_path) - 1] = '\0';
@@ -214,8 +216,8 @@ static struct job *_claim_slot_locked(void) {
     return oldest;
 }
 
-int jobs_start(const char *cmd, int priority, uint32_t *out_id,
-               int *out_priority, cJSON **out_err) {
+int jobs_start(const char *cmd, int priority, int sandboxed,
+               uint32_t *out_id, int *out_priority, cJSON **out_err) {
     if (!g_sem) {
         *out_err = rpc_make_error(MCPD_ERR_INTERNAL,
                                   "exec: job table unavailable", NULL);
@@ -240,6 +242,7 @@ int jobs_start(const char *cmd, int priority, uint32_t *out_id,
     j->id = g_next_id++;
     j->state = JOB_RUNNING;
     j->priority = priority;
+    j->sandboxed = sandboxed;
     j->dm.dm_Msg.mn_ReplyPort = g_port;
     j->dm.dm_Msg.mn_Length = sizeof(j->dm);
     j->dm.dm_ReturnCode = -1;

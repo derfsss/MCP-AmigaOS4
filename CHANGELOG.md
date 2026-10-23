@@ -14,6 +14,18 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   and it reports when a program ignored the break) and `exec.list`,
   plus an `exec` dispatcher. 138 -> 143 tools; 60 -> 64 daemon
   methods.
+- **Sandboxed jobs** (#25). `exec_cmd sandbox=true` runs a program
+  under SandboxVM as an ordinary tracked job (same id, status, output,
+  kill, priority), so a crash in it is contained and reported. The
+  result's `sandbox` block carries the guest's output, the trap kind
+  and SandboxVM's trap report from the debug ring (ip, dar, dsisr,
+  registers). That report is matched to the job by its unique name,
+  because `sandboxvm` exits 50 when its guest aborts rather than
+  passing the guest's code on. `exec_kill force=true` is accepted
+  only for sandboxed jobs. It needs a SandboxVM that aborts a guest
+  on CTRL-F (derfsss/SandboxVM#1) and is refused until
+  `sandbox_probe` reports `abort_supported`; no release does yet.
+  `sandbox_probe` also reports `sandboxvm_version`.
 - **Priority for started work** (#24). Jobs run at priority -2 by
   default, can be set per call (`priority` on `exec_cmd`,
   `tests.run_suite`, `sandbox.run_batch`) or in `[defaults]

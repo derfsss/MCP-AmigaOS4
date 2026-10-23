@@ -124,6 +124,7 @@ static void _add_job_fields(cJSON *r, const struct job_info *ji) {
     cJSON_AddNumberToObject(r, "pid", (double)ji->pid);
     cJSON_AddNumberToObject(r, "priority", (double)ji->priority);
     cJSON_AddNumberToObject(r, "elapsed_ms", (double)ji->elapsed_ms);
+    cJSON_AddBoolToObject(r, "sandboxed", ji->sandboxed);
 }
 
 
@@ -149,6 +150,7 @@ int exec_cmd(cJSON *params, cJSON **out_result, cJSON **out_err) {
                               (long long)jobs_default_priority());
     int return_running = _p_bool(params, "return_running");
     int stream = _p_bool(params, "stream");
+    int sandboxed = _p_bool(params, "sandboxed");
 
     /* Optional args array. */
     cJSON *args = cJSON_GetObjectItemCaseSensitive(params, "args");
@@ -215,7 +217,8 @@ int exec_cmd(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     uint32_t id = 0;
     int actual_pri = priority;
-    int started = jobs_start(full, priority, &id, &actual_pri, out_err);
+    int started = jobs_start(full, priority, sandboxed, &id, &actual_pri,
+                             out_err);
 
     if (cwd_lock != ZERO) {
         IDOS->SetCurrentDir(old_dir);
@@ -365,19 +368,38 @@ int exec_output(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
 /* exec.kill: ask a job to stop with a break signal, then wait up to
  * wait_ms for it to exit. A program that ignores the signal keeps
- * running; that is reported, not forced. */
+ * running; that is reported, not forced.
+ *
+ * force=true is accepted only for a job started with sandboxed=true.
+ * It sends CTRL-F, the signal SandboxVM is asked (derfsss/SandboxVM#1)
+ * to treat as "abort the guest and reap everything it opened". A plain
+ * AmigaOS process cannot be removed safely, so for one that is never
+ * offered. Whether the installed SandboxVM honours CTRL-F is the
+ * host's to check (sandbox.probe abort_supported); the daemon only
+ * delivers the signal. */
 int exec_kill(cJSON *params, cJSON **out_result, cJSON **out_err) {
     uint32_t id;
     if (_p_job_id(params, &id, out_err) != 0) return 0;
-    if (_p_bool(params, "force")) {
-        *out_err = rpc_make_error(MCPD_ERR_NOTCAPABLE,
-            "exec.kill: force is only available for sandboxed jobs", NULL);
-        return 0;
-    }
+    int force = _p_bool(params, "force");
     uint32_t mask = SIGBREAKF_CTRL_C;
     const char *letter = "c";
+    if (force) {
+        struct job_info fi;
+        if (jobs_get(id, &fi) != 0) {
+            *out_err = _unknown_job(id);
+            return 0;
+        }
+        if (!fi.sandboxed) {
+            *out_err = rpc_make_error(MCPD_ERR_NOTCAPABLE,
+                "exec.kill: force is only available for sandboxed jobs",
+                NULL);
+            return 0;
+        }
+        mask = SIGBREAKF_CTRL_F;
+        letter = "f";
+    }
     cJSON *sv = cJSON_GetObjectItemCaseSensitive(params, "signal");
-    if (cJSON_IsString(sv) && sv->valuestring) {
+    if (!force && cJSON_IsString(sv) && sv->valuestring) {
         switch (sv->valuestring[0] | 0x20) {
         case 'c': mask = SIGBREAKF_CTRL_C; letter = "c"; break;
         case 'd': mask = SIGBREAKF_CTRL_D; letter = "d"; break;
@@ -413,6 +435,7 @@ int exec_kill(cJSON *params, cJSON **out_result, cJSON **out_err) {
     _add_job_fields(r, &ji);
     cJSON_AddStringToObject(r, "signal", letter);
     cJSON_AddBoolToObject(r, "sent", sent);
+    cJSON_AddBoolToObject(r, "forced", force);
     cJSON_AddBoolToObject(r, "exited", ji.state == JOB_EXITED);
     *out_result = r;
     return 0;

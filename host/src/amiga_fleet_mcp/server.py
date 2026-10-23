@@ -336,6 +336,10 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         cwd: str | None = None,
         timeout_s: float = 30.0,
         priority: int | None = None,
+        sandbox: bool = False,
+        sandbox_extmem_mb: int | None = None,
+        sandbox_window_mb: int | None = None,
+        sandbox_deny_libs: list[str] | None = None,
     ) -> exec_tool.ExecResult:
         """Run an AmigaDOS command as a tracked job and wait up to
         `timeout_s` for it. `args` (if given) are appended with
@@ -351,11 +355,21 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         `priority` is the job's task priority (default `[defaults]
         exec_priority`, else -2). MCPd caps it one below its own
         workers so a busy job never stops MCPd answering. Programs the
-        command itself starts with `Run` begin at 0 regardless."""
+        command itself starts with `Run` begin at 0 regardless.
+
+        `sandbox=True`: `command` is a program path, run under SandboxVM
+        so that if it crashes the machine survives. The result gains a
+        `sandbox` block (the guest's stdout/stderr and trap kind), and
+        exec_kill(force=True) can stop it where SandboxVM supports that.
+        ExtMem machines only (X5000, A1222, X1000, QEMU AmigaOne);
+        `sandbox_*` override the target's [sandbox] defaults."""
         return await exec_tool.exec_cmd(
             fleet, fleet.resolve_target(target), command,
             args=args, cwd=cwd, timeout_s=timeout_s,
             priority=priority, return_running=True,
+            sandbox=sandbox, sandbox_extmem_mb=sandbox_extmem_mb,
+            sandbox_window_mb=sandbox_window_mb,
+            sandbox_deny_libs=sandbox_deny_libs,
         )
 
     @mcp.tool(name="exec_status", title="exec.status")
@@ -395,14 +409,21 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         job_id: int,
         signal: str = "c",
         wait_s: float = 2.0,
+        force: bool = False,
     ) -> exec_tool.KillResult:
         """Ask a running job to stop with a break signal (c = CTRL-C,
         or d / e / f) and wait up to `wait_s` for it to exit. A program
         that ignores breaks keeps running: the result says
-        `exited=False`. Nothing is removed by force."""
+        `exited=False`.
+
+        `force=True` only for a job started with sandbox=True: SandboxVM
+        aborts the guest and frees everything it opened. Refused when
+        the installed SandboxVM can't (sandbox_probe abort_supported).
+        An ordinary process is never removed by force -- on AmigaOS
+        that leaks its memory and locks."""
         return await exec_tool.exec_kill(
             fleet, fleet.resolve_target(target), job_id,
-            signal=signal, wait_s=wait_s)
+            signal=signal, wait_s=wait_s, force=force)
 
     @mcp.tool(name="exec_list", title="exec.list")
     @archived("exec.list", archive)
@@ -1757,10 +1778,11 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         is one of:
 
           cmd(target, command, args=None, cwd=None, timeout_s=30,
-              priority=None)
+              priority=None, sandbox=False, sandbox_extmem_mb=None,
+              sandbox_window_mb=None, sandbox_deny_libs=None)
           status(target, job_id)
           output(target, job_id, offset=0, max_bytes=65536)
-          kill(target, job_id, signal="c", wait_s=2)
+          kill(target, job_id, signal="c", wait_s=2, force=False)
           list(target)
 
         A cmd still running at its timeout returns state="running" and
