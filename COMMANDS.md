@@ -118,7 +118,21 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 
 | Method | Description |
 |---|---|
-| `exec.cmd` | Run an AmigaDOS command. Optional `args[]`, `cwd`, `timeout_ms`. |
+Every command runs as a **job** with an id (daemon 2.0+). A job
+outlives the call that started it, so a caller whose wait ran out can
+still follow it or stop it. Jobs run at priority **-2** by default and
+are capped one below MCPd's own connection workers, which run one
+below the TCP/IP stack's tasks. Programs a job starts itself with
+`Run` begin at priority 0 whatever the job's priority. MCPd keeps the
+last 32 job records.
+
+| Method | Description |
+|---|---|
+| `exec.cmd` | Run an AmigaDOS command and wait up to `timeout_ms` (enforced). Optional `args[]`, `cwd`, `priority`, `stream`. Returns `output`, `exit_code`, `result2` (IoErr), `job_id`, `state`, `pid`, `priority`, `elapsed_ms`, `truncated` (output over 1 MiB). Still running at the deadline: an error (-32001) whose `data.job_id` names the job, or with `return_running: true` a normal result with `state: "running"` and `exit_code: null`. Either way the command **keeps running**. |
+| `exec.status` | A job's state without its output: running or exited, `exit_code`, `result2`, `pid`, `priority`, `elapsed_ms`, free memory before and after, the break signals sent. `job_id`. |
+| `exec.output` | Read a job's output from `offset` (up to `max_bytes`, default 64 KiB), running or finished; `eof` once it has exited and all of it was read. AmigaDOS often flushes a command's output only when the command ends, so a running job may show less than it has printed. Output that `exec.cmd` already returned in full is deleted. |
+| `exec.kill` | Send a running job a break signal (`signal` c, d, e or f; default c) and wait up to `wait_ms` (default 2000) for it to exit. A program that ignores breaks keeps running and comes back `exited: false`; nothing is removed by force (`force` is reserved for sandboxed jobs). The process id is checked against the live process list first. |
+| `exec.list` | Every job record, newest first, plus `worker_priority`, `default_priority` and `max_priority`. |
 
 ### `wb.*` (Workbench / Intuition)
 
@@ -203,7 +217,8 @@ prints the live list.
 | `sys_debug_ring` | Host-side tool, not a daemon RPC method: runs `C:DumpDebugBuffer` through `exec.cmd` to read the kernel debug ring. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 | `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_sync` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
-| `exec_cmd` | `exec.cmd` |
+| `exec_cmd` | `exec.cmd`, except that a command still running at `timeout_s` returns `state: "running"` and its `job_id` instead of raising. **Do not re-run it**: follow it with `exec_status` / `exec_output`, or stop it with `exec_kill`. `priority` defaults to `[defaults] exec_priority`. |
+| `exec_status` / `exec_output` / `exec_kill` / `exec_list` | `exec.*` job follow-up (`exec_kill` takes `wait_s`). |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` introspection |
 | `wb_screenshot` | `wb.screenshot` — capture a screen to PNG on the target, download it, optionally inline it as base64. Works on real hardware, unlike the QMP-based `qemu_screenshot`. |
 | `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
@@ -364,6 +379,7 @@ to script an operation by method name rather than by tool name.
 | Dispatcher | Routes to |
 |---|---|
 | `fs` | `fs.*` |
+| `exec` | `exec.*` (`cmd` returns a running job at its timeout, like `exec_cmd`) |
 | `sys` | `sys.*` |
 | `wb` | `wb.*` |
 | `input` | `input.*` (disabled by default) |

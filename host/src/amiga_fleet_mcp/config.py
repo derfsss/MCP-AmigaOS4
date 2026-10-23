@@ -294,6 +294,10 @@ class DefaultsConfig(BaseModel):
     machine: str | None = None
     # installer_run / installer_install_x5000
     iso_filename: str | None = None
+    # exec_cmd / tests.* / sandbox.run_batch: task priority for the
+    # commands MCPd starts. None = the daemon's default (-2). The daemon
+    # caps it one below its own workers whatever is asked for.
+    exec_priority: int | None = Field(default=None, ge=-128, le=127)
 
 
 class Config(BaseModel):

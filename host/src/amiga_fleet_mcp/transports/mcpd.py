@@ -95,6 +95,7 @@ IDEMPOTENT_METHODS = frozenset({
     "wb.screenshot",
     "input.state",
     "debug.task_snapshot", "debug.symbol", "debug.stacktrace",
+    "exec.status", "exec.output", "exec.list",
 })
 
 #: The daemon drops a connection that has sent nothing for

@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 
 from ..errors import InvalidParams, NotCapable, TargetError
 from ..fleet import Fleet
+from . import exec as exec_tool
 from . import fs as fs_tool
 from . import sys as sys_tool
 
@@ -1323,6 +1324,7 @@ async def sandbox_run_batch(
     deny_libs: Sequence[str] | None = None,
     name: str | None = None,
     timeout_s: float = 600.0,
+    priority: int | None = None,
 ) -> BatchRunResult:
     """Run up to 16 guests sequentially inside a single SandboxVM
     invocation.
@@ -1404,6 +1406,7 @@ async def sandbox_run_batch(
         name=batch_name,
     )
 
+    pri = exec_tool.job_priority(fleet, priority)
     lock = _lock_for(target)
     t0 = time.monotonic()
     async with lock:
@@ -1413,6 +1416,7 @@ async def sandbox_run_batch(
             {
                 "command": cmd,
                 "timeout_ms": int(timeout_s * 1000),
+                **({"priority": pri} if pri is not None else {}),
             },
             timeout_s=max(timeout_s + 5.0, 30.0),
         )

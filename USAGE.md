@@ -178,7 +178,7 @@ breakdown.
 |---|---|
 | `proto.*` | Capability and version reporting. |
 | `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256), sync (flush cached writes to disk). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
-| `exec.cmd` | Run an AmigaDOS command with optional `args[]`, `cwd`, and timeout. |
+| `exec.*` | Run AmigaDOS commands as tracked jobs: `cmd` (optional `args[]`, `cwd`, timeout, priority), then `status`, `output`, `kill` and `list` for a job that is still running. |
 | `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, loaded modules, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
 | `wb.*` | Workbench: screens, windows, public-screen registry, frontmost screen and window, plus `wb.screenshot` — capture a screen to PNG on the target and bring it back to the host. Works on real hardware as well as QEMU. |
 | `debug.*` | Per-task and whole-system debug: task snapshot, symbolicated stack trace, address-to-symbol resolution, register and memory read / write, breakpoints, single step, continue, detach. |

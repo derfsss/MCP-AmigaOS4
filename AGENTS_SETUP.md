@@ -162,7 +162,7 @@ amiga-fleet-mcp --inspect
 
 # 2. List the live tool surface (no target reach required).
 amiga-fleet-mcp --list-tools | tail -1
-# Expected: "(138 tools registered)" on v1.4 (137 at v1.3).
+# Expected: "(143 tools registered)" on v2.0 (137 at v1.3).
 
 # 3. Probe every target's MCPd channel (target reach required).
 amiga-fleet-mcp --health-check

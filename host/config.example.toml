@@ -65,6 +65,10 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  stage / run / verify (e.g. "X5000", "A1222").
 #   iso_filename   Default ISO filename inside sources_dir; rarely
 #                  useful since the installer auto-detects it.
+#   exec_priority  Task priority for commands MCPd starts (exec_cmd,
+#                  tests.run_suite, sandbox.run_batch). Unset = the
+#                  daemon's default, -2. MCPd caps it one below its own
+#                  workers, so a busy job can't stop it answering.
 #
 # dest_volume   = "BootTest:"
 # sources_dir   = "<absolute path to your AmigaOS source tree>"

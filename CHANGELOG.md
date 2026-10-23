@@ -6,6 +6,18 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 
 ### Added
 
+- **Commands run as tracked jobs** (#25). Every `exec.cmd` gets a
+  `job_id`, a recorded process id, an exact exit code and `result2`
+  (IoErr). New daemon methods and tools: `exec.status`, `exec.output`
+  (read a job's output by offset, while it runs or after),
+  `exec.kill` (CTRL-C/D/E/F, checked against the live process list,
+  and it reports when a program ignored the break) and `exec.list`,
+  plus an `exec` dispatcher. 138 -> 143 tools; 60 -> 64 daemon
+  methods.
+- **Priority for started work** (#24). Jobs run at priority -2 by
+  default, can be set per call (`priority` on `exec_cmd`,
+  `tests.run_suite`, `sandbox.run_batch`) or in `[defaults]
+  exec_priority`, and are always capped below MCPd's workers.
 - **`fs.sync`** — flush a filesystem's cached writes to disk and wait
   for the handler to confirm (`ACTION_FLUSH`). AmigaOS commits writes
   on its own schedule, so a write can still be only in RAM when a
@@ -46,6 +58,20 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 
 ### Changed
 
+- **A command that outlives its timeout keeps running and says so.**
+  The `exec_cmd` tool now returns `state: "running"` with its
+  `job_id` instead of failing, so it is never mistaken for a command
+  that did not start. On the daemon, `timeout_ms` is now enforced
+  (the old synchronous path ignored it). Without the new
+  `return_running` flag, a timeout is an error carrying the
+  `job_id`, which keeps the "ran to completion" meaning for internal
+  callers and older hosts.
+- **MCPd's connection workers run one below the TCP/IP stack's
+  tasks**, worked out at startup (-1 with Roadshow at 0), instead of
+  a fixed -1. The ready beacon reports `worker_pri`.
+- Programs a job starts with `Run` begin at priority 0 whatever the
+  job's priority, and a running job's output often appears only when
+  it ends (AmigaDOS buffers it). Both are documented limits.
 - **qemu-runner is now a package dependency, not a local checkout.**
   `host/pyproject.toml` installs it from
   `git+https://github.com/derfsss/qemu-runner` at a pinned commit, and
