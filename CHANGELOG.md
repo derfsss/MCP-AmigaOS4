@@ -1,8 +1,8 @@
 # Change log
 
-## Unreleased — becomes v1.5
+## Unreleased — becomes v2.0
 
-v1.4 was never tagged or released; its changes ship in v1.5.
+v1.4 was never tagged or released; its changes ship in v2.0, the major version for the move to the mcp 2.x SDK.
 
 ### Added
 
