@@ -20,7 +20,7 @@ available, the host-side build alone is sufficient.
 
 | Requirement | Version | Purpose |
 |---|---|---|
-| `git` | 2.20 or later | Submodule fetch (`third-party/cjson`). |
+| `git` | 2.20 or later | Submodule fetch (`third-party/cjson`), and installing the host's `qemu-runner` dependency, which comes straight from GitHub at a pinned commit. |
 | Disk space | 1 GiB free | Build artefacts, Docker layers, virtualenvs. |
 
 ### MCPd (Amiga-side daemon)
@@ -61,7 +61,7 @@ make docker-build
 ```
 
 The Makefile mounts the project root into the container at `/src` and
-runs `make all` inside. Output: `mcpd/MCPd` (approximately 220 KiB
+runs `make all` inside. Output: `mcpd/MCPd` (approximately 300 KiB
 PowerPC ELF, including the cJSON parser and the full RPC method
 registry).
 
@@ -197,7 +197,7 @@ matching sdist.
 
 ```sh
 cd host
-uv run pytest tests/unit -q                  # unit tests (≈170)
+uv run pytest tests/unit -q                  # unit tests (≈350)
 uv run mypy src                              # type-check
 uv run ruff check src tests                  # lint
 ```

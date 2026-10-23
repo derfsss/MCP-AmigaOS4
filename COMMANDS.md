@@ -21,6 +21,9 @@ for diagnostics.
 | `--list-resources` | Print every registered MCP resource URI / template + title + mime type. Does not start MCP. |
 | `--discover` | UDP-broadcast probe for MCPd instances on the LAN. Prints discovered targets and exits. Does not start MCP. |
 | `--discover-timeout-ms N` | Window to wait for discovery responses. Default `1500`. |
+| `--init` | Interactive setup wizard: walks through every config block and writes a validated `config.toml` (to `--config` if given, else the platform default). Does not start MCP. |
+| `--non-interactive` | With `--init`: skip every prompt and write a server-only stub with no targets. |
+| `--force` | With `--init`: overwrite an existing config without asking. |
 
 ## MCPd command-line arguments
 
@@ -83,7 +86,6 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.read_pa` | DANGEROUS supervisor-mode read at any 36-bit physical address. No range checking; misuse can crash the connection-handling task (the daemon listener stays up by design). |
 | `sys.tlb_dump` | Dump all 64 TLB1 entries from a P5020 / P1022 target via `tlbre` / MAS registers. |
 | `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1). Documented commands `t` / `v` / `f` / `s` plus build-info `b`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
-| `sys.debug_ring` | Read the kernel debug ring via `c:DumpDebugBuffer`. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 
 ### `fs.*`
 
@@ -197,7 +199,8 @@ prints the live list.
 | Tool | Wraps |
 |---|---|
 | `proto_capabilities` | `proto.capabilities` |
-| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_debug_ring` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
+| `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
+| `sys_debug_ring` | Host-side tool, not a daemon RPC method: runs `C:DumpDebugBuffer` through `exec.cmd` to read the kernel debug ring. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 | `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_sync` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
 | `fs_upload` / `fs_download` | Host-side whole-file wrappers around `fs.write_chunk` / `fs.read`. Auto-chunk, auto-base64, auto-zlib, optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd` |
@@ -392,13 +395,18 @@ Live, read-only data exposed under the `amiga://` URI scheme.
 
 ## Helper scripts
 
-Located in `scripts/`. Run with `python scripts/<name>.py`.
+Located in `scripts/`. Run with `python scripts/<name>.py`, using the
+Python from `host/.venv`: most scripts import `amiga_fleet_mcp`, and
+some import `qmp_client` / `serial_client` from the `qemu-runner`
+package, which is installed only as a host dependency.
 
 ### Install / lifecycle
 
 | Script | Description |
 |---|---|
 | `install_mcpd_autostart.py [endpoint] [binary]` | Drop MCPd at `SYS:System/MCPd/`, upload the watchdog, patch `S:Network-Startup`. Idempotent. |
+| `x5000_bootstrap_mcpd.py --host <ip>` | One-time bootstrap: upload `mcpd/MCPd` to `RAM:MCPd` on the target and launch it through a SerialShell already running there. |
+| `x5000_kill_mcpd.py --host <ip>` | Stop a running MCPd through SerialShell (`Break N C`) so a new build can be bootstrapped. |
 
 ### Validation
 
@@ -406,7 +414,7 @@ Located in `scripts/`. Run with `python scripts/<name>.py`.
 |---|---|
 | `validate.py --endpoint host:port [--rounds 1,2,3,4,5]` | Parametric runner for the validation suites against any endpoint. |
 | `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Comprehensive capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, stress, and the host MCP protocol layer. |
-| `validate_input.py --target <name> [--shared-dir DIR] [--no-restart-cycles]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. Kills/relaunches QEMU for the restarts; use `--no-restart-cycles` on real hardware. |
+| `validate_input.py --target <name> [--shared-dir DIR] [--restart-mode qemu\|cold\|manual] [--keep-running]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. By default kills/relaunches QEMU for the restarts; on real hardware use `--restart-mode cold` (`sys.cold_reboot`, with an MCU power-cycle fallback) or `manual`. |
 | `validate_durability.py --endpoint host:port [--skip-long]` | Out-of-the-box durability sweep: raw-socket frame fuzzing, JSON-RPC envelope abuse, error-code coverage, connection lifecycle, long-running stability, filesystem corner cases, exec.cmd corners, subscription state transitions, concurrency, numeric boundaries, cross-method workflows, MCP resources, fleet host tools, CLI flags. |
 | `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, hardcoded for the canonical test endpoint. |
 | `qemu_install_test.py` | End-to-end: launch QEMU, bootstrap, install, kill+relaunch, verify auto-start, run all rounds. |

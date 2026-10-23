@@ -33,7 +33,8 @@ amiga-fleet-mcp --version    # → "amiga-fleet-mcp <version>"
 ```
 
 If `pip install -e .` fails, capture the full error and stop.
-Common causes: no internet, corporate proxy, missing C toolchain
+Common causes: no internet, corporate proxy, `git` not on PATH
+(the `qemu-runner` dependency is fetched from GitHub with it), missing C toolchain
 for `pyserial` (rare on Windows; install Build Tools for Visual
 Studio if so).
 
@@ -55,7 +56,7 @@ amiga-fleet-mcp --init --non-interactive --force
 ```
 
 Writes a server-only stub with no targets. Confirm with
-`amiga-fleet-mcp --inspect` (will print "targets: []").
+`amiga-fleet-mcp --inspect` (exits 0 and prints no target lines).
 
 ### Path C — generate config directly (no interaction)
 
@@ -67,8 +68,7 @@ to the platform default path, validate with `--inspect`.
 
 | Question                   | Detection command                                                       | If absent |
 |---|---|---|
-| QEMU host running?         | `Test-Path "$env:USERPROFILE/Projects/qemu-runner"`                     | Skip QEMU targets entirely. |
-| AmigaQemuTests checkout?   | `Test-Path "$env:USERPROFILE/Projects/AmigaQemuTests"`                  | Omit `paths.amiga_qemu_tests`; `tests.*` returns `InvalidParams`. |
+| AmigaQemuTests checkout?   | `Test-Path "$env:USERPROFILE/Projects/Testing/AmigaQemuTests"`          | Omit `paths.amiga_qemu_tests`; `tests.*` returns `InvalidParams`. |
 | `qemu-system-ppc` on PATH? | `(Get-Command qemu-system-ppc -ErrorAction SilentlyContinue).Path`      | Omit `paths.qemu_binary`; `qemu.start` returns `InvalidParams`. |
 | FTDI cable wired?          | Windows: `Get-PnpDevice -FriendlyName "*FTDI*" -Status OK`; *nix: `ls /dev/ttyUSB*` | Omit `[targets.*.channels.mcu]`; `power.*` returns `NotCapable` per target. |
 
@@ -76,8 +76,8 @@ to the platform default path, validate with `--inspect`.
 
 ```
 Is the user driving any QEMU guests?
-├── No  → omit [paths.qemu_runner], [paths.qemu_binary]; no qemu-* targets.
-└── Yes → set both. For each guest: ask machine (pegasos2 / amigaone
+├── No  → omit [paths.qemu_binary]; no qemu-* targets.
+└── Yes → set it. For each guest: ask machine (pegasos2 / amigaone
           / sam460ex), qemu_config path, hostfwd ports.
 
 Is the user driving any real AmigaOS hardware?
@@ -106,7 +106,6 @@ mcp_transport = "stdio"
 default_target = "qemu-pegasos2"
 
 [paths]
-qemu_runner = "<absolute path>"
 qemu_binary = "<absolute path to qemu-system-ppc>"
 
 [targets.qemu-pegasos2]
@@ -162,8 +161,8 @@ amiga-fleet-mcp --inspect
 # Expected: prints each target with its type and mcpd endpoint.
 
 # 2. List the live tool surface (no target reach required).
-amiga-fleet-mcp --list-tools | wc -l
-# Expected: 138 tools on v1.4 (137 at v1.3).
+amiga-fleet-mcp --list-tools | tail -1
+# Expected: "(138 tools registered)" on v1.4 (137 at v1.3).
 
 # 3. Probe every target's MCPd channel (target reach required).
 amiga-fleet-mcp --health-check
@@ -190,11 +189,10 @@ wiring.
 
 | Error message fragment                            | Root cause                                                              |
 |---|---|
-| `paths.qemu_runner not set in config`             | `qemu.*` or QMP transport invoked but `[paths] qemu_runner` is missing. Either set it or stop using those tools. |
 | `paths.qemu_binary not set in config`             | `qemu.start` invoked but no `[paths] qemu_binary`. Set it. |
 | `paths.amiga_qemu_tests not set in config`        | `tests.*` invoked but no `[paths] amiga_qemu_tests`. Set it. |
 | `target.qemu_config is required for qemu.start`   | Target's `qemu_config` path missing from `[targets.<name>]`. Set it. |
-| `NotCapable: channel mcu`                         | `power.*` invoked but `[targets.<name>.channels.mcu]` not configured. Wire the FTDI cable, set the block. |
+| `no enabled MCU serial channel`                   | `power.*` invoked but `[targets.<name>.channels.mcu]` not configured. Wire the FTDI cable, set the block. |
 | `NotCapable: input injection is not enabled`      | `input.*` invoked without both gates open. Host side: `[targets.<name>.input] enabled = true`. Daemon side (the real control): run `MCPd-Enable-Input` on the target and restart MCPd. Do not open either without the user asking. |
 | `FileNotFoundError: config not found`             | `--config` points at a path that doesn't exist, or no config at the platform default. Run `--init`. |
 | `bad config: ...`                                 | TOML doesn't validate against the schema. Re-run `--init`; the wizard pre-validates. |

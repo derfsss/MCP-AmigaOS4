@@ -133,9 +133,13 @@ already-running target via `fs.*` / `exec.*` / `sys.*` / `wb.*` /
 
 | `[paths]` key      | Required by                                                                                                                        | What to point it at |
 |---|---|---|
-| `qemu_runner`      | `qemu.*` lifecycle tools (`start` / `stop` / `reset` / `screenshot` / `savevm` / `loadvm` / `list_snapshots` / `delete_snapshot`) and the QMP transport. | An absolute path to a checkout of `derfsss/qemu-runner`. |
 | `amiga_qemu_tests` | `tests.*` orchestration (`tests.list_suites`, `tests.run_suite`, `tests.run_standard_dos_tests`, `tests.parse_output`).             | An absolute path to a checkout of `derfsss/AmigaQemuTests`. |
 | `qemu_binary`      | `qemu.start` only.                                                                                                                  | An absolute path to `qemu-system-ppc` (`qemu-system-ppc.exe` on Windows). |
+
+The `qemu.*` lifecycle tools and the QMP transport need no path entry.
+They use [`derfsss/qemu-runner`](https://github.com/derfsss/qemu-runner),
+installed from GitHub as a package dependency at a pinned commit (see
+`host/pyproject.toml`). An old `qemu_runner = ...` line is ignored.
 
 When a tool needs one of these and it's missing, the call returns
 an `InvalidParams` error naming the missing key, e.g.
@@ -173,7 +177,7 @@ breakdown.
 | Namespace | Description |
 |---|---|
 | `proto.*` | Capability and version reporting. |
-| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
+| `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256), sync (flush cached writes to disk). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
 | `exec.cmd` | Run an AmigaDOS command with optional `args[]`, `cwd`, and timeout. |
 | `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, loaded modules, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
 | `wb.*` | Workbench: screens, windows, public-screen registry, frontmost screen and window, plus `wb.screenshot` — capture a screen to PNG on the target and bring it back to the host. Works on real hardware as well as QEMU. |
@@ -643,7 +647,10 @@ python scripts/concurrent_x5000_qemu.py \
     --peg2-config /path/to/qemu/pegasos2/config.json
 ```
 
-Each script accepts `--help` for the full flag list. `--endpoint`
+Run the scripts with the Python from `host/.venv`: most import
+`amiga_fleet_mcp`, and some import `qmp_client` / `serial_client` from
+the `qemu-runner` package, which is installed only as a host
+dependency. Each script accepts `--help` for the full flag list. `--endpoint`
 also reads `$MCPD_ENDPOINT`; `--x5000` reads `$X5000_HOST`; the
 QEMU binary is auto-detected on PATH but can be pinned via
 `--qemu-binary` or `$QEMU_BINARY`.
