@@ -148,8 +148,12 @@ def _projects_root() -> Path:
 
 
 def _suggest(name: str) -> str | None:
-    p = _detect_existing_path(_projects_root() / name)
-    return str(p) if p else None
+    # Shared test harnesses live under Projects/Testing/.
+    for base in (_projects_root(), _projects_root() / "Testing"):
+        p = _detect_existing_path(base / name)
+        if p:
+            return str(p)
+    return None
 
 
 # ---------- minimal default config --------------------------------
@@ -193,15 +197,9 @@ def _wizard_server(prompt: Prompt, cfg: dict[str, Any]) -> None:
 
 def _wizard_paths(prompt: Prompt, cfg: dict[str, Any]) -> None:
     print("\n[paths] — optional helper paths. Leave any blank to skip.")
-    print("  qemu_runner       → required by qemu.* + QMP transport")
     print("  amiga_qemu_tests  → required by tests.*")
     print("  qemu_binary       → required by qemu.start")
     p = cfg["paths"]
-    qr = _ask_optional(
-        prompt, f"qemu_runner path (default: {_suggest('qemu-runner') or 'none'})"
-    ) or _suggest("qemu-runner")
-    if qr:
-        p["qemu_runner"] = qr
     aqt = _ask_optional(
         prompt,
         f"amiga_qemu_tests path (default: {_suggest('AmigaQemuTests') or 'none'})"

@@ -5,33 +5,25 @@ instance and we need to re-deploy a new build.
 
 Configuration:
   --host <ip>            X5000 IP (default $X5000_HOST or required)
-  $QEMU_RUNNER_DIR       qemu-runner checkout
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import re
 import socket
 import sys
 import time
 
-from _paths import find_qemu_runner
+from serial_client import SerialClient  # from the qemu-runner package
 
-QEMU_RUNNER = find_qemu_runner()
 SS_PORT = 4321
 MCPD_PORT = 4322
 
 
 def _serial_client(host: str):
-    spec = importlib.util.spec_from_file_location(
-        "_serial", QEMU_RUNNER / "serial_client.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.SerialClient(host=host, port=SS_PORT)
+    return SerialClient(host=host, port=SS_PORT)
 
 
 def main() -> int:

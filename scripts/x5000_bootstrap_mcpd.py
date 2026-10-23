@@ -8,23 +8,20 @@ Idempotent: if a stale MCPd from a previous run is still bound on
 
 Configuration:
   --host <ip>            X5000 IP (default $X5000_HOST or required)
-  $QEMU_RUNNER_DIR       qemu-runner checkout (auto-detects if a
-                         sibling checkout exists, see scripts/_paths.py)
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import socket
 import sys
 import time
 from pathlib import Path
 
-from _paths import find_qemu_runner, repo_root
+from _paths import repo_root
+from serial_client import SerialClient  # from the qemu-runner package
 
-QEMU_RUNNER = find_qemu_runner()
 MCPD_BINARY = repo_root() / "mcpd" / "MCPd"
 
 SS_PORT = 4321
@@ -33,12 +30,7 @@ GUEST_DST = "RAM:MCPd"
 
 
 def _serial_client(host: str):
-    spec = importlib.util.spec_from_file_location(
-        "_serial", QEMU_RUNNER / "serial_client.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.SerialClient(host=host, port=SS_PORT)
+    return SerialClient(host=host, port=SS_PORT)
 
 
 def _port_reachable(host: str, port: int, timeout_s: float = 2.0) -> bool:

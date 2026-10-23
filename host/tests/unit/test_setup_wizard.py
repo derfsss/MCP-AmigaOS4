@@ -97,8 +97,7 @@ def test_interactive_qemu_target_round_trip(tmp_path):
         "info",        # log_level
         "stdio",       # mcp_transport
         # paths block
-        "",            # qemu_runner skip → fallback to suggestion (None on tmp)
-        "",            # amiga_qemu_tests skip
+        "",            # amiga_qemu_tests skip → fallback to suggestion (None on tmp)
         "",            # qemu_binary skip
         # targets loop
         "y",           # add a target?
@@ -141,7 +140,7 @@ def test_interactive_remote_with_mcu_cable(tmp_path):
         # server
         "", "", "info", "stdio",
         # paths
-        "", "", "",
+        "", "",
         # target
         "y",
         "x5000",
@@ -173,7 +172,7 @@ def test_wizard_declining_input_emits_no_input_block(tmp_path):
     the disabled state, so the wizard must never write one by accident."""
     answers = [
         "", "", "info", "stdio",
-        "", "", "",
+        "", "",
         "y", "x5000", "remote", "X5000", "real-hw",
         "192.168.1.50", "4322",
         "n",                  # FTDI cable? -> no
@@ -192,7 +191,7 @@ def test_wizard_declining_input_emits_no_input_block(tmp_path):
 def test_wizard_accepting_input_emits_enabled_block(tmp_path):
     answers = [
         "", "", "info", "stdio",
-        "", "", "",
+        "", "",
         "y", "x5000", "remote", "X5000", "real-hw",
         "192.168.1.50", "4322",
         "n",                  # FTDI cable? -> no
@@ -220,7 +219,7 @@ def test_interactive_aborts_when_user_says_no_to_overwrite(tmp_path):
 def test_interactive_zero_targets_still_validates(tmp_path):
     answers = [
         "", "", "info", "stdio",   # server
-        "", "", "",                # paths
+        "", "",                # paths
         "n",                       # add a target? -> no
         "n",                       # configure defaults
     ]

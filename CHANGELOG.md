@@ -30,6 +30,42 @@
   `exit_code_known`** — the same distinction for per-guest exit codes,
   which are read from the same debug ring. `aggregate_exit_code` comes
   from SandboxVM itself and stays trustworthy either way.
+- **`scripts/build_release_lha.py`** — assembles the MCPd release
+  archive on an AmigaOS target (a QEMU guest will do), so the AmigaOS
+  protection bits are already correct in the file users download.
+  Protection bits belong to the file rather than the byte stream, and
+  no cross-platform container preserves them: a bare ELF moved onto an
+  Amiga over SMB, a USB stick, or a browser download arrives with the
+  executable bit protected and refuses to run. The script stages the
+  daemon, the install scripts and a README, sets the executable and
+  script bits, runs `LhA`, then extracts the archive again and checks
+  the flags came back before accepting it. `MCPd-1.3.lha` is attached
+  to the v1.3 release.
+
+### Changed
+
+- **qemu-runner is now a package dependency, not a local checkout.**
+  `host/pyproject.toml` installs it from
+  `git+https://github.com/derfsss/qemu-runner` at a pinned commit, and
+  the QMP transport and `scripts/` import `qmp_client` /
+  `serial_client` directly. `[paths] qemu_runner` and
+  `$QEMU_RUNNER_DIR` are gone; an old `qemu_runner = ...` line is
+  ignored. That commit also fixes a QMPClient bug: when an async event
+  and a reply arrived in one read, the reply was lost.
+- The setup wizard no longer asks for a qemu-runner path, and also
+  looks for `amiga_qemu_tests` under `~/Projects/Testing/`.
+- Documentation pass across the README and everything it links to,
+  checked against the live tool surface rather than against itself.
+  `z.library`, `keymap.library` and `graphics.library` are now listed
+  as target requirements; `input.*`, `sandbox.*` and `wb.screenshot`
+  have per-feature prerequisite entries; the README gained a quick
+  start; and `CONTRIBUTING.md` now says to branch from `develop`
+  rather than the protected release branch.
+- Two behaviours that are easy to misread are now written down: the
+  AmigaOS kernel debug buffer does not wrap (so `sys.debug_ring` can
+  be blind to everything logged after boot on a machine with a
+  verbose driver), and only `power.on` / `power.off` are safe to send
+  to the MCU while a board is powered off.
 
 ### Fixed
 
@@ -79,7 +115,6 @@
   enforced, and `max_text_len` defaults to 128 — the length that
   actually fits the event budget, where 512 was only ever typed in
   part.
-
 - **Two QEMU targets can now run at the same time, and both are
   discoverable.** Every QEMU target forwarded the UDP discovery port
   with the same host-side number, so starting a second guest failed on
@@ -95,35 +130,6 @@
   and with the name of the configured `target` they belong to.
   Daemons that answer but are not in the configuration are still
   listed, with `target: null`.
-
-### Added
-
-- **`scripts/build_release_lha.py`** — assembles the MCPd release
-  archive on an AmigaOS target (a QEMU guest will do), so the AmigaOS
-  protection bits are already correct in the file users download.
-  Protection bits belong to the file rather than the byte stream, and
-  no cross-platform container preserves them: a bare ELF moved onto an
-  Amiga over SMB, a USB stick, or a browser download arrives with the
-  executable bit protected and refuses to run. The script stages the
-  daemon, the install scripts and a README, sets the executable and
-  script bits, runs `LhA`, then extracts the archive again and checks
-  the flags came back before accepting it. `MCPd-1.3.lha` is attached
-  to the v1.3 release.
-
-### Changed
-
-- Documentation pass across the README and everything it links to,
-  checked against the live tool surface rather than against itself.
-  `z.library`, `keymap.library` and `graphics.library` are now listed
-  as target requirements; `input.*`, `sandbox.*` and `wb.screenshot`
-  have per-feature prerequisite entries; the README gained a quick
-  start; and `CONTRIBUTING.md` now says to branch from `develop`
-  rather than the protected release branch.
-- Two behaviours that are easy to misread are now written down: the
-  AmigaOS kernel debug buffer does not wrap (so `sys.debug_ring` can
-  be blind to everything logged after boot on a machine with a
-  verbose driver), and only `power.on` / `power.off` are safe to send
-  to the MCU while a board is powered off.
 
 ## 1.3 — Sandboxed iteration, screen capture, and input injection
 

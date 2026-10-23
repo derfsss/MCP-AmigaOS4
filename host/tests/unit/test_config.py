@@ -14,6 +14,8 @@ log_level = "debug"
 archive_root = "C:/tmp/archive"
 
 [paths]
+# Legacy key from before qemu-runner became a package dependency:
+# configs that still carry it must keep loading (extra="ignore").
 qemu_runner = "C:/qemu-runner"
 
 [targets.qemu-pegasos2]

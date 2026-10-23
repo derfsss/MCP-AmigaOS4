@@ -265,7 +265,8 @@ class TargetConfig(BaseModel):
 class PathsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    qemu_runner: Path | None = None
+    # No `qemu_runner`: qemu-runner is now a package dependency. An old
+    # `qemu_runner = ...` line in config.toml is ignored (extra="ignore").
     amiga_qemu_tests: Path | None = None
     combi_installer: Path | None = None
     spe_tests: Path | None = None

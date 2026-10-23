@@ -6,9 +6,12 @@ or an environment variable.
 
 Conventions:
 
-  $QEMU_RUNNER_DIR     — where to find https://github.com/derfsss/qemu-runner
   $MCPD_ENDPOINT       — default <host>:<port> for `validate.py`-style scripts
   $AMIGA_INSTALL_SUPPORT_DIR — where to find diskimage-bootstrap/, SerialShell
+
+Scripts that import `serial_client` / `qmp_client` need the qemu-runner
+package, which is a host dependency: run them with host/.venv's Python
+(or `uv run`), not a bare system `python`.
 """
 
 from __future__ import annotations
@@ -21,40 +24,6 @@ from pathlib import Path
 def repo_root() -> Path:
     """Return the MCP-AmigaOS4 checkout root."""
     return Path(__file__).resolve().parent.parent
-
-
-def find_qemu_runner() -> Path:
-    """Resolve qemu-runner.
-
-    Lookup order:
-      1. $QEMU_RUNNER_DIR if set and a directory.
-      2. ../qemu-runner relative to this repo (sibling checkout).
-      3. ~/Projects/qemu-runner.
-      4. ~/qemu-runner.
-
-    Returns the first hit, or raises FileNotFoundError with a
-    clear message naming the env var to set.
-    """
-    env = os.environ.get("QEMU_RUNNER_DIR")
-    if env:
-        p = Path(env).expanduser().resolve()
-        if p.is_dir():
-            return p
-    candidates = [
-        repo_root().parent / "qemu-runner",
-        Path.home() / "Projects" / "qemu-runner",
-        Path.home() / "qemu-runner",
-    ]
-    for c in candidates:
-        if c.is_dir():
-            return c
-    raise FileNotFoundError(
-        "qemu-runner checkout not found. Clone "
-        "https://github.com/derfsss/qemu-runner and either:\n"
-        "  - place it next to MCP-AmigaOS4/ as a sibling checkout, or\n"
-        "  - set $QEMU_RUNNER_DIR to its path.\n"
-        f"Searched: {[str(c) for c in candidates]}"
-    )
 
 
 def default_mcpd_endpoint(fallback: str = "127.0.0.1:4322") -> str:
