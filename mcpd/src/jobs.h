@@ -43,9 +43,8 @@ struct job_info {
     char     command[96];       /* truncated copy, for listings */
 };
 
-/* Set up the table and port, and work out the worker priority (one
- * below the TCP/IP stack's tasks). Call once from main() after
- * bsdsocket is open. Returns 0 on success. */
+/* Set up the table and port. Call once from main() before the first
+ * worker is spawned. Returns 0 on success. */
 int jobs_init(void);
 
 /* Ask running jobs to stop (CTRL-C) and wait for them; the port and

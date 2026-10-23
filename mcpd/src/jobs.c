@@ -26,13 +26,15 @@
 #define JOB_DEFAULT_PRI (-2)
 #define JOB_MIN_PRI     (-20)
 
-/* Tasks of the TCP/IP stack (Roadshow) the workers depend on. Workers
- * run one below the highest of these so they never outrank the stack
- * that carries their replies. */
-static const char *const k_stack_tasks[] = {
-    "TCP/IP Control", "TCP/IP Superserver", "TCP/IP Configuration", NULL
-};
-#define WORKER_PRI_FALLBACK (-1)
+/* Connection workers run at +1, above every ordinary program (0) and
+ * level with the listener. They first ran one below the TCP/IP stack's
+ * tasks, which is -1 with Roadshow at 0: on the X5000 a program
+ * spinning at 100% at priority 0 (a dEQP error path) then starved them
+ * for its whole run, with a worker visible in the Ready queue of the
+ * crash dump. A worker is idle on WaitSelect between requests and
+ * waits on the stack while sending, so +1 costs the system nothing
+ * until a request is actually being served. */
+#define WORKER_PRI (1)
 
 struct job {
     /* First, so a message pulled off the port is the job itself. */
@@ -59,7 +61,7 @@ static struct job              *g_jobs;   /* JOB_SLOTS, MEMF_SHARED */
 static struct SignalSemaphore  *g_sem;
 static struct MsgPort          *g_port;
 static uint32_t                 g_next_id = 1;
-static int                      g_worker_pri = WORKER_PRI_FALLBACK;
+static int                      g_worker_pri = WORKER_PRI;
 
 int jobs_worker_priority(void)  { return g_worker_pri; }
 int jobs_max_priority(void)     { return g_worker_pri - 1; }
@@ -149,19 +151,7 @@ int jobs_init(void) {
         return -1;
     }
 
-    int found = 0, best = -128;
-    IExec->Forbid();
-    for (int i = 0; k_stack_tasks[i]; i++) {
-        struct Task *t = IExec->FindTask(k_stack_tasks[i]);
-        if (t) {
-            found = 1;
-            if (t->tc_Node.ln_Pri > best) best = t->tc_Node.ln_Pri;
-        }
-    }
-    IExec->Permit();
-    g_worker_pri = found ? best - 1 : WORKER_PRI_FALLBACK;
-    if (g_worker_pri > 10) g_worker_pri = 10;
-    if (g_worker_pri < -10) g_worker_pri = -10;
+    g_worker_pri = WORKER_PRI;
     return 0;
 }
 

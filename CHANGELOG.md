@@ -96,9 +96,12 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   `return_running` flag, a timeout is an error carrying the
   `job_id`, which keeps the "ran to completion" meaning for internal
   callers and older hosts.
-- **MCPd's connection workers run one below the TCP/IP stack's
-  tasks**, worked out at startup (-1 with Roadshow at 0), instead of
-  a fixed -1. The ready beacon reports `worker_pri`.
+- **MCPd's connection workers run at +1**, above ordinary programs
+  and level with the listener, instead of -1. At -1, a program
+  spinning at 100% at priority 0 starved MCPd on the X5000 for its
+  whole run (a dEQP error path; the crash dump showed a worker stuck
+  in the Ready queue). Jobs default to -2 and are now capped at 0.
+  The ready beacon reports `worker_pri`.
 - Job shells run with requesters off (`pr_WindowPtr = -1`). An
   asynchronous shell does not inherit that from the daemon, so a
   command touching a missing volume opened "Please insert volume" on

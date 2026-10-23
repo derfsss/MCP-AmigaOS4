@@ -121,8 +121,8 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 Every command runs as a **job** with an id (daemon 2.0+). A job
 outlives the call that started it, so a caller whose wait ran out can
 still follow it or stop it. Jobs run at priority **-2** by default and
-are capped one below MCPd's own connection workers, which run one
-below the TCP/IP stack's tasks. Programs a job starts itself with
+are capped at 0, one below MCPd's own connection workers, which run
+at +1 so a busy program at the normal priority can't starve MCPd. Programs a job starts itself with
 `Run` begin at priority 0 whatever the job's priority. MCPd keeps the
 last 32 job records.
 

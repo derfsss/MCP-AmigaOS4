@@ -56,8 +56,7 @@ extern int input_is_enabled(void);
 /* Priority of the listener process itself. The accept+spawn loop burns
  * almost no CPU, so running it just above Workbench (0) keeps MCPd
  * responsive to new connections even while the machine is loaded.
- * The per-connection workers run one below the TCP/IP stack (see
- * spawn_client_worker and jobs_init). */
+ * The per-connection workers run at the same +1 (jobs.c WORKER_PRI). */
 #define MCPD_LISTENER_PRI 1
 
 #ifndef MCPD_DATE
@@ -428,11 +427,11 @@ static int spawn_client_worker(int client_fd) {
         NP_Entry,        (Tag)client_task_entry,
         NP_Name,         (Tag)"MCPd Client",
         NP_StackSize,    65536,
-        /* One below the TCP/IP stack's tasks (worked out in
-         * jobs_init; -1 when they can't be found): a worker never
-         * outranks the stack that carries its replies. Commands it
-         * starts run lower still, as jobs. Idle clients sleep on
-         * socket Wait() so this only matters during active RPC work. */
+        /* +1, above ordinary programs, so one spinning at priority 0
+         * can't starve MCPd (seen on the X5000). Commands a worker
+         * starts run lower, as jobs (-2 by default, 0 at most). Idle
+         * clients sleep on socket Wait() so this only matters during
+         * active RPC work. */
         NP_Priority,     jobs_worker_priority(),
         NP_UserData,     (Tag)(intptr_t)id,
         NP_Output,       (Tag)ZERO,
@@ -523,8 +522,7 @@ int main(int argc, char **argv) {
      * an explicit InvalidParams. */
     (void)open_z_lib();
 
-    /* Job table for exec.*, and the worker priority, which depends on
-     * the TCP/IP stack's tasks being up -- bsdsocket opened above. */
+    /* Job table for exec.*. */
     if (jobs_init() != 0) {
         IDOS->Printf("MCPd: job table unavailable - exec.* will fail\n");
     }
