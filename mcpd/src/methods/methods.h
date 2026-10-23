@@ -75,6 +75,10 @@ MCPD_HANDLER(fs_sync);
 MCPD_HANDLER(fs_hash);
 
 MCPD_HANDLER(exec_cmd);
+MCPD_HANDLER(exec_status);
+MCPD_HANDLER(exec_output);
+MCPD_HANDLER(exec_kill);
+MCPD_HANDLER(exec_list);
 
 MCPD_HANDLER(wb_screens);
 MCPD_HANDLER(wb_windows);

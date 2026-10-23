@@ -50,6 +50,7 @@ SRCS = \
   $(SRC_DIR)/sha256.c \
   $(SRC_DIR)/discovery.c \
   $(SRC_DIR)/crashhook.c \
+  $(SRC_DIR)/jobs.c \
   $(METHODS_DIR)/helpers.c \
   $(METHODS_DIR)/amigautil.c \
   $(METHODS_DIR)/proto.c \
