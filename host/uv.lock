@@ -32,7 +32,7 @@ requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=2.3,<3" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pyserial", specifier = ">=3.5" },
-    { name = "qemu-runner", git = "https://github.com/derfsss/qemu-runner?rev=d08db70ce3f07c28ddee29d135ef0ba6576f093a" },
+    { name = "qemu-runner", git = "https://github.com/derfsss/qemu-runner?rev=bb727303c992038351c84b6f3b56a09d9a104ce2" },
 ]
 
 [package.metadata.requires-dev]
@@ -789,7 +789,7 @@ wheels = [
 [[package]]
 name = "qemu-runner"
 version = "1.3.1"
-source = { git = "https://github.com/derfsss/qemu-runner?rev=d08db70ce3f07c28ddee29d135ef0ba6576f093a#d08db70ce3f07c28ddee29d135ef0ba6576f093a" }
+source = { git = "https://github.com/derfsss/qemu-runner?rev=bb727303c992038351c84b6f3b56a09d9a104ce2#bb727303c992038351c84b6f3b56a09d9a104ce2" }
 
 [[package]]
 name = "referencing"
@@ -1036,8 +1036,8 @@ name = "uvicorn"
 version = "0.46.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/93/041fca8274050e40e6791f267d82e0e2e27dd165627bd640d3e0e378d877/uvicorn-0.46.0.tar.gz", hash = "sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d", size = 88758, upload-time = "2026-04-23T07:16:00.151Z" }
 wheels = [

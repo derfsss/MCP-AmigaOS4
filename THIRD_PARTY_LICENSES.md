@@ -64,7 +64,7 @@ no source is vendored into this repository.
 | `mcp[cli]` | 2.3 (capped below 3.0) | MIT | Model Context Protocol SDK. The server targets the 2.x `MCPServer` API. |
 | `pydantic` | 2.12 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
 | `pyserial` | 3.5 | BSD-3-Clause | Serial-console bootstrap and the `serial.*` / `power.*` host channels. |
-| [`qemu-runner`](https://github.com/derfsss/qemu-runner) | pinned commit `d08db70` (1.3.1), installed from GitHub | no licence file declared upstream (same author as this project) | QMP client for the `qemu.*` tools, and the serial client some `scripts/` use. |
+| [`qemu-runner`](https://github.com/derfsss/qemu-runner) | v1.3.1 (pinned commit `bb72730`), installed from GitHub | MIT ([LICENSE](https://github.com/derfsss/qemu-runner/blob/main/LICENSE)) | QMP client for the `qemu.*` tools, and the serial client some `scripts/` use. |
 
 ## AmigaOS shared libraries linked at run time
 

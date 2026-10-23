@@ -128,7 +128,8 @@ v1.4 was never tagged or released; its changes are included here.
   and `idle_timeout_s`. Old files that still have them load as before.
 - **qemu-runner is now a package dependency, not a local checkout.**
   `host/pyproject.toml` installs it from
-  `git+https://github.com/derfsss/qemu-runner` at a pinned commit, and
+  `git+https://github.com/derfsss/qemu-runner` at qemu-runner v1.3.1
+  (MIT; pinned by commit), and
   the QMP transport and `scripts/` import `qmp_client` /
   `serial_client` directly. `[paths] qemu_runner` and
   `$QEMU_RUNNER_DIR` are gone; an old `qemu_runner = ...` line is

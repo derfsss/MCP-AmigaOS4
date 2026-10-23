@@ -34,7 +34,7 @@ dependencies = [
   # QMPClient (and SerialClient for the scripts/) come from qemu-runner,
   # installed straight from GitHub at a pinned commit, so no local
   # clone or paths.qemu_runner is needed. Bump the commit deliberately.
-  "qemu-runner @ git+https://github.com/derfsss/qemu-runner@d08db70ce3f07c28ddee29d135ef0ba6576f093a",
+  "qemu-runner @ git+https://github.com/derfsss/qemu-runner@bb727303c992038351c84b6f3b56a09d9a104ce2",
 ]
 
 [dependency-groups]
