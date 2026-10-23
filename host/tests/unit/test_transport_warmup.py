@@ -51,6 +51,9 @@ class _FakeStream:
         out, self._buf = self._buf[:n], self._buf[n:]
         return out
 
+    def at_eof(self) -> bool:
+        return False
+
     # writer half
     def write(self, data: bytes) -> None:
         self.sent.append(data)

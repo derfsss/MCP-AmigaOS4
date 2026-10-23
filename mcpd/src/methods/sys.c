@@ -255,7 +255,7 @@ extern int crashhook_registered(void);
 int sys_crashhook_status(cJSON *params, cJSON **out_result, cJSON **out_err) {
     (void)params; (void)out_err;
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "registered", crashhook_registered() ? cJSON_True : cJSON_False);
+    cJSON_AddBoolToObject(r, "registered", crashhook_registered() ? 1 : 0);
     cJSON_AddNumberToObject(r, "fire_count", (double)crashhook_fire_count());
     cJSON_AddNumberToObject(r, "exception_count", (double)crashhook_exception_count());
     *out_result = r;

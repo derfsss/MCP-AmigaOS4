@@ -71,6 +71,29 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 
 ### Fixed
 
+- **A command that outran its timeout was run a second time** (#22,
+  #23). The host transport handled `OSError` before `TimeoutError`, and
+  since Python 3.11 a timeout *is* an `OSError`. So a slow `exec.cmd`
+  looked like a dropped connection and was sent again. The second copy
+  typically failed with "unable to open redirection file" while the
+  first kept running, and two timeouts in a row surfaced as an empty
+  `MCPd I/O failed:`. Now:
+  - A timeout is reported as a timeout and never resent.
+  - After a request has gone out, only read-only methods are resent.
+  - Every transport error carries `data.may_have_run`.
+  - A connection the daemon has dropped, or that has been idle for
+    100 s, is replaced *before* sending, so the first call after an
+    idle spell still works without a resend.
+
+  The GDB transport had the same ordering bug, and would have repeated
+  a step or a memory write; it is fixed too.
+- **Several daemon booleans were always `true`.** `cJSON_False` is a
+  type flag (1), not a boolean, and it was passed where one was
+  expected. Affected: `exec.cmd` `truncated` / `streamed`, `fs.sync`
+  `flushed` (a failed flush reported success), `fs.delete` `recursive`
+  and `sys.crashhook_status` `registered`.
+- `mcpd/Makefile` now rebuilds when a header changes. Before, editing
+  `rpc.h` left a stale binary until `make clean`.
 - **The daemon announced a port it might not be listening on.**
   Discovery reported `tcp_port: 4322` literally, regardless of
   `--port`, sending clients to an endpoint that could refuse the

@@ -715,9 +715,8 @@ int fs_delete(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "path", path);
-    cJSON_AddBoolToObject(r, "ok", cJSON_True);
-    cJSON_AddBoolToObject(r, "recursive",
-        recursive ? cJSON_True : cJSON_False);
+    cJSON_AddBoolToObject(r, "ok", 1);
+    cJSON_AddBoolToObject(r, "recursive", recursive ? 1 : 0);
     *out_result = r;
     return 0;
 }
@@ -810,7 +809,7 @@ int fs_makedir(cJSON *params, cJSON **out_result, cJSON **out_err) {
     IDOS->UnLock(lock);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "path", path);
-    cJSON_AddBoolToObject(r, "ok", cJSON_True);
+    cJSON_AddBoolToObject(r, "ok", 1);
     *out_result = r;
     return 0;
 }
@@ -829,7 +828,7 @@ int fs_rename(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "src", src);
     cJSON_AddStringToObject(r, "dst", dst);
-    cJSON_AddBoolToObject(r, "ok", cJSON_True);
+    cJSON_AddBoolToObject(r, "ok", 1);
     *out_result = r;
     return 0;
 }
@@ -864,7 +863,7 @@ int fs_protect(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "path", path);
     cJSON_AddNumberToObject(r, "bits", (double)(unsigned int)(uint32_t)bits);
-    cJSON_AddBoolToObject(r, "ok", cJSON_True);
+    cJSON_AddBoolToObject(r, "ok", 1);
     *out_result = r;
     return 0;
 }
@@ -924,7 +923,7 @@ int fs_copy(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON_AddStringToObject(r, "src", src);
     cJSON_AddStringToObject(r, "dst", dst);
     cJSON_AddStringToObject(r, "output", out);
-    cJSON_AddBoolToObject(r, "ok", cJSON_True);
+    cJSON_AddBoolToObject(r, "ok", 1);
     free(out);
     *out_result = r;
     return 0;
@@ -975,8 +974,7 @@ int fs_sync(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "path", path);
-    cJSON_AddBoolToObject(r, "flushed", rc != DOSFALSE ? cJSON_True
-                                                       : cJSON_False);
+    cJSON_AddBoolToObject(r, "flushed", rc != DOSFALSE);
     *out_result = r;
     return 0;
 }

@@ -186,8 +186,8 @@ int exec_cmd(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "output", out);
     cJSON_AddNumberToObject(r, "exit_code", (double)rc);
-    cJSON_AddBoolToObject(r, "truncated", cJSON_False);
-    cJSON_AddBoolToObject(r, "streamed", stream ? cJSON_True : cJSON_False);
+    cJSON_AddBoolToObject(r, "truncated", 0);
+    cJSON_AddBoolToObject(r, "streamed", stream ? 1 : 0);
     free(out);
     *out_result = r;
     return 0;

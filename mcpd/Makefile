@@ -67,6 +67,11 @@ SRCS = \
   $(METHODS_DIR)/mcu.c \
   ../third-party/cjson/cJSON.c
 
+# Every source is compiled in one command, so the binary depends on the
+# headers directly. Without this, changing rpc.h (the version string,
+# the method table) left a stale MCPd until `make clean`.
+HDRS = $(wildcard $(SRC_DIR)/*.h $(METHODS_DIR)/*.h) ../third-party/cjson/cJSON.h
+
 # Docker Desktop image used for cross-compilation.
 DOCKER       ?= docker
 DOCKER_IMAGE ?= walkero/amigagccondocker:os4-gcc11
@@ -90,7 +95,7 @@ endif
 
 all: MCPd
 
-MCPd: $(SRCS)
+MCPd: $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) $(MCPD_CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
 
 # Run `make all` inside the cross-compile container. Invoke from the
