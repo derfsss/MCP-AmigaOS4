@@ -42,13 +42,14 @@ different places:
 | Free memory | Approximately 1 MiB working set for the daemon plus its peer tasks. |
 | Network connectivity | Wired Ethernet or working WiFi via Roadshow. |
 
-The daemon does not require any specific board model; CPU detection is
-fully automatic. Boards currently recognised: X5000 (P5020), X1000
+The daemon does not require any specific board model; board detection
+is automatic (from `expansion.library` `GetMachineInfo`, with a CPU
+guess as the fallback). Boards currently recognised: X5000 (P5020), X1000
 (PA6T-1682M), A1222 (P1022), Pegasos2, SAM440/460, AmigaOne XE/Micro.
 
 ## Per-feature prerequisites
 
-The core surface (`fs.*`, `exec.cmd`, `sys.version` / `tasks` /
+The core surface (`fs.*`, `exec.*`, `sys.version` / `tasks` /
 `libraries` / `devices` / `ports` / `lastalert` / `uptime` / `memory`
 / `volumes` / `assigns` / `hardware` / `applications` /
 `alert_decode`, `wb.*` introspection, `events.*`, `proto.*`) works on
@@ -161,9 +162,16 @@ found, and the path can be pinned per target:
 path = "Tools:sandboxvm"
 ```
 
-The machine must have ExtMem, so this works on X5000 and A1222 but
-not on Pegasos2; `sandbox.probe` reports
-`SANDBOXVM_INCOMPATIBLE_TARGET` rather than failing obscurely.
+The machine must have ExtMem, so this works on X5000, A1222, X1000
+and QEMU AmigaOne but not on Pegasos2; `sandbox.probe` reports
+`SANDBOXVM_INCOMPATIBLE_TARGET` rather than failing obscurely. The
+same applies to `exec_cmd sandbox=true`.
+
+Stopping a sandboxed job with `exec_kill force=True`, and
+`exec_cmd`'s `sandbox_time_limit_s`, need **SandboxVM 1.1** or later.
+`sandbox.probe` reports the installed `sandboxvm_version` and
+`abort_supported`; an older binary still runs guests, it just cannot
+be aborted from outside.
 
 ### `wb.*` and `app.notify`
 
@@ -483,7 +491,7 @@ release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) onto
 the Amiga and, from a Shell:
 
 ```
-LhA x MCPd-1.3.lha
+LhA x MCPd-<version>.lha
 Execute MCPd/MCPd-Install
 ```
 
@@ -568,8 +576,10 @@ broadcast never reaches them.
   bind still fails, reboot the target or temporarily run on an
   alternative port via `MCPd --port 4422`.
 - **`Method not found`** — the deployed binary is older than the
-  client's wire schema. Rebuild and redeploy with
-  `scripts/install_mcpd_autostart.py`.
+  client's wire schema. `exec.status`, `exec.output`, `exec.kill` and
+  `exec.list` need MCPd 2.0; `exec_cmd` itself still works against an
+  older daemon, without job fields. Install the latest release, or
+  rebuild and redeploy with `scripts/install_mcpd_autostart.py`.
 - **Watchdog log empty** — the daemon's stdout is redirected to NIL
   by the watchdog launch line; structured events go through MCP.
   Inspect `T:MCPd-Watchdog.log` on the target for restart history.
@@ -589,4 +599,13 @@ broadcast never reaches them.
   `raw_size` doesn't grow on an active machine, the buffer is full.
   Use a `serial.*` capture instead, which is not subject to it.
 - **`sandbox.probe` returns `SANDBOXVM_INCOMPATIBLE_TARGET`** — the
-  machine has no ExtMem. `sandbox.*` needs an X5000 or A1222.
+  machine has no ExtMem. `sandbox.*` needs an X5000, A1222, X1000 or
+  QEMU AmigaOne.
+- **`exec_kill force=True` returns `NotCapable`** — the SandboxVM on
+  the target cannot abort a guest. Install SandboxVM 1.1 or later
+  (`sandbox.deploy`). A plain break signal (`force=False`) still
+  works.
+- **A command "timed out" but is still running** — that is by design:
+  `exec_cmd` returns `state: "running"` and the `job_id`. Follow it
+  with `exec_status` / `exec_output` or stop it with `exec_kill`; do
+  not run it again.

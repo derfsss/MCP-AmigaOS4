@@ -1,8 +1,21 @@
 # Change log
 
-## Unreleased — becomes v2.0
+## Unreleased
 
-v1.4 was never tagged or released; its changes ship in v2.0, the major version for the move to the mcp 2.x SDK.
+## 2.0 — Tracked jobs, sandboxed commands, and the mcp 2 SDK
+
+2.0 is a major version because the host server moved to the mcp 2.x
+Python SDK; tools, parameters and config files carry over. On the
+daemon, every command now runs as a tracked job that can be followed,
+read and stopped after the call that started it has returned, and
+MCPd's connection workers now run above ordinary programs, so a busy
+program can no longer starve the daemon. A job can also run under SandboxVM, so a crashing
+program is contained and its trap reported. And a command that
+outlived its timeout is no longer run a second time: the host reports
+it as still running and never resends a request that may already have
+run. 143 tools in 15 namespaces, 8 resources, 64 daemon methods.
+
+v1.4 was never tagged or released; its changes are included here.
 
 ### Added
 
@@ -32,7 +45,10 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 - **Priority for started work** (#24). Jobs run at priority -2 by
   default, can be set per call (`priority` on `exec_cmd`,
   `tests.run_suite`, `sandbox.run_batch`) or in `[defaults]
-  exec_priority`, and are always capped below MCPd's workers.
+  exec_priority`, and are capped at 0, below MCPd's workers. Two
+  documented limits: programs a job starts with `Run` begin at
+  priority 0 whatever the job's priority, and a running job's output
+  often appears only when it ends (AmigaDOS buffers it).
 - **`fs.sync`** — flush a filesystem's cached writes to disk and wait
   for the handler to confirm (`ACTION_FLUSH`). AmigaOS commits writes
   on its own schedule, so a write can still be only in RAM when a
@@ -107,9 +123,6 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   command touching a missing volume opened "Please insert volume" on
   the target's screen and blocked until someone answered it (seen on
   the X5000; CTRL-C does not clear it). It now fails at once.
-- Programs a job starts with `Run` begin at priority 0 whatever the
-  job's priority, and a running job's output often appears only when
-  it ends (AmigaDOS buffers it). Both are documented limits.
 - Config keys nothing read are gone: `[paths] combi_installer`,
   `spe_tests` and `adtools_gdb`, and the target keys `master_image`
   and `idle_timeout_s`. Old files that still have them load as before.
@@ -175,7 +188,8 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   It flushed only when this process had written to the target, so
   uploads by a script, another session or a job on the guest were
   invisible to it, and it reported `settled: nothing-written`. It now
-  calls `fs.sync` whenever the guest's MCPd answers.
+  calls `fs.sync` first whenever the guest's MCPd answers, so the
+  guest's most recent writes are on disk before it is stopped.
 - **Board detection was wrong for Pegasos II and SAM440.** It guessed
   from the CPU: a G4 Pegasos II came out as `amigaone` and a 440EP
   SAM440 as `pegasos2`. `proto.capabilities` `board.detected` now comes
@@ -218,10 +232,8 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   client could connect and get a reply shaped by a half-built daemon.
   The socket is still bound early — a port clash should fail fast —
   but nothing is accepted until every subsystem a request could reach
-  is up. The host-side warmup stays, since it is what lets a 1.4 host
+  is up. The host-side warmup stays, since it is what lets a 2.0 host
   talk to the 1.2 and 1.3 daemons already deployed.
-- **`qemu.stop` could discard the guest's most recent writes** — it
-  now flushes first via `fs.sync`.
 - **`qemu.stop` / `qemu.status` reported a running guest as stopped**
   when this process had not started it, so restart sequences silently
   operated on a machine they believed they had replaced.

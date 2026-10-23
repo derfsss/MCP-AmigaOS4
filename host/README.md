@@ -1,7 +1,9 @@
 # amiga-fleet-mcp
 
-Host-side MCP server for the MCP-AmigaOS4 project. See the top-level
-documentation set:
+Host-side MCP server for the MCP-AmigaOS4 project, built on the
+mcp 2.x Python SDK (`mcp[cli]>=2.3,<3`). Needs Python 3.11+, and
+`git` on PATH at install time for the pinned `qemu-runner`
+dependency. See the top-level documentation set:
 
 - [USAGE.md](../USAGE.md) — overview, configuration, and per-tool
   parameter defaults (`[defaults]` block in `config.toml`).

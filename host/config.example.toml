@@ -67,12 +67,14 @@ mcp_transport = "stdio"                  # stdio | sse | streamable-http
 #                  useful since the installer auto-detects it.
 #   exec_priority  Task priority for commands MCPd starts (exec_cmd,
 #                  tests.run_suite, sandbox.run_batch). Unset = the
-#                  daemon's default, -2. MCPd caps it one below its own
-#                  workers, so a busy job can't stop it answering.
+#                  daemon's default, -2. MCPd caps it at 0, one below
+#                  its own workers (+1), so a busy job can't stop it
+#                  answering. A per-call `priority` overrides it.
 #
 # dest_volume   = "BootTest:"
 # sources_dir   = "<absolute path to your AmigaOS source tree>"
 # machine       = "X5000"
+# exec_priority = -2
 
 # ---- Example: QEMU Pegasos2 target -------------------------------
 
@@ -135,7 +137,11 @@ tags           = ["real-hw", "x5000"]
   # sandbox host that survives guest crashes). When omitted,
   # `sandbox.probe` searches SYS:Tools/sandboxvm,
   # SYS:Utilities/sandboxvm, then C:sandboxvm; default extmem
-  # window is 1024 MB and default vmem window is 256 MB.
+  # window is 1024 MB and default vmem window is 256 MB. These are
+  # also the defaults for `exec_cmd sandbox=true` (whose
+  # sandbox_extmem_mb / sandbox_window_mb / sandbox_deny_libs override
+  # them per call). Stopping a sandboxed job with exec_kill force=true
+  # needs SandboxVM 1.1 or later on the target.
   # [targets.x5000-real.sandbox]
   # path              = "Tools:sandboxvm"
   # default_extmem_mb = 1024

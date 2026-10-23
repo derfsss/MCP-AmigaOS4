@@ -21,7 +21,18 @@ operator. In particular:
   private LAN, behind a host-only QEMU SLIRP NAT, or over an
   explicit point-to-point link to the host workstation. Anyone who
   can reach the listener can read and write any file accessible to
-  the AmigaOS process and run arbitrary AmigaDOS commands.
+  the AmigaOS process and run arbitrary AmigaDOS commands. 2.0 adds
+  no new port or listener: the `exec.*` job methods (`exec.status`,
+  `exec.output`, `exec.kill`, `exec.list`) are new methods on the
+  same unauthenticated TCP listener, so anyone who can reach it can
+  also read the output of, or send break signals to, any job another
+  client started. The listener itself was hardened: it accepts
+  nothing until every subsystem is up, a frame header no longer
+  reserves memory before its body arrives, a connection silent for
+  120 s is dropped, and connection workers are capped at 16. The
+  discovery responder ignores probes under 64 bytes or without the
+  `v` field and rate-limits its replies (globally and per source), so
+  it can no longer serve as a UDP amplifier.
 - **Deployment context**: the daemon, by design, lets a remote
   client read `SYS:` (and any other mounted volume), overwrite
   files, run `exec.cmd` against the AmigaDOS shell, modify task
@@ -69,6 +80,20 @@ operator. In particular:
   require an explicit `confirm: true` parameter. This is a guardrail against accidental fire, **not**
   an authentication mechanism. A connected client can always pass
   `confirm: true`.
+- **Stopping jobs**: `exec.kill` only sends AmigaDOS break signals
+  (CTRL-C / D / E / F) to a job's own process, after checking that the
+  process is still alive; a program that ignores them keeps running.
+  It cannot remove an arbitrary task. `force: true` is accepted only
+  for jobs started under SandboxVM (`exec_cmd sandbox=true`), where it
+  asks SandboxVM 1.1+ to abort its guest. Jobs run below MCPd's own
+  priority (default -2, capped at 0) so a runaway job cannot starve
+  the daemon, which keeps the machine reachable for recovery. Job
+  shells run with requesters suppressed, so a command cannot leave a
+  modal "Please insert volume" requester blocking the target.
+- **Sandboxing is crash containment, not isolation**: SandboxVM
+  catches the trap that follows a bad access, at the API boundary; it
+  is not an MMU boundary, and a wild store from a sandboxed program
+  can still corrupt system memory. Do not use it for untrusted code.
 - **Per-connection fault isolation is not a security boundary**:
   `MCPd` spawns a fresh AmigaOS Process per accepted connection so
   one buggy client can't take down the daemon's main listener.
@@ -118,7 +143,7 @@ These are documented behaviours, not vulnerabilities:
   512 characters of text) and the daemon always releases any held
   modifier or mouse button before returning, including on the abort
   path — a truncated `input.drag` cannot leave the target with a
-  stuck mouse button.
+  stuck mouse button. The gate itself is unchanged in 2.0.
 
 ## Supported versions
 

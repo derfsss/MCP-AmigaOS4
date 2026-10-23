@@ -37,7 +37,11 @@ Compiled into MCPd, used at run time, or relied upon by the host:
   compressed uploads and for encoding PNGs in `wb.screenshot`.
 - **SandboxVM** ([`derfsss/SandboxVM`](https://github.com/derfsss/SandboxVM))
   — the in-process sandbox host the `sandbox.*` tools drive, which is
-  what lets a guest crash without taking the machine with it.
+  what lets a guest crash without taking the machine with it, and
+  since 2.0 what `exec_cmd sandbox=true` runs a command under.
+- **qemu-runner** ([`derfsss/qemu-runner`](https://github.com/derfsss/qemu-runner))
+  — the QMP and serial clients the host's `qemu.*` tools and several
+  helper scripts are built on, installed as a package dependency.
 - **Pydantic** — typed-data backbone of the host server.
 - **pyserial** — used by the host-side `serial.*` capture service
   for reading a target's debug UART.

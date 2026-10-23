@@ -196,6 +196,8 @@ wiring.
 | `NotCapable: input injection is not enabled`      | `input.*` invoked without both gates open. Host side: `[targets.<name>.input] enabled = true`. Daemon side (the real control): run `MCPd-Enable-Input` on the target and restart MCPd. Do not open either without the user asking. |
 | `FileNotFoundError: config not found`             | `--config` points at a path that doesn't exist, or no config at the platform default. Run `--init`. |
 | `bad config: ...`                                 | TOML doesn't validate against the schema. Re-run `--init`; the wizard pre-validates. |
+| `exec_cmd` result `state: "running"`              | Not an error: the command outlived `timeout_s` and is still running as job `job_id`. Never re-run it; follow it with `exec_status` / `exec_output`, or stop it with `exec_kill`. |
+| `exec.kill force=True needs a SandboxVM that aborts a guest` | The target's SandboxVM is older than 1.1. Ask the user before deploying a newer one; `force=False` still sends a break. |
 
 ## Things this spec deliberately doesn't do
 
