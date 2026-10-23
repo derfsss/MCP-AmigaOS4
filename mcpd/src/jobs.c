@@ -83,6 +83,10 @@ static void job_entry(int32 data, int32 unused) {
     (void)unused;
     struct job *j = (struct job *)data;
     struct Process *me = (struct Process *)IExec->FindTask(NULL);
+    /* No requesters from a job: nobody is at this screen to answer
+     * one, and it blocks the job until somebody does. SYS_WindowPtr
+     * below should already have done this; belt and braces. */
+    me->pr_WindowPtr = (APTR)-1;
     j->task = &me->pr_Task;
     j->pid = me->pr_ProcessID;
     j->started = 1;
@@ -281,6 +285,11 @@ int jobs_start(const char *cmd, int priority, int sandboxed,
         SYS_Output,              (Tag)out,
         SYS_Input,               (Tag)ZERO,
         NP_StackSize,            65536,
+        /* Without this the async shell does NOT inherit the worker's
+         * pr_WindowPtr=-1, and a job touching a missing volume ("List
+         * Work:") pops "Please insert volume" on Workbench (seen on
+         * the X5000, 2026-10-23). */
+        SYS_WindowPtr,           (Tag)-1,
         NP_Priority,             priority,
         NP_NotifyOnDeathMessage, (Tag)&j->dm,
         NP_EntryCode,            (Tag)job_entry,

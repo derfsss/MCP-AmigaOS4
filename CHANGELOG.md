@@ -96,6 +96,11 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 - **MCPd's connection workers run one below the TCP/IP stack's
   tasks**, worked out at startup (-1 with Roadshow at 0), instead of
   a fixed -1. The ready beacon reports `worker_pri`.
+- Job shells run with requesters off (`pr_WindowPtr = -1`). An
+  asynchronous shell does not inherit that from the daemon, so a
+  command touching a missing volume opened "Please insert volume" on
+  the target's screen and blocked until someone answered it (seen on
+  the X5000; CTRL-C does not clear it). It now fails at once.
 - Programs a job starts with `Run` begin at priority 0 whatever the
   job's priority, and a running job's output often appears only when
   it ends (AmigaDOS buffers it). Both are documented limits.
