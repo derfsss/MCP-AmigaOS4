@@ -61,8 +61,8 @@ no source is vendored into this repository.
 
 | Name | Min version | Licence (SPDX) | Used for |
 |---|---|---|---|
-| `mcp[cli]` | 1.0 (capped below 2.0) | MIT | Model Context Protocol SDK. The server targets the 1.x FastMCP API. |
-| `pydantic` | 2.0 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
+| `mcp[cli]` | 2.3 (capped below 3.0) | MIT | Model Context Protocol SDK. The server targets the 2.x `MCPServer` API. |
+| `pydantic` | 2.12 (capped below 3.0) | MIT | Configuration and tool-parameter schemas. |
 | `pyserial` | 3.5 | BSD-3-Clause | Serial-console bootstrap and the `serial.*` / `power.*` host channels. |
 
 ## AmigaOS shared libraries linked at run time

@@ -58,6 +58,21 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 
 ### Changed
 
+- **The host server is ported to the mcp 2.x SDK** (#17), which is why
+  this release is 2.0. It runs on `mcp.server.mcpserver.MCPServer`
+  (mcp >= 2.3, < 3; pydantic >= 2.12) and reports its version to
+  clients. Two behaviours had to be kept on purpose:
+  - **Tool errors still reach the model as readable text.** mcp 2
+    hides the message of any exception that isn't its `ToolError`,
+    so every error now derives from `ToolError`. The text also
+    carries the error's data, for example
+    `Object not found [data: {"path": ...}]` or a still-running
+    `job_id`.
+  - `[server] mcp_http_addr` is now actually used for the `sse` and
+    `streamable-http` transports (1.x never passed it on).
+
+  Checked with the mcp 2 client over stdio against the real server
+  and a QEMU guest.
 - **A command that outlives its timeout keeps running and says so.**
   The `exec_cmd` tool now returns `state: "running"` with its
   `job_id` instead of failing, so it is never mistaken for a command

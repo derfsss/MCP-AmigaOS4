@@ -1,6 +1,6 @@
 """MCP server entry + tool registration.
 
-Wires the JSON-RPC method surface into FastMCP. Tool names are
+Wires the JSON-RPC method surface into the MCP server (MCPServer). Tool names are
 flattened (`fs_list`, etc.) for the MCP layer; the dotted JSON-RPC
 names (`fs.list`, `fs.stat`, ...) live in the proto.capabilities
 advertisement.
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from . import __version__
 from .archive import Archive
@@ -49,14 +49,14 @@ def build_server(
     archive: Archive,
     *,
     name: str = SERVER_NAME,
-) -> FastMCP:
-    """Construct a FastMCP instance with phase-1 tools registered."""
-    mcp = FastMCP(name)
+) -> MCPServer:
+    """Construct the MCP server with every tool and resource registered."""
+    mcp = MCPServer(name, version=__version__)
     register_tools(mcp, fleet, archive)
     return mcp
 
 
-def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
+def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     def _default(value: str | None, attr: str, param_name: str) -> str:
         """If `value` is set (not None / not empty), return it. Else
         fall back to fleet.config.defaults.<attr>. Raise InvalidParams
@@ -78,7 +78,7 @@ def register_tools(mcp: FastMCP, fleet: Fleet, archive: Archive) -> None:
     async def proto_capabilities() -> sys_tool.CapabilitiesResult:
         """Advertise the methods the host MCP server has wired.
 
-        Method list is auto-derived from the live FastMCP tool registry
+        Method list is auto-derived from the live MCPServer tool registry
         - whatever is currently registered with @mcp.tool(...,
         title="...") gets advertised. No hand-maintained list to drift
         out of date.
@@ -2821,11 +2821,18 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     server = build_server(fleet, archive)
-    server.run(transport=config.server.mcp_transport)
+    transport = config.server.mcp_transport
+    if transport == "stdio":
+        server.run(transport="stdio")
+    else:
+        # mcp 2 takes the bind address on run(); under 1.x
+        # [server] mcp_http_addr was never passed on at all.
+        host, _, port = config.server.mcp_http_addr.rpartition(":")
+        server.run(transport=transport, host=host, port=int(port))
     return 0
 
 
-async def _print_tools(server: FastMCP) -> None:
+async def _print_tools(server: MCPServer) -> None:
     tools = await server.list_tools()
     width = max((len(t.name) for t in tools), default=0)
     for t in tools:
@@ -2837,23 +2844,23 @@ async def _print_tools(server: FastMCP) -> None:
     print(f"\n  ({len(tools)} tools registered)")
 
 
-async def _print_resources(server: FastMCP) -> None:
+async def _print_resources(server: MCPServer) -> None:
     concrete = await server.list_resources()
     templates = await server.list_resource_templates()
 
     if concrete:
         print("Concrete resources:")
         for r in concrete:
-            mime = getattr(r, "mimeType", None) or "?"
+            mime = getattr(r, "mime_type", None) or "?"
             title = getattr(r, "title", None) or r.name
             print(f"  {r.uri!s:42}  [{title}]  ({mime})")
 
     if templates:
         print("\nTemplates:")
         for t in templates:
-            mime = getattr(t, "mimeType", None) or "?"
+            mime = getattr(t, "mime_type", None) or "?"
             title = getattr(t, "title", None) or t.name
-            print(f"  {t.uriTemplate:42}  [{title}]  ({mime})")
+            print(f"  {t.uri_template:42}  [{title}]  ({mime})")
 
     n = len(concrete) + len(templates)
     print(f"\n  ({len(concrete)} concrete + {len(templates)} templates "

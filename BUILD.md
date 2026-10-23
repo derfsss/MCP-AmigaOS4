@@ -170,7 +170,7 @@ uv sync
 
 and commit the resulting `uv.lock` with whatever the upgrade required.
 The versions in `pyproject.toml` carry upper bounds on the majors
-(`mcp[cli]<2`, `pydantic<3`) because the server is written against
+(`mcp[cli]<3`, `pydantic<3`) because the server is written against
 those APIs; lifting a bound is a porting change, not a version bump.
 
 ### Using `pip`

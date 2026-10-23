@@ -24,14 +24,12 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  # Upper-bounded on purpose. This server is written against the 1.x
-  # FastMCP API (`from mcp.server.fastmcp import FastMCP`), which mcp
-  # 2.0 removed. Before uv.lock was committed, CI resolved fresh and an
-  # unbounded requirement silently upgraded to mcp 2.2.0, breaking the
-  # type-check; the lock now pins it, and this cap keeps a re-lock safe. Lift the cap in a change that actually ports
-  # to the 2.x API and is tested against it.
-  "mcp[cli]>=1.0.0,<2",
-  "pydantic>=2.0,<3",
+  # Upper-bounded on purpose: written against the mcp 2.x MCPServer API
+  # (ported from 1.x FastMCP in v2.0, #17). A new major will break it
+  # the same way 2.0 broke 1.x, so lift the cap only in a change that
+  # ports to it and is tested against it. mcp 2 needs pydantic >= 2.12.
+  "mcp[cli]>=2.3,<3",
+  "pydantic>=2.12,<3",
   "pyserial>=3.5",
   # QMPClient (and SerialClient for the scripts/) come from qemu-runner,
   # installed straight from GitHub at a pinned commit, so no local
