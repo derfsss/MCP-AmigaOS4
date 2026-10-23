@@ -73,6 +73,7 @@
 #include <devices/input.h>
 #include <devices/inputevent.h>
 #include <devices/timer.h>
+#include <libraries/keymap.h>
 #include <exec/io.h>
 #include <exec/ports.h>
 
@@ -326,16 +327,15 @@ static const named_key g_named_keys[] = {
     { "right",     0x4E, 0 },
     { "left",      0x4F, 0 },
 
-    /* function keys. F1..F10 are the classic Amiga block and are
-     * solid. F11/F12 are DELIBERATELY ABSENT: they are a PC-keyboard
-     * extension whose AOS4 rawkey codes were never verified on
-     * hardware for this table, and an unknown key name fails cleanly
-     * with "unknown key name" while a wrong code would silently press
-     * some other key. Add them only with a hardware check behind it. */
+    /* function keys. F1..F10 are the classic Amiga block. F11/F12 are
+     * the PC-keyboard extension; their codes come from the AOS4 SDK's
+     * own RAWKEY_F11 / RAWKEY_F12 (libraries/keymap.h, "Not on classic
+     * keyboards"), not from a guess. */
     { "f1",  0x50, 0 }, { "f2",  0x51, 0 }, { "f3",  0x52, 0 },
     { "f4",  0x53, 0 }, { "f5",  0x54, 0 }, { "f6",  0x55, 0 },
     { "f7",  0x56, 0 }, { "f8",  0x57, 0 }, { "f9",  0x58, 0 },
     { "f10", 0x59, 0 },
+    { "f11", RAWKEY_F11, 0 }, { "f12", RAWKEY_F12, 0 },
 
     /* numeric keypad */
     { "kp0", 0x0F, 0 }, { "kp1", 0x1D, 0 }, { "kp2", 0x1E, 0 },
@@ -1665,9 +1665,9 @@ drag_done:
  *
  * No confirm: scrolling commits nothing.
  *
- * Emits NewMouse wheel codes as IECLASS_RAWMOUSE events, which is what
- * MUI and ReAction actually listen for. See the NM_WHEEL_* guards at
- * the top -- those constants are not reliably in the SDK headers.
+ * style "native" (default) emits IECLASS_MOUSEWHEEL events; style
+ * "newmouse" emits the legacy NewMouse codes as IECLASS_RAWMOUSE (see
+ * the NM_WHEEL_* guards at the top -- not in the AOS4 SDK headers).
  */
 int input_scroll(cJSON *params, cJSON **out_result, cJSON **out_err) {
     INPUT_GATE();
@@ -1697,21 +1697,50 @@ int input_scroll(cJSON *params, cJSON **out_result, cJSON **out_err) {
     int delay;
     if (_get_delay(params, INPUT_DEF_MOVE_MS, &delay, out_err) != 0) return 0;
 
+    /* style "native" (default): IECLASS_MOUSEWHEEL (V51), the wheel
+     * event AOS4 itself defines; Intuition hands it to applications as
+     * IDCMP_EXTENDEDMOUSE with IntuiWheelData. style "newmouse": the
+     * older third-party NewMouse rawkey codes, for programs that only
+     * understand those. (In the AOS4 SDK 0x7A is not a wheel code at
+     * all: lowlevel.h has it as RAWKEY_PORT0_JOY_DOWN.) */
+    cJSON *js = cJSON_GetObjectItemCaseSensitive(params, "style");
+    const char *style = (cJSON_IsString(js) && js->valuestring)
+                        ? js->valuestring : "native";
+    int native;
+    if      (strcmp(style, "native") == 0)   native = 1;
+    else if (strcmp(style, "newmouse") == 0) native = 0;
+    else {
+        *out_err = rpc_make_error(MCPD_ERR_INVPARAMS,
+            "style must be \"native\" or \"newmouse\"", NULL);
+        return 0;
+    }
+    int16_t wx = 0, wy = 0;
+    if      (code == NM_WHEEL_DOWN)  wy = 1;
+    else if (code == NM_WHEEL_UP)    wy = -1;
+    else if (code == NM_WHEEL_RIGHT) wx = 1;
+    else                             wx = -1;
+
     inject_ctx c;
     if (_inject_open(&c, out_err) != 0) { _inject_close(&c); return 0; }
 
     for (int i = 0; i < (int)clicks; i++) {
         _ev_reset(&c);
-        c.ev->ie_Class     = IECLASS_RAWMOUSE;
-        c.ev->ie_Code      = code;
-        c.ev->ie_Qualifier = IEQUALIFIER_RELATIVEMOUSE;
-        c.ev->ie_X = 0; c.ev->ie_Y = 0;
+        if (native) {
+            c.ev->ie_Class = IECLASS_MOUSEWHEEL;
+            c.ev->ie_X = wx; c.ev->ie_Y = wy;
+        } else {
+            c.ev->ie_Class     = IECLASS_RAWMOUSE;
+            c.ev->ie_Code      = code;
+            c.ev->ie_Qualifier = IEQUALIFIER_RELATIVEMOUSE;
+            c.ev->ie_X = 0; c.ev->ie_Y = 0;
+        }
         if (_write_event(&c) != 0) break;
         if (i + 1 < (int)clicks) _delay_ms(&c, delay);
     }
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "op", "scroll");
+    cJSON_AddStringToObject(r, "style", native ? "native" : "newmouse");
     cJSON_AddStringToObject(r, "mode", "relative");
     cJSON_AddStringToObject(r, "direction", dir);
     cJSON_AddNumberToObject(r, "clicks", (double)clicks);

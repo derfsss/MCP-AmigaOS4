@@ -1062,13 +1062,17 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         clicks: int = 1,
         direction: str = "down",
         delay_ms: int | None = None,
+        style: str = "native",
         target: str | None = None,
     ) -> input_tool.MouseResult:
         """Mouse wheel. Requires input injection enabled on both host
-        config and daemon. No confirm: scrolling commits nothing."""
+        config and daemon. No confirm: scrolling commits nothing.
+        `style` "native" (AOS4's IECLASS_MOUSEWHEEL, delivered to apps as
+        IDCMP_EXTENDEDMOUSE) or "newmouse" (legacy NewMouse rawkeys)."""
         return await input_tool.input_scroll(
             fleet, fleet.resolve_target(target),
             clicks=clicks, direction=direction, delay_ms=delay_ms,
+            style=style,
         )
 
     # ---------- phase 5c (partial): GDB-stub debug --------------------

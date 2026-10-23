@@ -165,14 +165,14 @@ last 32 job records.
 | `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
 | `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). Returns the pointer position actually achieved, as `mouse_move` and `drag` do. |
 | `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
-| `input.scroll` | — | Mouse wheel via NewMouse codes. `clicks` (1–32), `direction`. |
+| `input.scroll` | — | Mouse wheel. `clicks` (1–32), `direction`, `style`: `native` (default, AmigaOS 4's own `IECLASS_MOUSEWHEEL`, which applications receive as `IDCMP_EXTENDEDMOUSE` wheel data) or `newmouse` (the legacy NewMouse rawkey codes; on the X5000 an ordinary Intuition window receives nothing from these). |
 
 Per-call caps enforced by the daemon: 256 events, 20 s wall clock,
 512 characters of text, 64 drag steps, `delay_ms` 0–1000. A call that
 hits a cap stops cleanly and returns `truncated: true`.
 
 Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
-`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f10`; `esc`
+`lalt` `ralt` `amiga` `lamiga` `ramiga` `capslock`; `f1`–`f12` (F11/F12 are the AOS4 SDK's `RAWKEY_F11` 0x4B / `RAWKEY_F12` 0x6F, checked on the X5000); `esc`
 `return` `tab` `backspace` `del` `help` `space` `up` `down` `left`
 `right`; `kp0`–`kp9` `kpdot` `kpenter` `kpminus` `kpplus` `kpmul`
 `kpdiv`. A single printable character (`"q"`) also works.

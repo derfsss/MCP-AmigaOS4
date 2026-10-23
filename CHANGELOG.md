@@ -138,6 +138,18 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 
 ### Fixed
 
+- **`input.scroll` now sends AmigaOS 4's own wheel event** (#18).
+  It used to send NewMouse rawkey codes (0x7A-0x7D), which the AOS4
+  SDK doesn't define as wheel codes at all (`lowlevel.h` has 0x7A as
+  `RAWKEY_PORT0_JOY_DOWN`). On the X5000 an ordinary Intuition window
+  received nothing from them. The default is now
+  `IECLASS_MOUSEWHEEL`, which the window received as
+  `IDCMP_EXTENDEDMOUSE` wheel data (y +1 per click down, -1 up).
+  `style: "newmouse"` keeps the old codes for programs that read
+  them.
+- **`input.key` knows F11 and F12** (#18): 0x4B and 0x6F, taken from
+  the SDK's `RAWKEY_F11` / `RAWKEY_F12` and seen arriving as those
+  rawkeys in a window on the X5000.
 - **A command that outran its timeout was run a second time** (#22,
   #23). The host transport handled `OSError` before `TimeoutError`, and
   since Python 3.11 a timeout *is* an `OSError`. So a slow `exec.cmd`
