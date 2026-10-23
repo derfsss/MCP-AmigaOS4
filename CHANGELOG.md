@@ -22,10 +22,13 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   registers). That report is matched to the job by its unique name,
   because `sandboxvm` exits 50 when its guest aborts rather than
   passing the guest's code on. `exec_kill force=true` is accepted
-  only for sandboxed jobs. It needs a SandboxVM that aborts a guest
-  on CTRL-F (derfsss/SandboxVM#1) and is refused until
-  `sandbox_probe` reports `abort_supported`; no release does yet.
-  `sandbox_probe` also reports `sandboxvm_version`.
+  only for sandboxed jobs and needs **SandboxVM 1.1**, which aborts a
+  guest on CTRL-F (derfsss/SandboxVM#1). `sandbox_probe` reads the
+  binary's `$VER` into `sandboxvm_version` and reports
+  `abort_supported`. With 1.1 the `sandbox` block also has
+  `end_reason` (exit / trap / aborted / timeout, from sandboxvm's exit
+  codes 50 / 51 / 52), and `sandbox_time_limit_s` passes SandboxVM's
+  new `-T` limit.
 - **Priority for started work** (#24). Jobs run at priority -2 by
   default, can be set per call (`priority` on `exec_cmd`,
   `tests.run_suite`, `sandbox.run_batch`) or in `[defaults]
@@ -166,6 +169,12 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   II"). The CPU guess is kept only as a fallback, and now says
   `amigaone-or-pegasos2` when it can't tell them apart.
 - `proto.capabilities` `limits.max_concurrent_clients` said 1; it is 16.
+- **A call to a starved daemon could hang past its own timeout.**
+  Connecting and closing had no time limit. Against an X5000 whose
+  MCPd was starved by a priority-0 program spinning at 100% (a dEQP
+  error path), a reconnect stalled the caller about 30 s beyond its
+  10 s request timeout. Both now have limits: 10 s to connect, 2 s to
+  close.
 - `mcpd/Makefile` now rebuilds when a header changes. Before, editing
   `rpc.h` left a stale binary until `make clean`.
 - **The daemon announced a port it might not be listening on.**
