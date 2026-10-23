@@ -9,9 +9,11 @@
  *   the poller saw "no change" when the game crashed with the same
  *   code at a new address.
  *
- *   IExec->AddDebugHook(NULL, &hook) registers a global debug hook
- *   that the kernel invokes on every task fault BEFORE the
- *   GrimReaper handler runs. The hook fires in a forbid-style
+ *   IDebug->AddDebugHook(task, &hook), registered on the daemon's
+ *   main task (crashhook_init; tasks it creates inherit the hook),
+ *   is invoked on a task fault BEFORE the GrimReaper handler runs.
+ *   Passing NULL for "every task" is accepted but registers nothing
+ *   on AOS 4.1 FE. The hook fires in a forbid-style
  *   context so we do the absolute minimum: snapshot a few register
  *   fields from the ExceptionContext that arrived in the hook
  *   message, set a flag, signal the main task, return. The main

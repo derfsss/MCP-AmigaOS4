@@ -39,6 +39,7 @@ static int _add_unique_feature(cJSON *features, const char *name) {
 
 /* In sys.c. AttnFlags + GetCPUInfo + xena/fsldma resource probes. */
 extern const char *sys_detect_board(void);
+extern const char *sys_machine_string(void);
 
 /* In input.c. The input-injection gate, resolved once at startup. */
 extern int input_is_enabled(void);
@@ -94,7 +95,10 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *limits = cJSON_AddObjectToObject(r, "limits");
     cJSON_AddNumberToObject(limits, "max_payload_bytes",
                             (double)MCPD_FRAME_MAX_PAYLOAD);
-    cJSON_AddNumberToObject(limits, "max_concurrent_clients", 1);
+    /* Each connection gets its own worker (main.c MCPD_MAX_CLIENTS)
+     * and handles one request at a time. */
+    cJSON_AddNumberToObject(limits, "max_concurrent_clients",
+                            MCPD_MAX_CLIENTS);
     cJSON_AddNumberToObject(limits, "max_in_flight_per_client", 1);
 
     /* Input-injection gate state.
@@ -109,9 +113,12 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *input = cJSON_AddObjectToObject(r, "input");
     cJSON_AddBoolToObject(input, "enabled", input_is_enabled() ? 1 : 0);
 
-    /* Best-effort board detection. */
+    /* Board, from expansion.library's machine type when it knows. */
     cJSON *board = cJSON_AddObjectToObject(r, "board");
     cJSON_AddStringToObject(board, "detected", sys_detect_board());
+    const char *mstr = sys_machine_string();
+    if (mstr) cJSON_AddStringToObject(board, "machine", mstr);
+    else cJSON_AddNullToObject(board, "machine");
     cJSON_AddNullToObject(board, "cpld_hwrev");
     cJSON_AddNullToObject(board, "cpld_build");
 

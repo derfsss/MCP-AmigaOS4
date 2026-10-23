@@ -51,13 +51,7 @@ extern int input_is_enabled(void);
  * parks a worker Process for the uptime of the daemon. */
 #define MCPD_RECV_TIMEOUT_S 120
 
-/* Ceiling on live connection workers. Each is a Process with a 64 KiB
- * stack that may be holding a multi-megabyte frame, so an unbounded
- * count is an unbounded commitment -- and connections that are never
- * closed (a killed client, a NAT that dropped the flow) accumulate.
- * Normal use is one or two per client; 16 leaves room for a fan-out
- * plus a long-poll and still bounds the damage. */
-#define MCPD_MAX_CLIENTS 16
+/* MCPD_MAX_CLIENTS (live connection workers) is in rpc.h. */
 
 /* Priority of the listener process itself. The accept+spawn loop burns
  * almost no CPU, so running it just above Workbench (0) keeps MCPd

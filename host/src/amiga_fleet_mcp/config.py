@@ -45,31 +45,6 @@ class ServerConfig(BaseModel):
     default_target: str | None = None
 
 
-class SerialShellChannel(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = True
-    endpoint: str = "127.0.0.1:4321"
-
-    @field_validator("endpoint")
-    @classmethod
-    def _check_endpoint(cls, v: str) -> str:
-        if ":" not in v:
-            raise ValueError("endpoint must be host:port")
-        host, _, port = v.rpartition(":")
-        if not host or not port.isdigit():
-            raise ValueError("endpoint must be host:port (numeric port)")
-        return v
-
-    @property
-    def host(self) -> str:
-        return self.endpoint.rpartition(":")[0]
-
-    @property
-    def port(self) -> int:
-        return int(self.endpoint.rpartition(":")[2])
-
-
 class QmpChannel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -248,8 +223,6 @@ class TargetConfig(BaseModel):
     display_name: str | None = None
     machine: str | None = None
     qemu_config: Path | None = None
-    master_image: Path | None = None
-    idle_timeout_s: int = 300
     headless: bool = False
     tags: list[str] = Field(default_factory=list)
     channels: TargetChannels = Field(default_factory=TargetChannels)
@@ -265,12 +238,11 @@ class TargetConfig(BaseModel):
 class PathsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    # No `qemu_runner`: qemu-runner is now a package dependency. An old
-    # `qemu_runner = ...` line in config.toml is ignored (extra="ignore").
+    # Keys no longer read are ignored rather than rejected
+    # (extra="ignore"), so an older config.toml still loads: qemu_runner
+    # (now a package dependency), combi_installer, spe_tests and
+    # adtools_gdb here, and master_image / idle_timeout_s on targets.
     amiga_qemu_tests: Path | None = None
-    combi_installer: Path | None = None
-    spe_tests: Path | None = None
-    adtools_gdb: Path | None = None
     qemu_binary: Path | None = None
     sandboxvm: Path | None = None
     """Host-side path to a built ``bin/sandboxvm``. Used by

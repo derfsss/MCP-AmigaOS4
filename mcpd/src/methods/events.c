@@ -7,17 +7,16 @@
  *   2. Server-push (`events.subscribe` + `events.unsubscribe`) -
  *      caller registers topics once; the daemon sends JSON-RPC
  *      notifications (no `id`) whenever a baseline value changes.
- *      Backed by a global subscription struct + baseline values; the
- *      connection-handler idle-poll path drains it.
+ *      Backed by the subscription state in each connection's conn_ctx
+ *      (struct ev_state); that connection's idle-poll path drains it.
  *
  * Topics:
  *   sys.lastalert    - ExecBase->LastAlert[0] changed (raw)
  *   sys.task         - task added or removed (by name)
  *   debug.exception  - new dead-end / crash alert (decoded)
  *
- * Single-client-at-a-time daemon (limits.max_concurrent_clients=1),
- * so global subscription state is fine - no per-connection slot
- * needed.
+ * Every connection has its own worker Process and its own ev_state,
+ * so one client's subscriptions never see another's.
  */
 
 #include "../rpc.h"

@@ -206,10 +206,20 @@ async def _settle_before_stop(
     The periodic flush has enough jitter that no fixed delay is a
     guarantee, which is exactly why the explicit flush exists.
 
-    A target that has only been read from does neither.
+    The flush is attempted whenever MCPd answers, not only after writes
+    made through this process: a deploy script, another session or a
+    job on the guest writes through connections this transport never
+    sees, and skipping the flush for those lost a deployed binary's
+    chance to survive the stop (seen 2026-10-23, `nothing-written`
+    after a script upload).
     """
     t = fleet.mcpd_if_connected(target)
-    if t is None or t.last_write_at is None:
+    if t is None:
+        mch = fleet.target_config(target).channels.mcpd
+        if mch is not None and mch.enabled and _can_connect(
+                mch.host, mch.port, 1.0):
+            t = fleet.mcpd(target)
+    if t is None:
         return "nothing-written"
 
     try:
@@ -219,6 +229,8 @@ async def _settle_before_stop(
         # Daemon predates fs.sync, or the volume would not flush.
         pass
 
+    if t.last_write_at is None:
+        return "nothing-written"
     if settle_s <= 0:
         return "skipped"
     remaining = settle_s - (time.monotonic() - t.last_write_at)

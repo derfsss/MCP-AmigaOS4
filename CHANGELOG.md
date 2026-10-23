@@ -72,6 +72,9 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
 - Programs a job starts with `Run` begin at priority 0 whatever the
   job's priority, and a running job's output often appears only when
   it ends (AmigaDOS buffers it). Both are documented limits.
+- Config keys nothing read are gone: `[paths] combi_installer`,
+  `spe_tests` and `adtools_gdb`, and the target keys `master_image`
+  and `idle_timeout_s`. Old files that still have them load as before.
 - **qemu-runner is now a package dependency, not a local checkout.**
   `host/pyproject.toml` installs it from
   `git+https://github.com/derfsss/qemu-runner` at a pinned commit, and
@@ -118,6 +121,19 @@ v1.4 was never tagged or released; its changes ship in v2.0, the major version f
   expected. Affected: `exec.cmd` `truncated` / `streamed`, `fs.sync`
   `flushed` (a failed flush reported success), `fs.delete` `recursive`
   and `sys.crashhook_status` `registered`.
+- **`qemu.stop` could kill a guest with writes still in its cache.**
+  It flushed only when this process had written to the target, so
+  uploads by a script, another session or a job on the guest were
+  invisible to it, and it reported `settled: nothing-written`. It now
+  calls `fs.sync` whenever the guest's MCPd answers.
+- **Board detection was wrong for Pegasos II and SAM440.** It guessed
+  from the CPU: a G4 Pegasos II came out as `amigaone` and a 440EP
+  SAM440 as `pegasos2`. `proto.capabilities` `board.detected` now comes
+  from expansion.library's `GetMachineInfo(GMIT_Machine)`, with the
+  OS's own name in the new `board.machine` field (for example "Pegasos
+  II"). The CPU guess is kept only as a fallback, and now says
+  `amigaone-or-pegasos2` when it can't tell them apart.
+- `proto.capabilities` `limits.max_concurrent_clients` said 1; it is 16.
 - `mcpd/Makefile` now rebuilds when a header changes. Before, editing
   `rpc.h` left a stale binary until `make clean`.
 - **The daemon announced a port it might not be listening on.**

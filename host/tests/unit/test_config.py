@@ -113,3 +113,17 @@ def test_input_unknown_keys_ignored(tmp_path: Path) -> None:
     t = load_config(p).targets["x5000"]
     assert t.input is not None
     assert t.input.enabled is True
+
+
+def test_keys_no_longer_read_still_load() -> None:
+    """Removed config keys are ignored, so an older config.toml keeps
+    working after an upgrade."""
+    cfg = Config.model_validate({
+        "paths": {"qemu_runner": "C:/x", "combi_installer": "C:/y",
+                  "spe_tests": "C:/z", "adtools_gdb": "C:/g"},
+        "targets": {"t": {"type": "remote", "master_image": "C:/m.img",
+                          "idle_timeout_s": 60,
+                          "channels": {"serialshell": {
+                              "endpoint": "127.0.0.1:4321"}}}},
+    })
+    assert cfg.targets["t"].type == "remote"
