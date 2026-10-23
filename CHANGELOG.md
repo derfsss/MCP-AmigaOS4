@@ -1,6 +1,8 @@
 # Change log
 
-## Unreleased — becomes v1.4
+## Unreleased — becomes v1.5
+
+## 1.4 — Hardening, deterministic flushes, and results you can trust
 
 ### Added
 
