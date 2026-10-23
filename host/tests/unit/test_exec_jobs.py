@@ -235,3 +235,28 @@ async def test_sandbox_trap_taken_from_ring_only_for_this_job(
     assert mine.trap_lines == [lines[0]]
     other = await sb.sandbox_job_result(fleet, "q", "crashy-ffffff", 50)
     assert other.trap_kind is None and other.trap_lines == []
+
+
+@pytest.mark.asyncio
+async def test_run_guest_reads_trap_kind_from_ring_on_50(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With SandboxVM 1.1 every trap exits 50, so run_guest has to find
+    the kind in the debug ring (the agent-reported gap)."""
+    from amiga_fleet_mcp.tools import sandbox as sb
+
+    async def _ok(_f: Any, _t: Any) -> Any:
+        return _probe()
+
+    async def _trap(_f: Any, _t: Any) -> Any:
+        return sb.LastTrapResult(target="q", found=True, trap_kind="ISI",
+                                 raw_lines=["[sandboxvm] guest_end name=crashy "
+                                            "reason=trap rc=-1024"])
+
+    monkeypatch.setattr(sb, "_ensure_available", _ok)
+    monkeypatch.setattr(sb, "sandbox_last_trap", _trap)
+    fleet, fake = _fleet()
+    fake.responses["exec.cmd"] = {"output": "", "exit_code": 50}
+    fake.responses["fs.read"] = {"content_b64": ""}
+    r = await sb.sandbox_run_guest(fleet, "q", guest="RAM:crashy", name="crashy")
+    assert r.exit_code == 50 and r.trap_kind == "ISI"

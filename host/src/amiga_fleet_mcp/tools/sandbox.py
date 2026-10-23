@@ -914,6 +914,14 @@ async def _run_sandboxvm(
         stdout = wrapper_output
 
     trap_kind, fingerprint = _classify_exit(exit_code, stderr)
+    if trap_kind is None and exit_code == SANDBOXVM_RC_TRAP:
+        # sandboxvm 1.1 exits 50 for every trap rather than -(vector),
+        # so the kind comes from its report in the debug ring -- taken
+        # only if the report names this run.
+        trap = await sandbox_last_trap(fleet, target)
+        if trap.found and any(run_name in ln for ln in trap.raw_lines):
+            trap_kind = trap.trap_kind
+            fingerprint = fingerprint or trap.fingerprint
 
     capture_paths: list[str] = []
     if stdout_present:
