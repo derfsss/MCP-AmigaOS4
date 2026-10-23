@@ -2,7 +2,7 @@
 
 ## Unreleased — becomes v1.5
 
-## 1.4 — Hardening, deterministic flushes, and results you can trust
+v1.4 was never tagged or released; its changes ship in v1.5.
 
 ### Added
 
