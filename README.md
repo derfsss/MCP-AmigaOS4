@@ -75,7 +75,17 @@ uv run amiga-fleet-mcp --init
 
 # 3. Check it can reach them
 uv run amiga-fleet-mcp --health-check
+
+# 4. Register it with your MCP client (Claude Code shown), which
+#    starts the server itself
+claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
 ```
+
+Don't run plain `amiga-fleet-mcp` in a terminal and wait for it. It
+is a stdio server: it prints the targets, then waits on stdin for a
+client and prints nothing more. That is normal, not a hang. Other
+clients are covered in
+[INSTALL.md](INSTALL.md#wiring-the-server-into-an-mcp-client).
 
 The Amiga side needs `MCPd` running on each target. Either deploy it
 from the host:
