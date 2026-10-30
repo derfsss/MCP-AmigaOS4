@@ -1,6 +1,10 @@
 # Change log
 
-## Unreleased
+## 2.1 — Setup help for first-time MCP users
+
+2.1 makes the server easier to set up for people new to MCP. Tools,
+parameters, config files and the daemon protocol are unchanged from
+2.0; MCPd is rebuilt only to carry the new version number.
 
 ### Changed
 
