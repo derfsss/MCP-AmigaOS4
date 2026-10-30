@@ -3,6 +3,7 @@ naming only tools that exist."""
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -43,6 +44,14 @@ async def test_prompt_renders_its_arguments(tmp_path: Path) -> None:
         assert "target `a1222`" in text
         assert "`RAM:T`" in text
 
+        r = await client.get_prompt(
+            "deploy_library",
+            {"local_path": "out/radeon.library", "remote_path": "LIBS:radeon.library"})
+        text = r.messages[0].content.text  # type: ignore[union-attr]
+        # The shared cold-boot block is numbered on from step 2 and the
+        # prompt's own last step follows it.
+        assert "\n3. `exec_list`" in text and "\n9. Confirm" in text
+
         r = await client.get_prompt("investigate_crash", {})
         text = r.messages[0].content.text  # type: ignore[union-attr]
         assert "fleet_list_targets" in text
@@ -53,10 +62,15 @@ async def test_prompt_renders_its_arguments(tmp_path: Path) -> None:
 async def test_prompts_name_only_registered_tools(tmp_path: Path) -> None:
     async with Client(_server(tmp_path), mode="legacy") as client:  # type: ignore[arg-type]
         tools = {t.name for t in (await client.list_tools()).tools}
+    # Parameters and result fields the prompts point at share the
+    # tool-name shape.
+    not_tools = {"raw_size", "job_id", "may_have_run", "chunk_size",
+                 "timeout_s"}
     for name, (fn, _title, _desc) in PROMPTS.items():
-        text = fn(local_path="x") if name == "deploy_and_run" else fn()
-        # Result fields the prompts point at share the tool-name shape.
-        named = set(re.findall(r"`([a-z]+_[a-z_]+)`", text)) - {"raw_size"}
+        required = [p.name for p in inspect.signature(fn).parameters.values()
+                    if p.default is inspect.Parameter.empty]
+        text = fn(**{p: "x" for p in required})
+        named = set(re.findall(r"`([a-z]+_[a-z_]+)`", text)) - not_tools
         assert named, name
         missing = named - tools
         assert not missing, f"{name} names unknown tools: {sorted(missing)}"
