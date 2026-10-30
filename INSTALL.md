@@ -327,12 +327,33 @@ amiga-fleet-mcp --version
 
 ### Wiring the server into an MCP client
 
-`amiga-fleet-mcp` is an MCP server. By default (`[server]
-mcp_transport = "stdio"`) your MCP client starts it as a child
-process and talks JSON-RPC over its stdin / stdout. You don't start
-it yourself. Run by hand in a terminal, it logs the archive dir and
-the target list, then waits on stdin and prints nothing more. That
-is normal, not a hang. Ctrl-C quits.
+**If you've never used an MCP server before:** `amiga-fleet-mcp` is
+not a program you run and type into. It is a helper for an AI app
+(the *MCP client*: Claude Code, Claude Desktop, an IDE). You set it
+up once by telling the app the command that starts it. From then
+on the app starts it in the background every time it opens and
+stops it when it closes, and you just talk to the AI.
+
+So setting up a client comes down to three things:
+
+1. Write the config that lists your Amigas, if you haven't yet
+   ([Writing the config](#writing-the-config), at the end of this
+   section), and check it with `--health-check`.
+2. Find **the launch command** for your install (next section).
+3. Give that command to your AI app, using the steps for that app
+   below.
+
+Then open the app and ask it something about your Amiga, such as
+*"What's the uptime of my A1222?"*. If it answers, everything works.
+
+> **Why it seems to hang when you run it yourself:** the server
+> talks to the app over its standard input and output (the "stdio"
+> transport, set by `[server] mcp_transport = "stdio"`). Run by hand
+> in a terminal, it prints the log folder and your target list, then
+> waits silently for the app's messages, which never come. That is
+> normal, not a hang. Press Ctrl-C to quit. To check your setup by
+> hand, use the commands in
+> [Running it by hand for checks](#running-it-by-hand-for-checks).
 
 #### The launch command
 
@@ -362,9 +383,22 @@ Notes:
 
 #### Claude Code
 
-```sh
-claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
-```
+[Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
+runs in a terminal. Install it first if you haven't. Then, in the
+same terminal (any folder):
+
+1. Register the server. Replace the path with where you cloned this
+   repository; on Windows it looks like
+   `C:/Users/you/MCP-AmigaOS4/host`:
+
+   ```sh
+   claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
+   ```
+
+2. Start Claude Code with `claude`, and type `/mcp`. `amiga-fleet`
+   should be listed as connected.
+3. Ask it something, e.g. *"List the volumes on my Amiga."* The
+   first time it uses a tool, Claude Code asks for your permission.
 
 Everything after `--` is the launch command from the table, so a
 pip install is `claude mcp add amiga-fleet -- /path/to/.venv/bin/amiga-fleet-mcp`.
@@ -393,6 +427,12 @@ and restart Claude Desktop:
   }
 }
 ```
+
+If the file already has other servers in `mcpServers`, add the
+`"amiga-fleet": {...}` entry next to them rather than replacing the
+file. After the restart, the tools appear under the tools / connectors
+button in the chat box. A wrongly typed command shows up as an error
+about the server under Settings -> Developer.
 
 For a pip install, set `command` to the venv's `amiga-fleet-mcp`
 and leave `args` empty. In JSON on Windows, write paths with forward
@@ -697,6 +737,22 @@ broadcast never reaches them.
 
 ## Troubleshooting
 
+- **`amiga-fleet-mcp` just sits there after printing the targets** —
+  it is waiting for an MCP client, which is normal. Register it with
+  your AI app instead of running it by hand
+  ([Wiring the server into an MCP client](#wiring-the-server-into-an-mcp-client)).
+  Use `--health-check` to test the connection to your Amigas by hand.
+- **The AI app says the server failed to start, or `amiga-fleet`
+  isn't listed** — the launch command is wrong. Run the exact same
+  command in a terminal: it should print the targets and wait. If it
+  errors instead, fix that first. Common causes: the path after
+  `--directory` doesn't point at the `host` folder; `uv` isn't on the
+  app's `PATH` (give the full path to `uv`); a pip install given as
+  bare `amiga-fleet-mcp` instead of the venv's full path.
+- **The server starts but tools fail with a connection error** — the
+  PC can't reach MCPd. Run `--health-check`. Check MCPd is running on
+  the Amiga, the IP address in `config.toml` is right, and nothing
+  blocks TCP port 4322.
 - **`bind(:4322) failed`** — usually a stale connection in TIME_WAIT.
   Recent MCPd builds set `SO_LINGER linger=0` to mitigate. If a fresh
   bind still fails, reboot the target or temporarily run on an

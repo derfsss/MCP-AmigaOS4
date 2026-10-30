@@ -12,6 +12,12 @@
   command for uv, pip and `python -m`, setup for Claude Code, Claude
   Desktop, VS Code and other clients, the HTTP transport, and the
   check-and-exit flags.
+- The README and INSTALL.md are written for readers who have never
+  used an MCP server: a "New to MCP?" section that explains client,
+  server and MCPd, a numbered quick start from `git clone` to the
+  first question, per-client steps that say what success looks like,
+  and troubleshooting for "it just hangs" and a server that won't
+  start.
 
 ## 2.0 — Tracked jobs, sandboxed commands, and the mcp 2 SDK
 
