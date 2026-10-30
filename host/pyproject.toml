@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amiga-fleet-mcp"
-version = "2.0"
+version = "2.1"
 description = "MCP server for driving AmigaOS 4 fleets (QEMU + real hardware)"
 readme = "README.md"
 requires-python = ">=3.11"
