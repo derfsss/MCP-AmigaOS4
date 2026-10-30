@@ -1,5 +1,23 @@
 # Change log
 
+## Unreleased
+
+### Added
+
+- **`--doctor`** checks a whole setup and prints a fix for each
+  problem: which config was loaded and from where, the target
+  settings, whether each target answers and runs the same MCPd
+  version as the host, and whether Claude Code or Claude Desktop has
+  the server registered, with the exact command to register it if
+  not. A stopped QEMU guest is a warning, not a failure.
+- **MCP prompts**, ready-made workflows any MCP client can offer:
+  `getting_started`, `investigate_crash`, `deploy_and_run` and
+  `check_fleet`. Each names the tools to call in order and the
+  AmigaOS traps to watch for at each step. `--list-prompts` prints
+  them.
+- **`.mcp.json`** in the repository root, so Claude Code started in a
+  uv checkout offers the server without a `claude mcp add` step.
+
 ## 2.1 — Setup help for first-time MCP users
 
 2.1 makes the server easier to set up for people new to MCP. Tools,

@@ -108,14 +108,17 @@ server will find it:
 uv run amiga-fleet-mcp --init
 ```
 
-**4. Check the PC can reach them:**
+**4. Check the setup:**
 
 ```sh
-uv run amiga-fleet-mcp --health-check
+uv run amiga-fleet-mcp --doctor
 ```
 
-Each target should show `UP`. If one shows `DOWN`, fix that first:
-is MCPd running on it, and is the IP address right?
+It checks the config, whether each Amiga answers, and whether the
+MCPd versions match, and prints a fix next to anything that's wrong.
+Fix any `FAIL` line first: usually MCPd isn't running on that
+Amiga, or the IP address is wrong. Run it again after step 5 to
+confirm your AI app has the server registered.
 
 **5. Tell your AI app about the server** (once). Use the full path
 to the `host` folder you cloned in step 1:
@@ -124,9 +127,14 @@ to the `host` folder you cloned in step 1:
 claude mcp add amiga-fleet -- uv --directory /full/path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
 ```
 
+(Shortcut: if you start `claude` in the root of this repository, its
+`.mcp.json` offers the server and you can skip this step there.)
+
 **6. Use it.** Start Claude Code (`claude`), type `/mcp` to see that
 `amiga-fleet` is connected, then just ask, for example: *"List the
-volumes on my Amiga."*
+volumes on my Amiga."* Or pick a ready-made workflow: type
+`/mcp__amiga-fleet__getting_started` for a guided tour, or
+`/mcp__amiga-fleet__investigate_crash` after a crash.
 
 > **"It just hangs"**: if you run plain `uv run amiga-fleet-mcp` in a
 > terminal, it prints the log folder and your targets, then sits

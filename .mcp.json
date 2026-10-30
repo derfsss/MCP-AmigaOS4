@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "amiga-fleet": {
+      "command": "uv",
+      "args": ["--directory", "host", "run", "amiga-fleet-mcp"]
+    }
+  }
+}

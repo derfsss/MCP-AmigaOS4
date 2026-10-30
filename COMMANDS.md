@@ -19,6 +19,8 @@ for diagnostics.
 | `--health-check` | Probe every configured target's MCPd channel; report advertised methods plus AmigaOS version per target. Exits non-zero if any target is unreachable. |
 | `--list-tools` | Print every registered MCP tool name + title + first line of its docstring. Does not start MCP. |
 | `--list-resources` | Print every registered MCP resource URI / template + title + mime type. Does not start MCP. |
+| `--list-prompts` | Print every registered MCP prompt with its arguments (`?` = optional) and description. Does not start MCP. |
+| `--doctor` | Check the whole setup, with a fix for each problem: which config was loaded and from where, the target settings, whether each target answers and runs the same MCPd major.minor as the host, and whether Claude Code or Claude Desktop has the server registered (printing the exact command to register it if not). A QEMU guest that isn't running is a warning, not a failure. Exits with the number of failed checks. Does not start MCP. |
 | `--discover` | UDP-broadcast probe for MCPd instances on the LAN. Prints discovered targets and exits. Does not start MCP. |
 | `--discover-timeout-ms N` | Window to wait for discovery responses. Default `1500`. |
 | `--init` | Interactive setup wizard: walks through every config block and writes a validated `config.toml` (to `--config` if given, else the platform default). Does not start MCP. |
@@ -411,6 +413,21 @@ Live, read-only data exposed under the `amiga://` URI scheme.
 | `amiga://runs/` | Index of archived tool-call runs. |
 | `amiga://runs/{run_id}` | Metadata for a specific run. |
 | `amiga://runs/{run_id}/calls` | NDJSON of tool calls in a run. |
+
+## MCP prompts
+
+Ready-made workflows. A client lists them and, when the user picks
+one, sends the filled-in text to the model, which then calls the
+tools it names. In Claude Code they appear as
+`/mcp__amiga-fleet__<name>` commands. Every argument is optional
+except `local_path`; with no `target`, the model asks which one.
+
+| Prompt | Arguments | What it does |
+|---|---|---|
+| `getting_started` | `target` | Read-only tour of one machine: version and board, volumes, memory, tasks, a screenshot, then three suggestions for what to ask next. |
+| `investigate_crash` | `target`, `what_happened` | Collects the evidence after a crash or hang (`sys_lastalert` + `sys_alert_decode`, `sys_debug_ring`, the crash hook's `debug.exception` report, tasks and jobs, a screenshot) and explains the likely cause. Changes nothing. |
+| `deploy_and_run` | `local_path`, `target`, `remote_dir` (default `RAM:`), `args` | Uploads a program, sets its `e` bit if needed, and runs it, under SandboxVM when `sandbox_probe` says it's available. |
+| `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` plus memory and last alert per live target, summed up in one table. |
 
 ## Helper scripts
 
