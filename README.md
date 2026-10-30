@@ -83,9 +83,10 @@ claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amig
 
 Don't run plain `amiga-fleet-mcp` in a terminal and wait for it. It
 is a stdio server: it prints the targets, then waits on stdin for a
-client and prints nothing more. That is normal, not a hang. Other
-clients are covered in
-[INSTALL.md](INSTALL.md#wiring-the-server-into-an-mcp-client).
+client and prints nothing more. That is normal, not a hang.
+[INSTALL.md](INSTALL.md#wiring-the-server-into-an-mcp-client) covers
+each way to run it: uv or pip, Claude Code, Claude Desktop, VS Code
+and other clients, and the HTTP transport.
 
 The Amiga side needs `MCPd` running on each target. Either deploy it
 from the host:

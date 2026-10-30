@@ -8,6 +8,10 @@
   that it is waiting for an MCP client, instead of sitting silent
   and looking hung. The README quick start gains a step for
   registering the server with an MCP client.
+- INSTALL.md describes each way to run the server: the launch
+  command for uv, pip and `python -m`, setup for Claude Code, Claude
+  Desktop, VS Code and other clients, the HTTP transport, and the
+  check-and-exit flags.
 
 ## 2.0 — Tracked jobs, sandboxed commands, and the mcp 2 SDK
 

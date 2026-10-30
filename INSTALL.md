@@ -327,11 +327,137 @@ amiga-fleet-mcp --version
 
 ### Wiring the server into an MCP client
 
-For Claude Code:
+`amiga-fleet-mcp` is an MCP server. By default (`[server]
+mcp_transport = "stdio"`) your MCP client starts it as a child
+process and talks JSON-RPC over its stdin / stdout. You don't start
+it yourself. Run by hand in a terminal, it logs the archive dir and
+the target list, then waits on stdin and prints nothing more. That
+is normal, not a hang. Ctrl-C quits.
+
+#### The launch command
+
+Every client needs one command line that starts the server. Pick
+the one that matches how you installed it:
+
+| Installed with | Command the client runs |
+|---|---|
+| `uv sync` (recommended) | `uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp` |
+| `pip install -e .` into a venv | `/path/to/MCP-AmigaOS4/host/.venv/bin/amiga-fleet-mcp` (Windows: `...\host\.venv\Scripts\amiga-fleet-mcp.exe`) |
+| `pip install` into a Python already on `PATH` | `amiga-fleet-mcp` |
+| Any of the above, as a module | `<that venv's python> -m amiga_fleet_mcp` |
+
+Notes:
+
+- `--directory` matters for uv: the client starts the server from
+  its own working directory, not from `host/`.
+- A client never activates a venv. Give it the full path to the
+  venv's `amiga-fleet-mcp`, not a bare `amiga-fleet-mcp`.
+- GUI clients (Claude Desktop, IDEs) often don't inherit your shell
+  `PATH`. If the client reports that `uv` is not found, give the
+  full path to `uv` (`where uv` on Windows, `which uv` elsewhere).
+- The config is found in this order: `--config <path>`, then the
+  `AMIGA_FLEET_CONFIG` environment variable, then the platform
+  default written by `--init` (see below). With the default location
+  you need neither.
+
+#### Claude Code
 
 ```sh
-claude mcp add amiga-fleet -- amiga-fleet-mcp --config /path/to/config.toml
+claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
 ```
+
+Everything after `--` is the launch command from the table, so a
+pip install is `claude mcp add amiga-fleet -- /path/to/.venv/bin/amiga-fleet-mcp`.
+Add `--config /path/to/config.toml` at the end if the config isn't
+in the default location. The server is registered for the current
+project by default; add `--scope user` (before the name) to make it
+available in every project. Check it with `claude mcp list`, or
+`/mcp` inside a session.
+
+#### Claude Desktop
+
+Edit `claude_desktop_config.json` (Settings -> Developer -> Edit
+Config; on Windows it is
+`%APPDATA%\Claude\claude_desktop_config.json`, on macOS
+`~/Library/Application Support/Claude/claude_desktop_config.json`)
+and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "amiga-fleet": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/MCP-AmigaOS4/host",
+               "run", "amiga-fleet-mcp"]
+    }
+  }
+}
+```
+
+For a pip install, set `command` to the venv's `amiga-fleet-mcp`
+and leave `args` empty. In JSON on Windows, write paths with forward
+slashes or doubled backslashes (`C:/Users/me/MCP-AmigaOS4/host`).
+
+#### Other MCP clients (VS Code, Cursor, ...)
+
+Any client that launches stdio servers takes the same `command` +
+`args` pair. VS Code reads `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "amiga-fleet": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["--directory", "/path/to/MCP-AmigaOS4/host",
+               "run", "amiga-fleet-mcp"]
+    }
+  }
+}
+```
+
+Cursor uses `~/.cursor/mcp.json` with the same `mcpServers` shape as
+Claude Desktop. For anything else, look up where your client keeps
+its MCP server list and give it the launch command.
+
+#### HTTP transport (one long-running server)
+
+To run the server yourself and have clients connect over HTTP (for
+example, several clients sharing one server), set in `config.toml`:
+
+```toml
+[server]
+mcp_transport = "streamable-http"   # or "sse" for older clients
+mcp_http_addr = "127.0.0.1:7180"
+```
+
+Then start it by hand, using any launch command from the table. In
+this mode it does stay running in the terminal. Clients connect to
+`http://127.0.0.1:7180/mcp` (`/sse` for the SSE transport). For
+Claude Code:
+
+```sh
+claude mcp add --transport http amiga-fleet http://127.0.0.1:7180/mcp
+```
+
+The HTTP endpoint has no authentication, and every connection gets
+the full tool surface, including shell access on every target. Keep
+`mcp_http_addr` on `127.0.0.1` unless you know who can reach it.
+
+#### Running it by hand for checks
+
+These flags run, print and exit. They don't need a client:
+
+```sh
+uv run amiga-fleet-mcp --health-check    # probe every target
+uv run amiga-fleet-mcp --inspect         # show the parsed targets
+uv run amiga-fleet-mcp --list-tools      # list the MCP tools
+uv run amiga-fleet-mcp --discover        # find MCPd on the LAN
+```
+
+(From `host/`. With a pip install, drop `uv run`.)
+
+#### Writing the config
 
 For a guided setup, run the wizard:
 
