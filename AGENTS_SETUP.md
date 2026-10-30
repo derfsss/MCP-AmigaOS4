@@ -173,6 +173,11 @@ amiga-fleet-mcp --discover --discover-timeout-ms 3000
 # Expected: prints any reachable MCPd, or nothing if isolated.
 ```
 
+After wiring the server into a client (next section), run
+`amiga-fleet-mcp --doctor`. Its exit code is the number of failed
+checks; each `FAIL` / `WARN` line carries a `fix:` line to act on. A
+stopped QEMU guest shows as `WARN`, not `FAIL`.
+
 ## Wire the server into Claude Code
 
 ```sh

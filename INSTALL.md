@@ -384,8 +384,15 @@ Notes:
 #### Claude Code
 
 [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
-runs in a terminal. Install it first if you haven't. Then, in the
-same terminal (any folder):
+runs in a terminal. Install it first if you haven't.
+
+**Shortcut, if you installed with uv:** start `claude` in the root of
+your clone of this repository. The repository's `.mcp.json` declares
+the server, and Claude Code asks once whether to use it; say yes. It
+only works when Claude Code is started in that folder, so to use the
+server from your own projects, register it as below.
+
+To register it yourself, in the same terminal (any folder):
 
 1. Register the server. Replace the path with where you cloned this
    repository; on Windows it looks like
@@ -489,9 +496,11 @@ the full tool surface, including shell access on every target. Keep
 These flags run, print and exit. They don't need a client:
 
 ```sh
+uv run amiga-fleet-mcp --doctor          # check everything, with fixes
 uv run amiga-fleet-mcp --health-check    # probe every target
 uv run amiga-fleet-mcp --inspect         # show the parsed targets
 uv run amiga-fleet-mcp --list-tools      # list the MCP tools
+uv run amiga-fleet-mcp --list-prompts    # list the ready-made workflows
 uv run amiga-fleet-mcp --discover        # find MCPd on the LAN
 ```
 
@@ -742,6 +751,10 @@ broadcast never reaches them.
   your AI app instead of running it by hand
   ([Wiring the server into an MCP client](#wiring-the-server-into-an-mcp-client)).
   Use `--health-check` to test the connection to your Amigas by hand.
+- **Not sure what's wrong** — run `amiga-fleet-mcp --doctor`. It
+  checks the config, every target, the MCPd versions and whether
+  Claude Code or Claude Desktop has the server registered, and prints
+  a fix for each problem it finds.
 - **The AI app says the server failed to start, or `amiga-fleet`
   isn't listed** — the launch command is wrong. Run the exact same
   command in a terminal: it should print the targets and wait. If it

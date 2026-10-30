@@ -21,6 +21,7 @@ from .archive import Archive
 from .config import Config, load_config
 from .errors import JsonRpcError, MethodNotFound
 from .fleet import Fleet
+from .prompts import register_prompts
 from .resources import archive_resources
 from .tools import debug as debug_tool
 from .tools import events as events_tool
@@ -53,6 +54,7 @@ def build_server(
     """Construct the MCP server with every tool and resource registered."""
     mcp = MCPServer(name, version=__version__)
     register_tools(mcp, fleet, archive)
+    register_prompts(mcp)
     return mcp
 
 
@@ -2769,6 +2771,17 @@ def main(argv: list[str] | None = None) -> int:
              "title + mime type. Doesn't start MCP.",
     )
     parser.add_argument(
+        "--list-prompts", action="store_true",
+        help="Print every registered MCP prompt (ready-made workflow) "
+             "and its arguments. Doesn't start MCP.",
+    )
+    parser.add_argument(
+        "--doctor", action="store_true",
+        help="Check the whole setup: config, every target, MCPd versions "
+             "and MCP client registration, with a fix for each problem. "
+             "Doesn't start MCP. Exits non-zero if any check fails.",
+    )
+    parser.add_argument(
         "--discover", action="store_true",
         help="UDP-broadcast probe for MCPd instances on the LAN. "
              "Prints discovered targets and exits. Doesn't start MCP.",
@@ -2808,6 +2821,12 @@ def main(argv: list[str] | None = None) -> int:
             non_interactive=args.non_interactive,
         )
 
+    if args.doctor:
+        # Before load_config: a missing or broken config is one of the
+        # things the doctor reports.
+        from .doctor import run_doctor
+        return run_doctor(args.config)
+
     try:
         config = load_config(args.config)
     except FileNotFoundError as e:
@@ -2846,6 +2865,12 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_print_resources(server))
         return 0
 
+    if args.list_prompts:
+        import asyncio
+        server = build_server(fleet, archive)
+        asyncio.run(_print_prompts(server))
+        return 0
+
     if args.discover:
         import asyncio
         rc = asyncio.run(_run_discover(args.discover_timeout_ms))
@@ -2862,7 +2887,7 @@ def main(argv: list[str] | None = None) -> int:
                 "amiga-fleet-mcp: waiting for an MCP client on stdin. "
                 "This is normal: an MCP client (e.g. `claude mcp add`) "
                 "starts the server itself. To check the setup by hand, "
-                "use --health-check, --inspect or --list-tools. "
+                "use --doctor, --health-check or --list-tools. "
                 "See INSTALL.md, 'Wiring the server into an MCP client'. "
                 "Ctrl-C to quit.",
                 file=sys.stderr,
@@ -2886,6 +2911,16 @@ async def _print_tools(server: MCPServer) -> None:
             first_line = t.description.strip().splitlines()[0][:80]
         print(f"  {t.name.ljust(width)}  [{title}]  {first_line}")
     print(f"\n  ({len(tools)} tools registered)")
+
+
+async def _print_prompts(server: MCPServer) -> None:
+    prompts = await server.list_prompts()
+    for p in prompts:
+        args = ", ".join(
+            a.name + ("" if a.required else "?") for a in p.arguments or [])
+        print(f"{p.name}({args})  {p.title or ''}")
+        if p.description:
+            print(f"    {p.description}")
 
 
 async def _print_resources(server: MCPServer) -> None:
