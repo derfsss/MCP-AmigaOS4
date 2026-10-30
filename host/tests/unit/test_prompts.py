@@ -62,15 +62,15 @@ async def test_prompt_renders_its_arguments(tmp_path: Path) -> None:
 async def test_prompts_name_only_registered_tools(tmp_path: Path) -> None:
     async with Client(_server(tmp_path), mode="legacy") as client:  # type: ignore[arg-type]
         tools = {t.name for t in (await client.list_tools()).tools}
-    # Parameters and result fields the prompts point at share the
-    # tool-name shape.
-    not_tools = {"raw_size", "job_id", "may_have_run", "chunk_size",
-                 "timeout_s"}
+    # Parameters and result fields (`job_id`, `raw_size`) share the
+    # tool-name shape, so only names in a tool namespace count.
+    namespaces = {t.split("_", 1)[0] for t in tools if "_" in t}
     for name, (fn, _title, _desc) in PROMPTS.items():
         required = [p.name for p in inspect.signature(fn).parameters.values()
                     if p.default is inspect.Parameter.empty]
         text = fn(**{p: "x" for p in required})
-        named = set(re.findall(r"`([a-z]+_[a-z_]+)`", text)) - not_tools
+        named = {n for n in re.findall(r"`([a-z]+_[a-z_]+)`", text)
+                 if n.split("_", 1)[0] in namespaces}
         assert named, name
         missing = named - tools
         assert not missing, f"{name} names unknown tools: {sorted(missing)}"

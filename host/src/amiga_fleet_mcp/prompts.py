@@ -33,8 +33,8 @@ tools. Assume I am new to MCP and to these tools. {_target_clause(target)}
 1. `fleet_target_status`: confirm the machine answers. If it doesn't,
    stop and explain what to check (is MCPd running on the Amiga, is the IP
    address in config.toml right; for a QEMU target, `qemu_start` it).
-2. `sys_version` and `sys_hardware`: say which AmigaOS version and board
-   this is.
+2. `sys_version` and `sys_hardware`: say which AmigaOS version this is
+   and what CPU it has.
 3. `sys_volumes` and `sys_memory`: list the mounted volumes and free
    memory.
 4. `sys_tasks`: name a few of the programs running.
@@ -59,8 +59,9 @@ without asking.
 1. `sys_uptime`: is MCPd still answering? If this fails the daemon or
    the machine is gone; say so and stop. A single failed call is not
    proof: MCPd runs one worker per connection, so retry once.
-2. `sys_lastalert`, then `sys_alert_decode` on its code. Note that
-   payload[1] is a Task pointer, not the fault address.
+2. `sys_lastalert`, then `sys_alert_decode` on its code. A code of
+   4294967295 (0xFFFFFFFF) means no alert has been recorded since boot.
+   Note that payload[1] is a Task pointer, not the fault address.
 3. `sys_debug_ring` (kernel debug output). The ring does not wrap: once
    full it accepts nothing, so before reading silence as "nothing
    happened", call it again a little later and see whether `raw_size`
@@ -68,17 +69,23 @@ without asking.
    the better source. On real hardware, look for XHCI, USB3
    or SBR lines first: a wedged USB3 card stalls the PCIe bus and looks
    like an application hang.
-4. `events_wait` with `topics=["debug.exception"]` and a short timeout:
-   the IDebug crash hook's report gives the faulting task, the PC and
-   the DAR (the real fault address).
+4. For a crash that already happened, the fault address (DAR), the PC
+   and the crashed task are in the kernel's crash report ("Crashed
+   process", register dump), which lands in the debug ring and the
+   serial log. `events_wait` can't replay it: it only reports alerts
+   that happen while it waits. If the user can reproduce the crash,
+   call `events_wait` with `topics=["debug.exception"]` and a long
+   enough `timeout_ms` while they do.
 5. `sys_tasks` and `exec_list`: what is still running, and which tracked
    jobs did or didn't finish (their exit codes and IoErr).
 6. `wb_screenshot` (or `qemu_screenshot` for a QEMU guest): is a Grim
    Reaper requester or an alert on screen? A Grim Reaper window holds
    the crashed program until someone clicks it.
-7. If the target has a serial capture (`serial_status`), `serial_read`
-   it and search for "Trap type", "Crashed process", "Temporary stack
-   trace" and driver recovery lines. Serial output survives a frozen
+7. Read the serial log: on a QEMU guest it is the
+   `amiga://<target>/qemu/serial_log` resource; on real hardware, use
+   `serial_read` if `serial_status` shows a capture. Search it for
+   "Trap type", "Crashed process", "Temporary stack trace" and driver
+   recovery lines. Serial output survives a frozen
    machine and a full debug ring. Keep a copy of anything that matters
    before anyone calls `serial_clear`.
 8. If a fault address is known, `debug_symbol` turns it into a module,
@@ -107,9 +114,11 @@ Copy a program from this computer to an AmigaOS machine and run it.
 
 1. `fs_upload` the file into the destination drawer, keeping its file
    name.
-2. `fs_stat` it, and if the `e` (execute) protection bit is not set,
-   `fs_protect` it to `rwed`. A file copied from another computer often
-   arrives without it, and AmigaOS then refuses to run it.
+2. A file written by `fs_upload` gets the normal `----rwed` protection
+   bits, so it can run as it is. If AmigaOS still refuses to run it,
+   check with `exec_cmd` running `List <file>`, and if the `e` is
+   missing, `fs_protect` it with `bits=0` (a cleared bit means
+   "allowed").
 3. `sandbox_probe`: if SandboxVM is available, run the program with
    `exec_cmd` and `sandbox=true`, so a crash is contained and reported
    instead of taking the machine down. Otherwise run it with `exec_cmd`
@@ -117,7 +126,10 @@ Copy a program from this computer to an AmigaOS machine and run it.
 4. If `exec_cmd` returns `state: "running"`, the program outlived the
    timeout and is still going. Follow it with `exec_status` and
    `exec_output`; never re-run it to "retry".
-5. Report the exit code, IoErr (`result2`) and output. If it crashed,
+5. Report the exit code and output. For a sandboxed run the program's
+   own output is in `sandbox.stdout`, not `output`. IoErr (`result2`)
+   only means something when the exit code isn't 0; after a clean exit
+   it is left over from earlier calls. If it crashed,
    continue as for a crash investigation: `sys_lastalert`,
    `sys_debug_ring`, and the sandbox trap report if it ran sandboxed.
 """
@@ -131,14 +143,16 @@ def check_fleet(tags: str = "") -> str:
     return f"""\
 Check the health of {scope}.
 
-1. `fleet_snapshot`: one probe of every target in parallel.
+1. `fleet_snapshot`: one probe of every target in parallel. Each entry
+   already has the uptime, free memory and last alert; a `last_alert`
+   of 4294967295 (0xFFFFFFFF) means none.
 2. For each target that is down, say what to check: is the machine
    powered and booted, is MCPd running, is the address in config.toml
-   right. For a QEMU target, it may simply not be started (`qemu_start`).
-3. For each target that is up, `sys_memory` and `sys_lastalert`: flag
-   low free memory and any recent alert.
+   right. A QEMU target that isn't running (`qemu_running: false`) is
+   normal; it starts on demand with `qemu_start`.
+3. For each target with an alert, `sys_alert_decode` its code.
 
-Finish with one table: target, up or down, AmigaOS version, free memory,
+Finish with one table: target, up or down, uptime, free memory,
 and anything that needs attention. Change nothing.
 """
 
@@ -153,10 +167,11 @@ def _cold_boot_steps(n: int) -> str:
    ask the user.
 {n + 1}. `fs_sync` every volume written to (for example `SYS:`, `LIBS:`).
    Writes can still be only in RAM, and a power cut loses them.
-{n + 2}. If the target has a serial channel (`serial_status`): the new boot
-   should start a fresh log. `serial_clear` wipes the old one, so save
-   anything from it you still need first; `serial_start` if no capture
-   is running.
+{n + 2}. On real hardware with a serial channel (`serial_status`), the new
+   boot should start a fresh log. `serial_clear` wipes the old one, so
+   save anything from it you still need first; `serial_start` if no
+   capture is running. A QEMU guest gets a new log of its own at each
+   start.
 {n + 3}. Restart it the safe way for its kind:
    - Real hardware with a power channel: `power_off` with
      `confirm=true`, wait about 5 seconds, then `power_on` with
@@ -166,9 +181,10 @@ def _cold_boot_steps(n: int) -> str:
    - QEMU guest: `qemu_stop` (it flushes the guest first), then
      `qemu_start`. Never `qemu_reset`.
    - Anything else: ask the user to power-cycle it.
-{n + 4}. Wait for the daemon. With a serial capture, `serial_tail` until a
-   `[MCPd] ready` line appears (it carries `version=`); otherwise poll
-   `sys_uptime` until it answers. Give it about 15 more seconds to
+{n + 4}. Wait for the daemon: watch the serial log (`serial_tail`, or the
+   `amiga://<target>/qemu/serial_log` resource on QEMU) for a
+   `[MCPd] ready` line, which carries `version=`, or poll `sys_uptime`
+   until it answers. A QEMU guest takes about 20 seconds. Give it about 15 more seconds to
    settle.
 {n + 5}. `fleet_target_status`. The first call after a boot can still fail
    with a dropped connection. If an error reports `may_have_run`, check
@@ -246,7 +262,8 @@ collect the results. {_target_clause(target)}
    so its size from `fs_stat` lags behind. If the target has a serial
    capture, `serial_tail` shows a crash ("Trap type", a Grim Reaper
    report) as soon as it happens.
-5. When it ends, report the exit code and `result2`, and pull out the
+5. When it ends, report the exit code (and `result2` if the exit code
+   isn't 0; after a clean exit it is stale), and pull out the
    pass and fail lines (`exec_output`, or `exec_cmd` with `Search` on
    an output file).
 6. {fetch}

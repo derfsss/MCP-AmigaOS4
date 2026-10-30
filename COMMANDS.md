@@ -428,7 +428,7 @@ one.
 | `getting_started` | `target` | Read-only tour of one machine: version and board, volumes, memory, tasks, a screenshot, then three suggestions for what to ask next. |
 | `investigate_crash` | `target`, `what_happened` | Collects the evidence after a crash or hang (`sys_lastalert` + `sys_alert_decode`, `sys_debug_ring`, the crash hook's `debug.exception` report, tasks and jobs, a screenshot) and explains the likely cause. Changes nothing. |
 | `deploy_and_run` | `local_path`, `target`, `remote_dir` (default `RAM:`), `args` | Uploads a program, sets its `e` bit if needed, and runs it, under SandboxVM when `sandbox_probe` says it's available. |
-| `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` plus memory and last alert per live target, summed up in one table. |
+| `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` (uptime, free memory and last alert per target), decodes any alert, and sums it up in one table. |
 | `safe_reboot` | `target` | Cold boot without losing writes: no running jobs, `fs_sync`, a fresh serial log, then `power_off` / `power_on` on real hardware or `qemu_stop` / `qemu_start` on QEMU (never `sys_cold_reboot` on an X5000, never `qemu_reset`), and wait for the `[MCPd] ready` line. Asks first. |
 | `deploy_library` | `local_path`, `remote_path`, `target` | Dated backup with `fs_rename`, `fs_upload` with verify, the cold boot above, then confirms the new version is the one loaded. Never `Avail FLUSH`. |
 | `run_test_batch` | `local_script`, `target`, `remote_dir`, `results` | Runs an AmigaDOS script as a tracked job with a short timeout, follows it with `exec_status` / `exec_output` without re-running it, and collects the results. |
