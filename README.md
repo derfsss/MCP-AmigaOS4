@@ -60,43 +60,90 @@ can:
 verified end-to-end on QEMU Pegasos2 and real AmigaOne X5000
 hardware.
 
+## New to MCP?
+
+MCP (Model Context Protocol) is how an AI app gets new abilities.
+The app, called the **MCP client** (Claude Code, Claude Desktop, an
+IDE), starts small helper programs called **MCP servers**, and the
+AI can then use the tools each server offers.
+
+Three pieces work together here:
+
+```
+ AI app (MCP client)  ->  amiga-fleet-mcp  ->  network  ->  MCPd
+ e.g. Claude Code         (MCP server, on        (daemon, on each
+                           your PC)               Amiga)
+```
+
+You install `amiga-fleet-mcp` on your PC and `MCPd` on each Amiga,
+then tell your AI app about `amiga-fleet-mcp` once. After that you
+just talk to the AI ("what volumes are mounted on my A1222?") and
+the app starts the server for you in the background. **You never
+need to keep `amiga-fleet-mcp` running in a terminal yourself.**
+
 ## Quick start
 
-Three steps: install the host server, put the daemon on the Amiga,
-point your MCP client at it.
+You need Python 3.11 or newer, [uv](https://docs.astral.sh/uv/)
+(a Python package manager; plain `pip` works too, see
+[INSTALL.md](INSTALL.md#installing-the-host-server)), and an MCP
+client. The steps below use
+[Claude Code](https://docs.claude.com/en/docs/claude-code/overview).
+
+**1. Get the code and install the server** (once):
 
 ```sh
-# 1. Host server (Python 3.11+)
-cd host && uv sync            # or: pip install -e .
+git clone https://github.com/derfsss/MCP-AmigaOS4.git
+cd MCP-AmigaOS4/host
+uv sync
+```
 
-# 2. Tell it about your machines. The wizard writes a validated
-#    config.toml to the platform default location.
+**2. Put MCPd on each Amiga** (once). See
+[Installing MCPd](#installing-mcpd) below.
+
+**3. Describe your Amigas** (once). The wizard asks for each
+machine's name and IP address and writes `config.toml` where the
+server will find it:
+
+```sh
 uv run amiga-fleet-mcp --init
-
-# 3. Check it can reach them
-uv run amiga-fleet-mcp --health-check
-
-# 4. Register it with your MCP client (Claude Code shown), which
-#    starts the server itself
-claude mcp add amiga-fleet -- uv --directory /path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
 ```
 
-Don't run plain `amiga-fleet-mcp` in a terminal and wait for it. It
-is a stdio server: it prints the targets, then waits on stdin for a
-client and prints nothing more. That is normal, not a hang.
-[INSTALL.md](INSTALL.md#wiring-the-server-into-an-mcp-client) covers
-each way to run it: uv or pip, Claude Code, Claude Desktop, VS Code
-and other clients, and the HTTP transport.
-
-The Amiga side needs `MCPd` running on each target. Either deploy it
-from the host:
+**4. Check the PC can reach them:**
 
 ```sh
-python scripts/install_mcpd_autostart.py <target-ip>:4322
+uv run amiga-fleet-mcp --health-check
 ```
 
-or, on the Amiga itself, grab `MCPd-<version>.lha` from the [latest
-release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest):
+Each target should show `UP`. If one shows `DOWN`, fix that first:
+is MCPd running on it, and is the IP address right?
+
+**5. Tell your AI app about the server** (once). Use the full path
+to the `host` folder you cloned in step 1:
+
+```sh
+claude mcp add amiga-fleet -- uv --directory /full/path/to/MCP-AmigaOS4/host run amiga-fleet-mcp
+```
+
+**6. Use it.** Start Claude Code (`claude`), type `/mcp` to see that
+`amiga-fleet` is connected, then just ask, for example: *"List the
+volumes on my Amiga."*
+
+> **"It just hangs"**: if you run plain `uv run amiga-fleet-mcp` in a
+> terminal, it prints the log folder and your targets, then sits
+> there silently. That is normal. It is waiting for an AI app to talk
+> to it, and only an AI app can. Press Ctrl-C and use step 5 instead.
+
+Using Claude Desktop, VS Code or another app, or installed with pip
+instead of uv?
+[INSTALL.md § Wiring the server into an MCP client](INSTALL.md#wiring-the-server-into-an-mcp-client)
+has instructions for each.
+
+### Installing MCPd
+
+The Amiga side needs `MCPd` running on each target. The simplest way
+is on the Amiga itself: download `MCPd-<version>.lha` from the
+[latest release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest),
+then in a Shell, from the folder you saved it in:
 
 ```
 LhA x MCPd-<version>.lha
@@ -108,13 +155,12 @@ already correct — extract and the daemon runs. (A raw ELF copied over
 SMB or a USB stick arrives with the executable bit protected and has
 to be `Protect +rwed`-ed by hand.)
 
-Either way MCPd lands in `SYS:System/MCPd/`, gains a watchdog, and
-auto-starts on boot. Then register the server with your client — for
-Claude Code:
+Once MCPd is running on a target, you can also update it from the
+PC with `python scripts/install_mcpd_autostart.py <target-ip>:4322`.
 
-```sh
-claude mcp add amiga-fleet -- amiga-fleet-mcp
-```
+Either way MCPd lands in `SYS:System/MCPd/`, gains a watchdog, and
+auto-starts on boot. MCPd has no password: keep the Amigas on a
+private network ([SECURITY.md](SECURITY.md)).
 
 Full detail in [INSTALL.md](INSTALL.md); configuration options in
 [USAGE.md](USAGE.md).
