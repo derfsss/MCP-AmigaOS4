@@ -83,7 +83,8 @@ without asking.
    the crashed program until someone clicks it.
 7. Read the serial log: on a QEMU guest it is the
    `amiga://<target>/qemu/serial_log` resource; on real hardware, use
-   `serial_read` if `serial_status` shows a capture. Search it for
+   `serial_read` if `serial_status` shows a capture (its `bytes_b64` is
+   base64: decode it). Search it for
    "Trap type", "Crashed process", "Temporary stack trace" and driver
    recovery lines. Serial output survives a frozen
    machine and a full debug ring. Keep a copy of anything that matters
@@ -181,14 +182,16 @@ def _cold_boot_steps(n: int) -> str:
    - QEMU guest: `qemu_stop` (it flushes the guest first), then
      `qemu_start`. Never `qemu_reset`.
    - Anything else: ask the user to power-cycle it.
-{n + 4}. Wait for the daemon: watch the serial log (`serial_tail`, or the
+{n + 4}. Wait for the daemon: watch the serial log (`serial_tail`, whose
+   `bytes_b64` you decode from base64, or the
    `amiga://<target>/qemu/serial_log` resource on QEMU) for a
    `[MCPd] ready` line, which carries `version=`, or poll `sys_uptime`
-   until it answers. A QEMU guest takes about 20 seconds. Give it about 15 more seconds to
-   settle.
-{n + 5}. `fleet_target_status`. The first call after a boot can still fail
-   with a dropped connection. If an error reports `may_have_run`, check
-   `exec_list` before retrying anything that changes state."""
+   until it answers. A QEMU guest takes about 20 seconds, an X5000
+   about 35 from `power_on`. Give it about 15 more seconds to settle.
+{n + 5}. `fleet_target_status`. The first calls after a boot can still
+   fail with a dropped connection, even once this one has answered. If an
+   error reports `may_have_run`, check `exec_list` before retrying
+   anything that changes state."""
 
 
 def safe_reboot(target: str = "") -> str:
@@ -260,7 +263,7 @@ collect the results. {_target_clause(target)}
 4. Follow it with `exec_status` until it finishes, reading progress
    with `exec_output`. Output a script redirects to a file is buffered,
    so its size from `fs_stat` lags behind. If the target has a serial
-   capture, `serial_tail` shows a crash ("Trap type", a Grim Reaper
+   capture, `serial_tail` (base64 `bytes_b64`) shows a crash ("Trap type", a Grim Reaper
    report) as soon as it happens.
 5. When it ends, report the exit code (and `result2` if the exit code
    isn't 0; after a clean exit it is stale), and pull out the
