@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- Run by hand from a terminal, the stdio server now says on stderr
+  that it is waiting for an MCP client, instead of sitting silent
+  and looking hung. The README quick start gains a step for
+  registering the server with an MCP client.
+
 ## 2.0 — Tracked jobs, sandboxed commands, and the mcp 2 SDK
 
 2.0 is a major version because the host server moved to the mcp 2.x

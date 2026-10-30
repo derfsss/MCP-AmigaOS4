@@ -2854,6 +2854,19 @@ def main(argv: list[str] | None = None) -> int:
     server = build_server(fleet, archive)
     transport = config.server.mcp_transport
     if transport == "stdio":
+        # Run by hand from a terminal, the server just sits waiting for
+        # JSON-RPC on stdin, which looks like a hang. stderr is safe:
+        # stdout is the protocol channel.
+        if sys.stdin is not None and sys.stdin.isatty():
+            print(
+                "amiga-fleet-mcp: waiting for an MCP client on stdin. "
+                "This is normal: an MCP client (e.g. `claude mcp add`) "
+                "starts the server itself. To check the setup by hand, "
+                "use --health-check, --inspect or --list-tools. "
+                "See INSTALL.md, 'Wiring the server into an MCP client'. "
+                "Ctrl-C to quit.",
+                file=sys.stderr,
+            )
         server.run(transport="stdio")
     else:
         # mcp 2 takes the bind address on run(); under 1.x
