@@ -1,6 +1,11 @@
 # Change log
 
-## Unreleased
+## 2.2 — Doctor and ready-made workflows
+
+2.2 adds a setup checker and ready-made workflows. Tools, parameters,
+config files and the daemon protocol are unchanged from 2.1; MCPd is
+rebuilt only to carry the new version number. Every workflow was run
+on a QEMU AmigaOne guest and on a real X5000.
 
 ### Added
 
@@ -11,10 +16,14 @@
   the server registered, with the exact command to register it if
   not. A stopped QEMU guest is a warning, not a failure.
 - **MCP prompts**, ready-made workflows any MCP client can offer:
-  `getting_started`, `investigate_crash`, `deploy_and_run` and
-  `check_fleet`. Each names the tools to call in order and the
-  AmigaOS traps to watch for at each step. `--list-prompts` prints
-  them.
+  `getting_started`, `investigate_crash`, `deploy_and_run`,
+  `check_fleet`, `safe_reboot`, `deploy_library`, `run_test_batch`
+  and `ab_test_fix`. Each names the tools to call in order and the
+  AmigaOS traps to watch for at each step: cold-boot rather than
+  `Avail FLUSH` to load new code, never re-run a job that outlived its
+  timeout, check the version in memory rather than the file on disk.
+  The last four come from the sequences used most in day-to-day
+  driver work on the X5000. `--list-prompts` prints them.
 - **`.mcp.json`** in the repository root, so Claude Code started in a
   uv checkout offers the server without a `claude mcp add` step.
 

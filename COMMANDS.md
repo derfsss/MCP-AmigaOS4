@@ -42,7 +42,7 @@ auto-start watchdog.
 
 ## RPC methods (daemon side)
 
-Every method advertised by `proto.capabilities` — 64 in MCPd 2.0.
+Every method advertised by `proto.capabilities` — 64 since MCPd 2.0.
 JSON-RPC 2.0 over a 4-byte big-endian length-prefix framed TCP socket
 on port 4322.
 
@@ -419,15 +419,20 @@ Live, read-only data exposed under the `amiga://` URI scheme.
 Ready-made workflows. A client lists them and, when the user picks
 one, sends the filled-in text to the model, which then calls the
 tools it names. In Claude Code they appear as
-`/mcp__amiga-fleet__<name>` commands. Every argument is optional
-except `local_path`; with no `target`, the model asks which one.
+`/mcp__amiga-fleet__<name>` commands. Arguments are optional except
+the file paths and `repro`; with no `target`, the model asks which
+one.
 
 | Prompt | Arguments | What it does |
 |---|---|---|
 | `getting_started` | `target` | Read-only tour of one machine: version and board, volumes, memory, tasks, a screenshot, then three suggestions for what to ask next. |
 | `investigate_crash` | `target`, `what_happened` | Collects the evidence after a crash or hang (`sys_lastalert` + `sys_alert_decode`, `sys_debug_ring`, the crash hook's `debug.exception` report, tasks and jobs, a screenshot) and explains the likely cause. Changes nothing. |
 | `deploy_and_run` | `local_path`, `target`, `remote_dir` (default `RAM:`), `args` | Uploads a program, sets its `e` bit if needed, and runs it, under SandboxVM when `sandbox_probe` says it's available. |
-| `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` plus memory and last alert per live target, summed up in one table. |
+| `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` (uptime, free memory and last alert per target), decodes any alert, and sums it up in one table. |
+| `safe_reboot` | `target` | Cold boot without losing writes: no running jobs, `fs_sync`, a fresh serial log, then `power_off` / `power_on` on real hardware or `qemu_stop` / `qemu_start` on QEMU (never `sys_cold_reboot` on an X5000, never `qemu_reset`), and wait for the `[MCPd] ready` line. Asks first. |
+| `deploy_library` | `local_path`, `remote_path`, `target` | Dated backup with `fs_rename`, `fs_upload` with verify, the cold boot above, then confirms the new version is the one loaded. Never `Avail FLUSH`. |
+| `run_test_batch` | `local_script`, `target`, `remote_dir`, `results` | Runs an AmigaDOS script as a tracked job with a short timeout, follows it with `exec_status` / `exec_output` without re-running it, and collects the results. |
+| `ab_test_fix` | `repro`, `local_path`, `remote_path`, `target` | Runs the reproduction (expect a failure), deploys the fix with a cold boot, checks it's loaded, runs it again (expect a pass), and tables before against after. |
 
 ## Helper scripts
 
