@@ -3,7 +3,9 @@
 ## 2.2 — Doctor and ready-made workflows
 
 2.2 adds a setup checker and ready-made workflows. Tools, parameters,
-config files and the daemon protocol are unchanged from 2.1.
+config files and the daemon protocol are unchanged from 2.1; MCPd is
+rebuilt only to carry the new version number. Every workflow was run
+on a QEMU AmigaOne guest and on a real X5000.
 
 ### Added
 

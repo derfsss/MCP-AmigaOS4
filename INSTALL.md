@@ -773,7 +773,8 @@ broadcast never reaches them.
 - **`Method not found`** — the deployed binary is older than the
   client's wire schema. `exec.status`, `exec.output`, `exec.kill` and
   `exec.list` need MCPd 2.0; `exec_cmd` itself still works against an
-  older daemon, without job fields. Install the latest release, or
+  older daemon, without job fields. 1.2-era daemons also lack
+  `fs.sync`, so `qemu_stop` can't flush them: pass `settle_s=50`. Install the latest release, or
   rebuild and redeploy with `scripts/install_mcpd_autostart.py`.
 - **Watchdog log empty** — the daemon's stdout is redirected to NIL
   by the watchdog launch line; structured events go through MCP.
