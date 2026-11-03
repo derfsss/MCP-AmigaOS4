@@ -1,0 +1,19 @@
+{
+  "args": {
+    "name":          "-name amiga-pegasos2",
+    "machine":       "-M pegasos2",
+    "memory":        "-m 2048M",
+    "accel":         "-accel tcg",
+    "clock":         "-rtc base=localtime",
+    "loader":        "-kernel \"<MACHINE_DIR>/bboot\" -initrd \"<MACHINE_DIR>/kickstart.zip\"",
+    "serial_output": "-append \"serial debuglevel=1\"",
+    "vga":           "-vga none",
+    "gfx":           "-device sm501",
+    "sound":         "-device es1370,addr=0x08",
+    "hd0":           "-drive if=none,id=hd0,file=\"<MACHINE_DIR>/hd0.qcow2\",format=qcow2 -device ide-hd,unit=0,drive=hd0,bus=ide.0",
+    "cd0":           "-drive if=none,id=cd -device ide-cd,unit=1,drive=cd,bus=ide.1",
+    "serial":        "-serial stdio",
+    "display":       "-display sdl,gl=off,show-cursor=off,full-screen=off",
+    "network":       "-device rtl8139,addr=0x09,netdev=nic -netdev user,id=nic,hostname=amiga-pegasos2"
+  }
+}

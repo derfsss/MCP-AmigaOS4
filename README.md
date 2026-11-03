@@ -181,6 +181,7 @@ Full detail in [INSTALL.md](INSTALL.md); configuration options in
 | Full command / method / tool reference | [COMMANDS.md](COMMANDS.md) |
 | Installing pre-built artefacts | [INSTALL.md](INSTALL.md) |
 | Setup spec for AI agents | [AGENTS_SETUP.md](AGENTS_SETUP.md) |
+| QEMU machine config (`config.json`) | [QEMU_CONFIG.md](QEMU_CONFIG.md) |
 | Building from source | [BUILD.md](BUILD.md) |
 | Host server (Python) — quickstart | [host/README.md](host/README.md) |
 | Amiga daemon (C) — quickstart and source layout | [mcpd/README.md](mcpd/README.md) |
@@ -296,7 +297,10 @@ cross-compiling MCPd from source.
 **Host:** Python 3.11, 3.12, or 3.13, on Windows, Linux, or macOS,
 with `git` on PATH at install time. The server is built on the mcp 2.x
 Python SDK.
-QEMU features additionally need a `qemu-system-ppc` binary;
+QEMU features additionally need a `qemu-system-ppc` binary and an
+AmigaOS 4.1 FE guest, best set up with
+[Kyvos](https://ko-fi.com/s/6476fdadd2) (see
+[QEMU_CONFIG.md](QEMU_CONFIG.md));
 `power.*` needs an FTDI USB-TTL cable wired to the target's MCU
 header; `serial.*` needs a serial cable to the target's debug UART.
 

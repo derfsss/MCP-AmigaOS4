@@ -111,7 +111,7 @@ qemu_binary = "<absolute path to qemu-system-ppc>"
 [targets.qemu-pegasos2]
 type = "qemu"
 machine = "pegasos2"
-qemu_config = "<absolute path to config.json>"
+qemu_config = "<absolute path to config.json>"   # format: QEMU_CONFIG.md
 
 [targets.qemu-pegasos2.channels.mcpd]
 enabled = true

@@ -225,7 +225,7 @@ def _wizard_target(prompt: Prompt) -> tuple[str, dict[str, Any]] | None:
         t["machine"] = _ask_choice(
             prompt, "machine", ["pegasos2", "amigaone", "sam460ex"], "pegasos2"
         )
-        t["qemu_config"] = _ask(prompt, "qemu_config (absolute path to config.json)")
+        t["qemu_config"] = _ask(prompt, "qemu_config (absolute path to the machine's config.json, e.g. the one Kyvos writes)")
         port_mcpd = _ask(prompt, "channels.mcpd hostfwd port", "4422")
         t["channels"]["mcpd"] = {
             "enabled": True,

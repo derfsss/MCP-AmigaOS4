@@ -84,6 +84,10 @@ display_name = "QEMU Pegasos2"
 machine      = "pegasos2"
 tags         = ["qemu", "pegasos2"]      # filter via fleet.* tools
 qemu_config  = "<absolute path to your QEMU machine's config.json>"
+# Set the machine up with Kyvos (https://ko-fi.com/s/6476fdadd2)
+# first; its config.json works as is. To write one by hand,
+# start from host/qemu-config.example.json; QEMU_CONFIG.md explains
+# the format.
 
   [targets.qemu-pegasos2.channels.mcpd]
   enabled  = true
