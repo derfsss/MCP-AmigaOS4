@@ -71,7 +71,7 @@ def _is_warmup_id(rid: Any) -> bool:
 #: might still be in flight.
 MUTATING_METHODS = frozenset({
     "fs.write", "fs.write_chunk", "fs.delete", "fs.makedir",
-    "fs.rename", "fs.protect", "fs.copy",
+    "fs.rename", "fs.protect", "fs.copy", "fs.stream_put",
     "exec.cmd",
 })
 
@@ -407,6 +407,23 @@ class McpdTransport:
             raise InternalError("MCPd response had neither result nor error")
         return resp["result"]
 
+    async def open_stream(self) -> McpdStream:
+        """A second, private connection to the same MCPd for one bulk
+        transfer (fs.stream_get / fs.stream_put). The daemon serves it
+        in its own worker, so a stream of many minutes never holds
+        this transport's lock. Close it when done."""
+        try:
+            r, w = await asyncio.wait_for(
+                asyncio.open_connection(self._channel.host, self._channel.port),
+                CONNECT_TIMEOUT_S,
+            )
+        except (ConnectionRefusedError, OSError) as e:  # incl. TimeoutError
+            raise TargetError(
+                f"MCPd not reachable at {self._channel.endpoint}",
+                data={"endpoint": self._channel.endpoint, "error": str(e)},
+            ) from e
+        return McpdStream(r, w, self._channel.endpoint)
+
     async def _dispatch_notification(self, obj: dict[str, Any]) -> None:
         """A frame with no `id` arrived. Push to the queue and call
         any registered handlers. Handler errors are logged but never
@@ -422,3 +439,110 @@ class McpdTransport:
                 log.exception(
                     "notification handler raised; continuing",
                 )
+
+
+class StreamBroken(TargetError):
+    """The stream connection broke (EOF, reset, timeout). The daemon
+    has dropped it; the transfer can resume on a new stream. A daemon
+    error answer (bad path, disk full) is never this."""
+
+
+class McpdStream:
+    """One private connection for a raw bulk transfer.
+
+    `call()` is an ordinary JSON-RPC exchange (notification frames are
+    skipped: the daemon writes them before a response, never inside the
+    raw bytes that follow one). After fs.stream_get's response the
+    daemon sends exactly `length` raw bytes (`read_raw`); after
+    fs.stream_put's it reads exactly `length` (`send_raw`). Any break
+    while raw bytes flow means the daemon dropped the connection: the
+    caller resumes on a new stream.
+    """
+
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        endpoint: str,
+    ) -> None:
+        self._reader = reader
+        self._writer = writer
+        self.endpoint = endpoint
+        self._next_id = itertools.count(1)
+
+    async def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+    ) -> Any:
+        rid = next(self._next_id)
+        env: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            env["params"] = params
+        payload = json.dumps(env, ensure_ascii=False).encode("utf-8")
+        try:
+            self._writer.write(struct.pack(">I", len(payload)) + payload)
+            await self._writer.drain()
+            while True:
+                hdr = await asyncio.wait_for(self._reader.readexactly(4), timeout_s)
+                (n,) = struct.unpack(">I", hdr)
+                if n == 0 or n > MAX_FRAME_BYTES:
+                    raise InternalError(f"bad frame length: {n}")
+                body = await asyncio.wait_for(self._reader.readexactly(n), timeout_s)
+                obj = json.loads(body.decode("utf-8"))
+                if "id" not in obj or _is_warmup_id(obj.get("id")):
+                    continue
+                if obj["id"] != rid:
+                    raise InternalError(f"MCPd stream response id={obj['id']} != {rid}")
+                break
+        except TimeoutError as e:
+            raise StreamBroken(
+                f"MCPd stream request timed out after {timeout_s}s",
+                data={"method": method, "may_have_run": True},
+            ) from e
+        except (asyncio.IncompleteReadError, OSError) as e:
+            raise StreamBroken(
+                f"MCPd stream connection failed: {_describe(e)}",
+                data={"method": method, "may_have_run": True},
+            ) from e
+        if "error" in obj:
+            err = obj["error"]
+            cls = _ERROR_BY_CODE.get(int(err.get("code", -32603)), JsonRpcError)
+            raise cls(err.get("message", "MCPd error"), data=err.get("data"))
+        if "result" not in obj:
+            raise InternalError("MCPd response had neither result nor error")
+        return obj["result"]
+
+    async def send_raw(self, data: bytes, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
+        try:
+            self._writer.write(data)
+            await asyncio.wait_for(self._writer.drain(), timeout_s)
+        except (TimeoutError, OSError) as e:
+            raise StreamBroken(
+                f"MCPd stream broke while sending: {_describe(e)}",
+                data={"endpoint": self.endpoint},
+            ) from e
+
+    async def read_raw(self, n: int, timeout_s: float = DEFAULT_TIMEOUT_S) -> bytes:
+        """Up to `n` bytes (at least one): what has arrived."""
+        try:
+            data = await asyncio.wait_for(self._reader.read(n), timeout_s)
+        except (TimeoutError, OSError) as e:
+            raise StreamBroken(
+                f"MCPd stream broke while receiving: {_describe(e)}",
+                data={"endpoint": self.endpoint},
+            ) from e
+        if not data:
+            raise StreamBroken(
+                "MCPd closed the stream before all bytes arrived",
+                data={"endpoint": self.endpoint},
+            )
+        return data
+
+    async def close(self) -> None:
+        try:
+            self._writer.close()
+            await asyncio.wait_for(self._writer.wait_closed(), CLOSE_TIMEOUT_S)
+        except OSError:  # incl. TimeoutError
+            pass

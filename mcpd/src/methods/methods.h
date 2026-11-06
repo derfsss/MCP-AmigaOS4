@@ -73,6 +73,8 @@ MCPD_HANDLER(fs_protect);
 MCPD_HANDLER(fs_copy);
 MCPD_HANDLER(fs_sync);
 MCPD_HANDLER(fs_hash);
+MCPD_HANDLER(fs_stream_get);
+MCPD_HANDLER(fs_stream_put);
 
 MCPD_HANDLER(exec_cmd);
 MCPD_HANDLER(exec_status);

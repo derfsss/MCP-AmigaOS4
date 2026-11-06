@@ -33,6 +33,7 @@ from typing import Literal
 
 from .fleet import Fleet
 from .tools import fs as fs_tool
+from .transports.mcpd import StreamBroken
 
 # Conservative chunk default: 24 MiB raw bytes.
 #   - base64 inflates by 4/3, so 24 MiB raw -> 32 MiB encoded
@@ -254,5 +255,154 @@ async def chunked_download(
         path=str(local),
         bytes_total=total,
         chunks=chunk_count,
+        elapsed_s=time.monotonic() - t0,
+    )
+
+
+# ---- raw streams (fs.stream_put / fs.stream_get, MCPd 2.3+) --------
+
+#: Bytes per write/read on a stream: matches the daemon's 1 MiB buffer.
+STREAM_BLOCK = 1024 * 1024
+#: How long one block may take before the stream counts as broken. The
+#: daemon's own limit is SO_RCVTIMEO, 120 s (mcpd/src/main.c).
+STREAM_BLOCK_TIMEOUT_S = 130.0
+
+
+async def stream_supported(t: object) -> bool:
+    """Whether this target's MCPd has the raw stream methods. The answer
+    is cached on the transport; any failure to ask counts as no, so
+    older daemons (2.2 and before) keep the chunked path."""
+    cached = getattr(t, "_stream_ok", None)
+    if isinstance(cached, bool):
+        return cached
+    ok = False
+    if hasattr(t, "open_stream"):
+        try:
+            caps = await t.request("proto.capabilities", timeout_s=10.0)  # type: ignore[attr-defined]
+            names = caps.get("method_names", []) if isinstance(caps, dict) else []
+            ok = "fs.stream_put" in names and "fs.stream_get" in names
+        except Exception:
+            ok = False
+    try:
+        t._stream_ok = ok  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    return ok
+
+
+async def stream_upload(
+    fleet: Fleet,
+    target: str,
+    local_path: str | Path,
+    remote_path: str,
+    *,
+    resume_from: int = 0,
+    retries: int = 3,
+) -> UploadStats:
+    """Send a file as raw bytes after one fs.stream_put. If the
+    connection breaks, the next attempt asks fs.stat how much arrived
+    and continues from there, on a new stream (up to `retries` times).
+    The upload is confirmed by fs.stat on the stream connection itself:
+    the daemon closes the file before it reads that request."""
+    local = Path(local_path)
+    total = local.stat().st_size
+    t = fleet.mcpd(target)
+    offset = resume_from
+    attempts = 0
+    t0 = time.monotonic()
+    while True:
+        s = await t.open_stream()
+        try:
+            await s.call("fs.stream_put", {
+                "path": remote_path, "offset": offset,
+                "length": total - offset,
+            }, timeout_s=30.0)
+            t.last_write_at = time.monotonic()
+            with local.open("rb") as fh:
+                fh.seek(offset)
+                while True:
+                    blk = fh.read(STREAM_BLOCK)
+                    if not blk:
+                        break
+                    await s.send_raw(blk, timeout_s=STREAM_BLOCK_TIMEOUT_S)
+            st = await s.call("fs.stat", {"path": remote_path},
+                              timeout_s=STREAM_BLOCK_TIMEOUT_S)
+            t.last_write_at = time.monotonic()
+            if int(st["size"]) != total:
+                raise RuntimeError(
+                    f"stream upload of {remote_path!r} ended at "
+                    f"{st['size']} bytes, expected {total}"
+                )
+            break
+        except Exception as e:
+            if not isinstance(e, StreamBroken) or attempts >= retries:
+                raise
+            attempts += 1
+            await asyncio.sleep(0.5 * attempts)
+            st = await t.request("fs.stat", {"path": remote_path}, timeout_s=30.0)
+            offset = int(st["size"])
+        finally:
+            await s.close()
+    return UploadStats(
+        path=remote_path,
+        bytes_total=total,
+        bytes_sent_compressed=total - resume_from,
+        chunks=1 + attempts,
+        compressed_chunks=0,
+        elapsed_s=time.monotonic() - t0,
+    )
+
+
+async def stream_download(
+    fleet: Fleet,
+    target: str,
+    remote_path: str,
+    local_path: str | Path,
+    *,
+    resume_from: int = 0,
+    retries: int = 3,
+) -> DownloadStats:
+    """Receive a file as raw bytes after one fs.stream_get. A broken
+    connection is resumed from the local file's size on a new stream
+    (up to `retries` times)."""
+    local = Path(local_path)
+    local.parent.mkdir(parents=True, exist_ok=True)
+    t = fleet.mcpd(target)
+    offset = resume_from
+    attempts = 0
+    total = 0
+    t0 = time.monotonic()
+    while True:
+        s = await t.open_stream()
+        try:
+            r = await s.call("fs.stream_get", {
+                "path": remote_path, "offset": offset,
+            }, timeout_s=30.0)
+            n = int(r["length"])
+            total = int(r["total_size"])
+            with local.open("ab" if offset > 0 else "wb") as fh:
+                if offset > 0:
+                    fh.truncate(offset)
+                got = 0
+                try:
+                    while got < n:
+                        data = await s.read_raw(min(STREAM_BLOCK, n - got),
+                                                timeout_s=STREAM_BLOCK_TIMEOUT_S)
+                        fh.write(data)
+                        got += len(data)
+                finally:
+                    offset += got
+            break
+        except Exception as e:
+            if not isinstance(e, StreamBroken) or attempts >= retries:
+                raise
+            attempts += 1
+            await asyncio.sleep(0.5 * attempts)
+        finally:
+            await s.close()
+    return DownloadStats(
+        path=str(local),
+        bytes_total=total,
+        chunks=1 + attempts,
         elapsed_s=time.monotonic() - t0,
     )

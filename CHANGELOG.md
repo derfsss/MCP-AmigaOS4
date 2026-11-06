@@ -1,5 +1,42 @@
 # Change log
 
+## 2.3 — Raw file streams (in progress on `develop`)
+
+Large files move as raw bytes instead of base64 inside JSON. The
+daemon gains two methods; the host tools use them by themselves and
+fall back on older daemons.
+
+### Added
+
+- **`fs.stream_get` / `fs.stream_put`** (MCPd): a JSON-RPC response
+  followed on the same connection by the file's raw bytes. 64-bit
+  offsets, 1 MiB disk calls, one connection per transfer. Errors that
+  can be found before the bytes flow (path, offset, open) are normal
+  JSON-RPC errors; a failure while they flow drops the connection.
+- **`transfer` on `fs_upload` / `fs_download`**: `"auto"` (default)
+  streams when the target's MCPd has the methods (uploads of 1 MiB
+  and more), `"stream"` requires them, `"chunked"` keeps the old path.
+  A stream that breaks resumes on a new connection from the size
+  already transferred. Results report which path was used.
+
+### Measured
+
+QEMU AmigaOne guest (virtio-net, user-mode networking), 128 MiB of
+random data, same boot, SHA-256 checked both ways:
+
+| | chunked | stream |
+|---|---|---|
+| upload, Roadshow | 5.93 MiB/s | 17.65 MiB/s |
+| download, Roadshow | 2.30 MiB/s | 4.19 MiB/s |
+| upload, rustsocket | 5.93 MiB/s | 14.90 MiB/s |
+| download, rustsocket | 2.56 MiB/s | 4.45 MiB/s |
+
+### Known
+
+- The chunked path with `compression="none"` and the default 24 MiB
+  chunk builds a frame just over the 32 MiB limit ("frame too large");
+  use a smaller `chunk_size`. Not changed in this cycle yet.
+
 ## 2.2 — Doctor and ready-made workflows
 
 2.2 adds a setup checker and ready-made workflows. Tools, parameters,

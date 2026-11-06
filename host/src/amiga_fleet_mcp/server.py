@@ -260,10 +260,18 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         compression: str = "auto",
         verify: bool = False,
         resume: bool = False,
+        transfer: str = "auto",
     ) -> fs_tool.UploadResult:
         """Transfer a host-side file to the target -- works for any
-        size and any byte content (binary-clean). Hides the chunk +
-        base64 + zlib mechanics:
+        size and any byte content (binary-clean).
+
+        `transfer="auto"` (default): files of 1 MiB and more go as a
+        raw byte stream (`fs.stream_put`, MCPd 2.3+) -- no base64, no
+        round trip per chunk, 64-bit offsets, and it resumes by itself
+        if the connection breaks; older daemons get the chunked path.
+        "stream" requires it, "chunked" never uses it. `chunk_size`
+        and `compression` apply to the chunked path only, which hides
+        the chunk + base64 + zlib mechanics:
 
           - **auto-chunks** files larger than fit in one JSON-RPC
             frame, sending each chunk via `fs.write_chunk` at
@@ -293,6 +301,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
             chunk_size=chunk_size,
             compression=cast(Literal["none", "zlib", "auto"], compression),
             verify=verify, resume=resume,
+            transfer=cast(fs_tool.Transfer, transfer),
         )
 
     @mcp.tool(name="fs_download", title="fs.download")
@@ -305,9 +314,17 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         chunk_size: int = 24 * 1024 * 1024,
         verify: bool = False,
         resume: bool = False,
+        transfer: str = "auto",
     ) -> fs_tool.DownloadResult:
         """Transfer a target file to the host -- works for any
-        size and any byte content (binary-clean). Hides the page +
+        size and any byte content (binary-clean).
+
+        `transfer="auto"` (default): a raw byte stream
+        (`fs.stream_get`, MCPd 2.3+) -- no base64, no round trip per
+        chunk, 64-bit offsets, and it resumes by itself if the
+        connection breaks; older daemons get the chunked path.
+        "stream" requires it, "chunked" never uses it. `chunk_size`
+        applies to the chunked path only, which hides the page +
         base64 mechanics:
 
           - **auto-pages** via repeated `fs.read(offset, length)`
@@ -321,11 +338,13 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
 
         `verify=True`: SHA-256 both sides via `fs.hash` + a local
         hashlib walk; raise on mismatch."""
+        from typing import cast
         return await fs_tool.fs_download(
             fleet, fleet.resolve_target(target),
             remote_path=remote_path, local_path=local_path,
             chunk_size=chunk_size,
             verify=verify, resume=resume,
+            transfer=cast(fs_tool.Transfer, transfer),
         )
 
     @mcp.tool(name="exec_cmd", title="exec.cmd")

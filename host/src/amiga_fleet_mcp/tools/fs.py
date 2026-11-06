@@ -298,6 +298,33 @@ class UploadResult(BaseModel):
     resumed_from: int = 0
     sha256_verified: bool = False
     sha256: str | None = None
+    #: "stream" (raw bytes, fs.stream_put) or "chunked" (fs.write_chunk).
+    transfer: str = "chunked"
+
+
+#: Files at least this big go as a raw stream under transfer="auto"
+#: when the daemon has it; smaller ones keep the chunked path (one
+#: request, and zlib can still pay off).
+STREAM_MIN_BYTES = 1024 * 1024
+
+Transfer = Literal["auto", "stream", "chunked"]
+
+
+async def _use_stream(fleet: Fleet, target: str, transfer: Transfer, size: int) -> bool:
+    from ..upload import stream_supported
+
+    if transfer == "chunked":
+        return False
+    if transfer == "auto" and size < STREAM_MIN_BYTES:
+        return False
+    ok = await stream_supported(fleet.mcpd(target))
+    if transfer == "stream" and not ok:
+        from ..errors import NotCapable
+        raise NotCapable(
+            "this target's MCPd has no fs.stream_put/fs.stream_get "
+            "(MCPd 2.3 or later); use transfer=\"chunked\"",
+        )
+    return ok
 
 
 class DownloadResult(BaseModel):
@@ -311,6 +338,7 @@ class DownloadResult(BaseModel):
     resumed_from: int = 0
     sha256_verified: bool = False
     sha256: str | None = None
+    transfer: str = "chunked"
 
 
 async def fs_upload(
@@ -323,10 +351,18 @@ async def fs_upload(
     compression: Literal["none", "zlib", "auto"] = "auto",
     verify: bool = False,
     resume: bool = False,
+    transfer: Transfer = "auto",
 ) -> UploadResult:
     """Transfer a host-side file to the target. Works for any size
     and any byte content: NUL bytes, 0xFF, UTF-8 sequences,
-    control characters all round-trip exactly. The wrapper:
+    control characters all round-trip exactly.
+
+    `transfer="auto"` (default) sends files of 1 MiB and more as a raw
+    byte stream (`fs.stream_put`, MCPd 2.3+: no base64, no round trip
+    per chunk, 64-bit offsets, resumes by itself if the connection
+    breaks) and falls back to the chunked path below on older daemons;
+    "stream" insists on it, "chunked" never uses it. `chunk_size` and
+    `compression` apply to the chunked path only. The chunked wrapper:
 
     1. **Auto-chunks** files larger than will fit in one JSON-RPC
        frame, sending each chunk via `fs.write_chunk` at
@@ -386,11 +422,22 @@ async def fs_upload(
             resume_from = 0  # remote file doesn't exist; full upload
 
     t0 = monotonic()
-    stats = await chunked_upload(
-        fleet, target, local, remote_path,
-        chunk_size=chunk_size, compression=compression,
-        resume_from=resume_from,
-    )
+    streamed = await _use_stream(fleet, target, transfer, total - resume_from)
+    if streamed:
+        from ..upload import stream_upload
+        stats = await stream_upload(
+            fleet, target, local, remote_path, resume_from=resume_from,
+        )
+        # A guest stopped soon after must get time to write back
+        # (qemu.stop reads last_write_at); flush it now anyway.
+        vol = remote_path.split(":", 1)[0] + ":" if ":" in remote_path else "SYS:"
+        await fs_sync(fleet, target, vol)
+    else:
+        stats = await chunked_upload(
+            fleet, target, local, remote_path,
+            chunk_size=chunk_size, compression=compression,
+            resume_from=resume_from,
+        )
 
     sha = None
     sha_ok = False
@@ -424,6 +471,7 @@ async def fs_upload(
         resumed_from=resume_from,
         sha256_verified=sha_ok,
         sha256=sha,
+        transfer="stream" if streamed else "chunked",
     )
 
 
@@ -436,9 +484,17 @@ async def fs_download(
     chunk_size: int = 24 * 1024 * 1024,
     verify: bool = False,
     resume: bool = False,
+    transfer: Transfer = "auto",
 ) -> DownloadResult:
     """Transfer a target file to the host. Works for any size and
-    any byte content. The wrapper:
+    any byte content.
+
+    `transfer="auto"` (default) receives the file as a raw byte stream
+    (`fs.stream_get`, MCPd 2.3+: no base64, no round trip per chunk,
+    64-bit offsets, resumes by itself if the connection breaks) and
+    falls back to the chunked path below on older daemons; "stream"
+    insists on it, "chunked" never uses it. `chunk_size` applies to the
+    chunked path only. The chunked wrapper:
 
     1. **Auto-pages** via repeated `fs.read(offset, length)`
        calls; one round-trip per `chunk_size` slice.
@@ -468,10 +524,18 @@ async def fs_download(
         resume_from = local.stat().st_size
 
     t0 = monotonic()
-    stats = await chunked_download(
-        fleet, target, remote_path, local,
-        chunk_size=chunk_size, resume_from=resume_from,
-    )
+    # Downloads have no compression to keep, so any size streams.
+    streamed = await _use_stream(fleet, target, transfer, STREAM_MIN_BYTES)
+    if streamed:
+        from ..upload import stream_download
+        stats = await stream_download(
+            fleet, target, remote_path, local, resume_from=resume_from,
+        )
+    else:
+        stats = await chunked_download(
+            fleet, target, remote_path, local,
+            chunk_size=chunk_size, resume_from=resume_from,
+        )
 
     sha = None
     sha_ok = False
@@ -502,4 +566,5 @@ async def fs_download(
         resumed_from=resume_from,
         sha256_verified=sha_ok,
         sha256=sha,
+        transfer="stream" if streamed else "chunked",
     )

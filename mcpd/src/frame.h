@@ -14,8 +14,9 @@
 /* Maximum payload size accepted by read_frame(). 32 MiB is enough to
  * cover most shipped AmigaOS 4 binaries plus base64 expansion overhead
  * with comfortable headroom; the X5000's 2 GiB makes the transient
- * allocation cost trivial. For arbitrarily-large transfers prefer
- * chunked fs.read / fs.write rather than raising this further. */
+ * allocation cost trivial. For arbitrarily-large transfers use
+ * fs.stream_get / fs.stream_put (raw bytes after the response,
+ * methods/stream.c) rather than raising this further. */
 #define MCPD_FRAME_MAX_PAYLOAD (32u * 1024u * 1024u)  /* 32 MiB */
 
 /* Read one framed message from `sock`. Allocates *out via the OS

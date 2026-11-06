@@ -268,6 +268,7 @@ static void handle_connection(int sock) {
         size_t resp_len = 0;
         if (rpc_dispatch(req, req_len, &resp, &resp_len) != 0) {
             frame_free(req);
+            if (ctx) mcpd_stream_cancel(ctx);
             return;
         }
         frame_free(req);
@@ -282,7 +283,15 @@ static void handle_connection(int sock) {
 
         int wrote = frame_write(sock, resp, resp_len);
         free(resp);
-        if (wrote != 0) return;
+        if (wrote != 0) {
+            if (ctx) mcpd_stream_cancel(ctx);
+            return;
+        }
+
+        /* fs.stream_get / fs.stream_put: the raw bytes follow the
+         * response at once, before WaitSelect's timeout path can put
+         * an event frame into them. */
+        if (ctx && mcpd_stream_run(ctx) != 0) return;
     }
 }
 

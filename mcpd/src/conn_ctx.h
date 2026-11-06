@@ -20,6 +20,7 @@
 #include <proto/exec.h>
 #include <proto/bsdsocket.h>
 #include <exec/tasks.h>
+#include <dos/dos.h>
 
 /* Per-task events.* subscription state. Was a single `_evs`
  * global in events.c, which meant only one
@@ -33,12 +34,34 @@ struct ev_state {
     void    *pending_synthetic;    /* opaque cJSON*; events.test_emit slot */
 };
 
+/* A raw byte stream that follows the current response on the wire
+ * (fs.stream_get / fs.stream_put, methods/stream.c). Set by the
+ * handler, run by handle_connection straight after the response
+ * frame is written, before the loop can write anything else (event
+ * frames) into the stream. fh == 0: no stream. */
+#define MCPD_STREAM_GET 1  /* file -> socket */
+#define MCPD_STREAM_PUT 2  /* socket -> file */
+struct mcpd_stream {
+    BPTR      fh;
+    int       dir;          /* MCPD_STREAM_GET / MCPD_STREAM_PUT */
+    long long remaining;    /* bytes still to move */
+};
+
 struct conn_ctx {
     struct Library     *socket_base; /* OpenLibrary("bsdsocket.library") */
     struct SocketIFace *isocket;     /* GetInterface(socket_base, "main") */
     int                 fd;          /* connection fd in this task's table */
     struct ev_state     ev;          /* per-task events subscription state */
+    struct mcpd_stream  stream;      /* raw bytes after this response */
 };
+
+/* Run the stream a handler set up, if any, and clear it (the file is
+ * closed on every path). 0: done or none; -1: the connection must be
+ * dropped (the peer cannot tell where the stream stopped). */
+int mcpd_stream_run(struct conn_ctx *ctx);
+
+/* Close and clear a stream that will not run (the response failed). */
+void mcpd_stream_cancel(struct conn_ctx *ctx);
 
 /* Returns the conn_ctx for the current task, or NULL when called
  * from the parent (or any task that hasn't set tc_UserData to a
