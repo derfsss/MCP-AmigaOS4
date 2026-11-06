@@ -35,11 +35,15 @@ from .fleet import Fleet
 from .tools import fs as fs_tool
 from .transports.mcpd import StreamBroken
 
-# Conservative chunk default: 24 MiB raw bytes.
-#   - base64 inflates by 4/3, so 24 MiB raw -> 32 MiB encoded
-#   - leaves ~0 MiB headroom for the JSON envelope (path, offsets etc.)
-#   - safer in practice if compression='auto' falls back to raw
+# Chunk default: 24 MiB raw bytes, as the tools document it. base64
+# makes 24 MiB exactly 32 MiB, the frame limit, with no room for the
+# JSON envelope, so a chunk that goes uncompressed (compression="none",
+# or "auto" on data zlib cannot shrink) failed "frame too large".
+# chunked_upload clamps every chunk to MAX_CHUNK_RAW instead.
 DEFAULT_CHUNK_RAW = 24 * 1024 * 1024
+#: The largest raw chunk whose base64 plus a 64 KiB envelope allowance
+#: fits one frame (MAX_FRAME_BYTES, 32 MiB).
+MAX_CHUNK_RAW = (32 * 1024 * 1024 - 64 * 1024) // 4 * 3
 
 
 @dataclass
@@ -80,6 +84,7 @@ async def chunked_upload(
     if not local.is_file():
         raise FileNotFoundError(f"local file does not exist: {local}")
     total = local.stat().st_size
+    chunk_size = max(1, min(chunk_size, MAX_CHUNK_RAW))
 
     sent_compressed = 0
     chunk_count = 0

@@ -435,3 +435,29 @@ async def test_round_trip_with_zlib_and_verify(
     )
     assert dst.read_bytes() == payload
     assert down.sha256_verified is True
+
+
+@pytest.mark.asyncio
+async def test_uncompressed_default_chunk_fits_one_frame(
+    fleet_with_fake: tuple[Fleet, FakeMcpd], tmp_path: Path,
+) -> None:
+    """24 MiB raw is exactly 32 MiB of base64, the frame limit, with no
+    room for the envelope: incompressible data under the defaults used
+    to fail "frame too large". Every request must now fit a frame."""
+    import json
+    import os
+
+    from amiga_fleet_mcp.transports.mcpd import MAX_FRAME_BYTES
+
+    fleet, fake = fleet_with_fake
+    src = tmp_path / "rand.bin"
+    src.write_bytes(os.urandom(25 * 1024 * 1024))
+    await fs_tool.fs_upload(
+        fleet, "x5000", local_path=str(src), remote_path="RAM:rand.bin",
+        transfer="chunked",
+    )
+    assert fake.files["RAM:rand.bin"] == src.read_bytes()
+    for method, params in fake.calls:
+        if method == "fs.write_chunk":
+            env = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+            assert len(json.dumps(env).encode()) <= MAX_FRAME_BYTES

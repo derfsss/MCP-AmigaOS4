@@ -31,11 +31,14 @@ random data, same boot, SHA-256 checked both ways:
 | upload, rustsocket | 5.93 MiB/s | 14.90 MiB/s |
 | download, rustsocket | 2.56 MiB/s | 4.45 MiB/s |
 
-### Known
+### Fixed
 
-- The chunked path with `compression="none"` and the default 24 MiB
-  chunk builds a frame just over the 32 MiB limit ("frame too large");
-  use a smaller `chunk_size`. Not changed in this cycle yet.
+- **Chunked uploads of incompressible data failed "frame too large".**
+  24 MiB of raw bytes is exactly 32 MiB of base64, the frame limit,
+  with no room for the request around it. Any chunk sent uncompressed
+  hit it: `compression="none"`, and also the default `"auto"` on data
+  zlib cannot shrink by 5% (archives, images, random data) of 24 MiB
+  or more. Chunks are now clamped to what fits a frame.
 
 ## 2.2 — Doctor and ready-made workflows
 
