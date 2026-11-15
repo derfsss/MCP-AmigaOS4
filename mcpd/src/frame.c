@@ -13,6 +13,9 @@
 
 #include "conn_ctx.h"
 
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
 /* Parent-task fallback. Multi-client child tasks open
  * their own bsdsocket interface and stash it in tc_UserData via a
  * conn_ctx struct - bsdsocket maintains task-local state, so the
@@ -200,7 +203,22 @@ int frame_write(int sock, const char *buf, size_t len) {
         }
         /* No memory for the copy: fall through to two sends. */
     }
-    if (write_n(sock, hdr, 4) != 0) return -1;
-    if (write_n(sock, buf, len) != 0) return -1;
-    return 0;
+    /* A large frame (an fs.read answer of up to 32 MiB) is bulk data:
+     * Nagle on while it goes, as for raw streams (stream.c). Without
+     * it Roadshow 1.15 sent it in small segments: chunked downloads
+     * fell from ~10 to 1 MiB/s on an X5000. Setting TCP_NODELAY again
+     * afterwards also sends what Nagle held. */
+    struct conn_ctx *c = mcpd_conn_ctx();
+    int nagle = c && c->nodelay && c->fd == sock && len > FRAME_COALESCE_MAX;
+    if (nagle) {
+        int off = 0;
+        nagle = _isk()->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
+                                   &off, sizeof(off)) == 0;
+    }
+    int rc = (write_n(sock, hdr, 4) != 0 || write_n(sock, buf, len) != 0) ? -1 : 0;
+    if (nagle) {
+        int on = 1;
+        _isk()->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    }
+    return rc;
 }

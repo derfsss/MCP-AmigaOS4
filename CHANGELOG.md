@@ -80,9 +80,9 @@ after; download 3.6-4.4 and 3.3-4.0).
   held the body until the header was acknowledged. Frames up to
   256 KiB now go out in one `send()`, and connections set
   `TCP_NODELAY`: Roadshow 1.15 cuts even one small `send()` into
-  ~100-byte pieces and Nagle held the rest. Raw streams turn Nagle
-  back on while they run (without it Roadshow sent a large `send()` in
-  small segments). Small requests: 15-16 ms -> about 1 ms on a QEMU
+  ~100-byte pieces and Nagle held the rest. Raw streams and frames
+  over 256 KiB (`fs.read` answers) turn Nagle back on while they go:
+  without it Roadshow sent a large `send()` in small segments. Small requests: 15-16 ms -> about 1 ms on a QEMU
   guest; 46-48 ms -> 0.2-0.3 ms on an AmigaOne X5000 over an I210.
 - **Resuming a broken upload could fail instead of resuming.** The
   host read the file's size straight after the break, while the
