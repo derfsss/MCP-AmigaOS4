@@ -300,9 +300,11 @@ class UploadResult(BaseModel):
     sha256: str | None = None
     #: "stream" (raw bytes, fs.stream_put) or "chunked" (fs.write_chunk).
     transfer: str = "chunked"
-    #: The stream's CRC-32 matched the target's (fs.stream_status,
-    #: MCPd 2.3+). Covers the bytes end to end; verify=True also
-    #: re-reads the file on the target for SHA-256.
+    #: One stream carried the whole file and its CRC-32 matched the
+    #: target's (fs.stream_status, MCPd 2.3+): checked end to end.
+    #: False after a resume (each later stream is still checked, but
+    #: the bytes of a broken one are not); verify=True re-reads the
+    #: file on the target for SHA-256 in every case.
     crc32_verified: bool = False
 
 

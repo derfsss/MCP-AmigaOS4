@@ -290,6 +290,16 @@ async def test_stream_crc_checked_and_corruption_redone(tmp_path: Path) -> None:
         up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:c")
         assert up.crc32_verified and up.chunks == 2
         assert bytes(d.files["DH0:c"]) == src.read_bytes()
+        # A broken (then resumed) stream leaves bytes unchecked.
+        d.break_put_after = 700_000
+        up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:c")
+        assert up.chunks == 2 and not up.crc32_verified
+        assert bytes(d.files["DH0:c"]) == src.read_bytes()
+        d.break_get_after = 900_001
+        dst2 = tmp_path / "c2.bin"
+        down = await fs_tool.fs_download(fleet, "q", remote_path="DH0:c", local_path=str(dst2))
+        assert down.chunks == 2 and not down.crc32_verified
+        assert dst2.read_bytes() == src.read_bytes()
         d.corrupt_get_once = True
         dst = tmp_path / "c.bin"
         down = await fs_tool.fs_download(fleet, "q", remote_path="DH0:c", local_path=str(dst))
@@ -316,6 +326,7 @@ async def test_broken_put_with_late_writes_resumes(
     try:
         up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:late")
         assert bytes(daemon.files["DH0:late"]) == src.read_bytes()
+        assert not up.crc32_verified  # this daemon has no fs.stream_status
         assert up.chunks >= 2
     finally:
         await fleet.mcpd("q").close()

@@ -461,3 +461,27 @@ async def test_uncompressed_default_chunk_fits_one_frame(
         if method == "fs.write_chunk":
             env = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
             assert len(json.dumps(env).encode()) <= MAX_FRAME_BYTES
+
+
+@pytest.mark.asyncio
+async def test_default_read_chunk_fits_one_frame(
+    fleet_with_fake: tuple[Fleet, FakeMcpd], tmp_path: Path,
+) -> None:
+    """The same for downloads: a 24 MiB fs.read answers with 32 MiB of
+    base64 plus its envelope, more than a frame, and the daemon dropped
+    the connection. Every read must ask for no more than fits."""
+    import os
+
+    from amiga_fleet_mcp.upload import MAX_CHUNK_RAW
+
+    fleet, fake = fleet_with_fake
+    data = os.urandom(25 * 1024 * 1024)
+    fake.files["RAM:big.bin"] = data
+    dst = tmp_path / "big.bin"
+    await fs_tool.fs_download(
+        fleet, "x5000", remote_path="RAM:big.bin", local_path=str(dst),
+        transfer="chunked",
+    )
+    assert dst.read_bytes() == data
+    reads = [p for m, p in fake.calls if m == "fs.read"]
+    assert reads and all(int(p["length"]) <= MAX_CHUNK_RAW for p in reads)

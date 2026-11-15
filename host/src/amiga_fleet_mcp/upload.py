@@ -55,7 +55,9 @@ class UploadStats:
     chunks: int
     compressed_chunks: int
     elapsed_s: float
-    #: Every stream's CRC-32 matched fs.stream_status (streams only).
+    #: One stream carried the whole file and its CRC-32 matched
+    #: fs.stream_status (streams only). False after a resume: bytes
+    #: moved by a stream that broke are not covered.
     crc_checked: bool = False
 
     @property
@@ -185,13 +187,17 @@ class DownloadStats:
     bytes_total: int
     chunks: int
     elapsed_s: float
-    #: Every stream's CRC-32 matched fs.stream_status (streams only).
+    #: One stream carried the whole file and its CRC-32 matched
+    #: fs.stream_status (streams only). False after a resume: bytes
+    #: moved by a stream that broke are not covered.
     crc_checked: bool = False
 
 
-# Conservative read default: 24 MiB raw bytes per fs.read call.
-# fs.read returns raw bytes (no compression on this side yet) so
-# stays comfortably under the 32 MiB framing cap after base64.
+# Read default: 24 MiB raw bytes per fs.read call, as the tools
+# document it. fs.read's answer is base64 (no compression on this side
+# yet), and 24 MiB of it is exactly the 32 MiB frame limit with no room
+# for the envelope: the daemon could not send it and dropped the
+# connection. chunked_download clamps every read to MAX_CHUNK_RAW.
 DEFAULT_READ_RAW = 24 * 1024 * 1024
 
 
@@ -218,6 +224,7 @@ async def chunked_download(
     """
     local = Path(local_path)
     local.parent.mkdir(parents=True, exist_ok=True)
+    chunk_size = max(1, min(chunk_size, MAX_CHUNK_RAW))
 
     # Probe remote size via fs.stat so we know when to stop.
     t = fleet.mcpd(target)
@@ -414,7 +421,7 @@ async def stream_upload(
                 )
             if with_crc:
                 await _check_crc(s, crc, total - offset, remote_path)
-                crc_checked = True
+                crc_checked = offset == 0
             break
         except Exception as e:
             retryable = isinstance(e, (StreamBroken, StreamCorrupt)) or (
@@ -497,7 +504,7 @@ async def stream_download(
                     offset += got
             if with_crc:
                 await _check_crc(s, crc, n, remote_path)
-                crc_checked = True
+                crc_checked = start == 0
             break
         except Exception as e:
             if not isinstance(e, (StreamBroken, StreamCorrupt)) or attempts >= retries:

@@ -20,8 +20,10 @@ fall back on older daemons.
   already transferred. Results report which path was used.
 - **`fs.stream_status`** (MCPd): the CRC-32 of the bytes the last
   stream on the connection moved. `fs_upload` / `fs_download` check
-  every stream against their own CRC-32 when the daemon has it, report
-  `crc32_verified`, and send or fetch a stream again on a mismatch.
+  every stream against their own CRC-32 when the daemon has it, send
+  or fetch a stream again on a mismatch, and report `crc32_verified`
+  (true when one checked stream carried the whole file; a resumed
+  transfer leaves the broken stream's bytes unchecked).
   TCP's checksum does not cover the bytes before the network card when
   the card computes it, so this is the end-to-end check;
   `verify=True` (SHA-256 of the whole file) stays available.
@@ -45,7 +47,7 @@ and rustsocket, each with the new daemon:
 |---|---|---|
 | host stops reading a 256 MiB `fs.stream_get` | dropped after 126 s (before: never) | dropped after 128 s |
 | host stops sending in an `fs.stream_put` | dropped after 120 s (before: never) | dropped after 121 s |
-| upload and download broken once by the host | resumed, CRC-32 and SHA-256 match | the same |
+| upload and download broken once by the host | resumed, SHA-256 matches | the same |
 | idle connection, 390 s | answers | answers |
 | small request (`proto.version`), median | 3.2-16 ms -> 0.8-2.0 ms | 1.4-2.2 ms -> 1.4-1.5 ms |
 
@@ -63,8 +65,9 @@ after; download 3.6-4.4 and 3.3-4.0).
   non-blocking: each read and write is tried, waits with `WaitSelect`
   only when it would block, and the connection is dropped after 120 s
   without progress, on any stack.
-  The socket options and `SO_KEEPALIVE` are still set; stacks that
-  honour them drop dead idle connections too.
+  The socket options and `SO_KEEPALIVE` are still set, for stacks
+  that honour them (how soon a dead idle connection goes depends on
+  the stack's keepalive timing; not measured).
 - **Responses waited for the host's delayed ACK on Roadshow.** The
   daemon sent a frame's 4-byte header and its body in two `send()`
   calls, so Nagle held the body until the header was acknowledged:
@@ -82,6 +85,11 @@ after; download 3.6-4.4 and 3.3-4.0).
   hit it: `compression="none"`, and also the default `"auto"` on data
   zlib cannot shrink by 5% (archives, images, random data) of 24 MiB
   or more. Chunks are now clamped to what fits a frame.
+- **Chunked downloads of 24 MiB or more failed.** The same limit the
+  other way: a 24 MiB `fs.read` answers with 32 MiB of base64 plus the
+  envelope, so the daemon could not send it and dropped the
+  connection (`transfer="chunked"`, or any download from a daemon
+  without streams). Reads are now clamped the same way.
 
 ## 2.2 — Doctor and ready-made workflows
 
