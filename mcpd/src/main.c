@@ -17,6 +17,7 @@
 #include <proto/z.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/filio.h>
 #include <errno.h>
 
@@ -422,6 +423,17 @@ static void client_task_entry(void) {
     int ka = 1;
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_KEEPALIVE,
                             &ka, sizeof(ka));
+
+    /* No Nagle: a response must not wait for the peer's delayed ACK.
+     * Roadshow 1.15 cuts even a single small send() into ~100-byte
+     * mbufs and sends only the first at once; with Nagle on, the rest
+     * waited ~45 ms for the PC's delayed ACK (X5000, I210). Raw
+     * streams turn it back on while they run (stream.c): without
+     * Nagle, Roadshow sent a 1 MiB send() in small segments and
+     * downloads fell from 54 to 2 MiB/s. Best-effort, as above. */
+    int nd = 1;
+    ctx.nodelay = ctx.isocket->setsockopt(ctx.fd, IPPROTO_TCP, TCP_NODELAY,
+                                          &nd, sizeof(nd)) == 0;
 
     /* Non-blocking: frame.c tries each recv / send and waits with
      * WaitSelect, at most MCPD_IO_TIMEOUT_S, only when it would block.

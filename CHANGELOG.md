@@ -51,7 +51,14 @@ and rustsocket, each with the new daemon:
 | idle connection, 390 s | answers | answers |
 | small request (`proto.version`), median | 3.2-16 ms -> 0.8-2.0 ms | 1.4-2.2 ms -> 1.4-1.5 ms |
 
-Stream speeds are unchanged within the run-to-run spread (Roadshow,
+AmigaOne X5000 (I210, igb.device), 256 MiB to RAM:, SHA-256 checked,
+one fresh boot per run: Roadshow, old daemon 34.8 / 24.9 and 64.1 /
+66.4 MiB/s up / down, small requests 46-48 ms; new daemon 55.2 / 54.7
+and 53.6 / 56.0 MiB/s, 0.2-0.3 ms. rustsocket, new daemon: 50.0 /
+51.3 MiB/s, 0.3 ms. Stalls, resume, idle and the method sweep pass on
+both stacks there too.
+
+Stream speeds on QEMU are unchanged within the run-to-run spread (Roadshow,
 three alternating pairs: upload 15.3-19.9 MiB/s before, 15.0-17.6
 after; download 3.6-4.4 and 3.3-4.0).
 
@@ -68,11 +75,15 @@ after; download 3.6-4.4 and 3.3-4.0).
   The socket options and `SO_KEEPALIVE` are still set, for stacks
   that honour them (how soon a dead idle connection goes depends on
   the stack's keepalive timing; not measured).
-- **Responses waited for the host's delayed ACK on Roadshow.** The
-  daemon sent a frame's 4-byte header and its body in two `send()`
-  calls, so Nagle held the body until the header was acknowledged:
-  small requests took 15-16 ms instead of about 1 ms on a QEMU guest.
-  Frames up to 256 KiB now go out in one `send()`.
+- **Responses waited for the host's delayed ACK.** The daemon sent a
+  frame's 4-byte header and its body in two `send()` calls, so Nagle
+  held the body until the header was acknowledged. Frames up to
+  256 KiB now go out in one `send()`, and connections set
+  `TCP_NODELAY`: Roadshow 1.15 cuts even one small `send()` into
+  ~100-byte pieces and Nagle held the rest. Raw streams turn Nagle
+  back on while they run (without it Roadshow sent a large `send()` in
+  small segments). Small requests: 15-16 ms -> about 1 ms on a QEMU
+  guest; 46-48 ms -> 0.2-0.3 ms on an AmigaOne X5000 over an I210.
 - **Resuming a broken upload could fail instead of resuming.** The
   host read the file's size straight after the break, while the
   daemon could still be writing what it had buffered and still held

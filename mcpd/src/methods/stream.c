@@ -45,6 +45,8 @@
 #include <string.h>
 
 #include <proto/bsdsocket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <dos/dos.h>
@@ -276,6 +278,15 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
     uint32_t crc = 0;
     long long moved = 0;
 
+    /* Nagle on for the raw bytes (main.c turned it off for frames):
+     * without it Roadshow sends a large send() in small segments. */
+    int nagle_toggled = 0;
+    if (ctx->nodelay && rem > 0) {
+        int off = 0;
+        nagle_toggled = ctx->isocket->setsockopt(ctx->fd, IPPROTO_TCP,
+            TCP_NODELAY, &off, sizeof(off)) == 0;
+    }
+
     char *buf = NULL;
     if (rem > 0) {
         buf = (char *)IExec->AllocVecTags(STREAM_BUF,
@@ -325,6 +336,12 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
     }
 
     if (buf) IExec->FreeVec(buf);
+    if (nagle_toggled) {
+        /* Back to no Nagle; setting it also sends what Nagle held. */
+        int on = 1;
+        ctx->isocket->setsockopt(ctx->fd, IPPROTO_TCP, TCP_NODELAY,
+                                 &on, sizeof(on));
+    }
     ctx->last.valid = 1;
     ctx->last.dir = dir;
     ctx->last.offset = ctx->stream.offset;
