@@ -49,7 +49,12 @@ extern int input_is_enabled(void);
  * an idle client between frames is handled by WaitSelect rather than
  * this. Without it, a peer that sends a frame header and then stops
  * parks a worker Process for the uptime of the daemon. */
-#define MCPD_RECV_TIMEOUT_S 120
+#define MCPD_RECV_TIMEOUT_S MCPD_IO_TIMEOUT_S
+
+/* How long one send() may make no progress before the connection is
+ * dropped: a peer that has stopped reading (or is gone) must not hold
+ * a worker, and a stream's file, forever. */
+#define MCPD_SEND_TIMEOUT_S MCPD_IO_TIMEOUT_S
 
 /* MCPD_MAX_CLIENTS (live connection workers) is in rpc.h. */
 
@@ -398,6 +403,24 @@ static void client_task_entry(void) {
     rcv_to.tv_usec = 0;
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_RCVTIMEO,
                             &rcv_to, sizeof(rcv_to));
+
+    /* Send timeout, the same window: a peer that stops reading (or
+     * vanishes) mid-response or mid fs.stream_get would otherwise
+     * block send() for good, holding this worker's slot and the
+     * stream's file. Best-effort, as above. */
+    struct timeval snd_to;
+    snd_to.tv_sec = MCPD_SEND_TIMEOUT_S;
+    snd_to.tv_usec = 0;
+    ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_SNDTIMEO,
+                            &snd_to, sizeof(snd_to));
+
+    /* Keepalive: an idle connection whose peer has gone (host crashed,
+     * cable pulled) is dropped by the stack instead of holding a
+     * worker. How soon depends on the stack (minutes on some, hours
+     * on classic BSD defaults); best-effort, ignored where refused. */
+    int ka = 1;
+    ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_KEEPALIVE,
+                            &ka, sizeof(ka));
 
     /* Wire the conn_ctx into tc_UserData so frame.c's _isk() finds
      * us. (Replaces the inherited socket_id we read above.) */

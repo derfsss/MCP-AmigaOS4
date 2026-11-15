@@ -48,6 +48,7 @@ SRCS = \
   $(SRC_DIR)/rpc.c \
   $(SRC_DIR)/b64.c \
   $(SRC_DIR)/sha256.c \
+  $(SRC_DIR)/crc32.c \
   $(SRC_DIR)/discovery.c \
   $(SRC_DIR)/crashhook.c \
   $(SRC_DIR)/jobs.c \

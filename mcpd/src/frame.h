@@ -37,4 +37,19 @@ void frame_free(char *buf);
  * Returns 0 on success, -1 on error. */
 int frame_write(int sock, const char *buf, size_t len);
 
+/* How long a connection may make no progress, reading or writing,
+ * before it is dropped. Kept by frame_recv_some / frame_send_all with
+ * WaitSelect, so it holds on every stack (SO_RCVTIMEO / SO_SNDTIMEO
+ * are also set, but Roadshow 1.15 ignores them). */
+#define MCPD_IO_TIMEOUT_S 120
+
+/* recv() of up to `n` bytes once `sock` is readable: the count, 0 at
+ * the end of the stream, -1 on error, a break, or MCPD_IO_TIMEOUT_S
+ * of silence. Uses the calling task's bsdsocket interface. */
+long frame_recv_some(int sock, void *buf, size_t n);
+
+/* Send all `n` bytes: 0, or -1 on error, a break, or
+ * MCPD_IO_TIMEOUT_S without progress (the peer stopped reading). */
+int frame_send_all(int sock, const void *buf, size_t n);
+
 #endif /* MCPD_FRAME_H */

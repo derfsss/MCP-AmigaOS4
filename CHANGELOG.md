@@ -18,6 +18,13 @@ fall back on older daemons.
   and more), `"stream"` requires them, `"chunked"` keeps the old path.
   A stream that breaks resumes on a new connection from the size
   already transferred. Results report which path was used.
+- **`fs.stream_status`** (MCPd): the CRC-32 of the bytes the last
+  stream on the connection moved. `fs_upload` / `fs_download` check
+  every stream against their own CRC-32 when the daemon has it, report
+  `crc32_verified`, and send or fetch a stream again on a mismatch.
+  TCP's checksum does not cover the bytes before the network card when
+  the card computes it, so this is the end-to-end check;
+  `verify=True` (SHA-256 of the whole file) stays available.
 
 ### Measured
 
@@ -33,6 +40,26 @@ random data, same boot, SHA-256 checked both ways:
 
 ### Fixed
 
+- **A peer that stopped reading or sending held a connection for
+  good on some stacks.** The daemon relied on `SO_RCVTIMEO`, which
+  Roadshow 1.15 ignores (as it ignores `SO_SNDTIMEO`): a host that
+  vanished in the middle of a frame or a stream left the worker, and
+  a stream's file, held until the next reboot. Every read and write on
+  a connection now waits with `WaitSelect` (writes non-blocking) and
+  drops the connection after 120 s without progress, on any stack.
+  The socket options and `SO_KEEPALIVE` are still set; stacks that
+  honour them drop dead idle connections too.
+- **Responses waited for the host's delayed ACK on Roadshow.** The
+  daemon sent a frame's 4-byte header and its body in two `send()`
+  calls, so Nagle held the body until the header was acknowledged:
+  small requests took 15-16 ms instead of about 1 ms on a QEMU guest.
+  Frames up to 256 KiB now go out in one `send()`.
+- **Resuming a broken upload could fail instead of resuming.** The
+  host read the file's size straight after the break, while the
+  daemon could still be writing what it had buffered and still held
+  the file open, so the resumed `fs.stream_put` was refused. The host
+  now closes the broken stream, waits for the size to stop changing,
+  and retries a refused resume.
 - **Chunked uploads of incompressible data failed "frame too large".**
   24 MiB of raw bytes is exactly 32 MiB of base64, the frame limit,
   with no room for the request around it. Any chunk sent uncompressed
