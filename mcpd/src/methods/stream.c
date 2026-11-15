@@ -237,6 +237,10 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
     long long rem = ctx->stream.remaining;
     int rc = 0;
 
+    /* The bytes move here, after the RPC that set the stream up has
+     * returned: hold the blanker away for them too (applib.c). */
+    applib_blanker_hold();
+
     char *buf = NULL;
     if (rem > 0) {
         buf = (char *)IExec->AllocVecTags(STREAM_BUF,
@@ -278,5 +282,6 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
     /* Close before the next request is read, so the client's fs.stat
      * on this connection sees the whole file. */
     mcpd_stream_cancel(ctx);
+    applib_blanker_release();
     return rc;
 }

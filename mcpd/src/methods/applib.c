@@ -16,6 +16,8 @@
 #include <string.h>
 
 #include <proto/exec.h>
+#include <proto/dos.h>
+#include <dos/dosextens.h>
 
 #include <libraries/application.h>
 #include <interfaces/application.h>
@@ -58,6 +60,8 @@ static void _applib_close(void) {
 }
 
 
+static void _bl_init(void);
+
 /* Public: called once at MCPd startup from main.c. Best-effort. */
 void applib_register(void) {
     if (!_applib_open()) return;
@@ -69,10 +73,167 @@ void applib_register(void) {
         REGAPP_Hidden,         (Tag)TRUE,
         REGAPP_AllowsBlanker,  (Tag)TRUE,
         TAG_END);
+    if (_our_appID) _bl_init();
+}
+
+
+/* ---- the blanker during file transfers --------------------------
+ *
+ * A transfer has no user input for its whole length, so a screen
+ * blanker starts in the middle of it; on the X5000 an animated blanker
+ * then took enough CPU that the network stalled and uploads timed out.
+ * application.library AutoDoc (RegisterApplication, REGAPP_AllowsBlanker;
+ * SetApplicationAttrs, APPATTR_AllowsBlanker): an application that does
+ * not want a blanker in front sets AllowsBlanker FALSE, the system
+ * broadcasts APPLIBMT_BlankerDisallow, and a blanker that is already
+ * blanking "has to immediately stop doing so"; TRUE broadcasts
+ * APPLIBMT_BlankerAllow. The user's blanker settings are not touched
+ * (screenblanker.library's SetBlankingMode would change them
+ * machine-wide).
+ *
+ * Holds are counted across the connection workers (one semaphore).
+ * The first hold sets FALSE. TRUE comes back only after BL_LINGER_S
+ * seconds with no transfer, from a small linger process, so the gaps
+ * between the chunks of one upload do not let the blanker in. The
+ * linger process is the jobs.c pattern: its death message goes to a
+ * port that ignores signals, drained with GetMsg; shutdown waits for it.
+ */
+#define BL_LINGER_S 30
+#define BL_TICK_S   5
+
+static struct SignalSemaphore *g_bl_sem;
+static struct MsgPort         *g_bl_port;   /* the linger process's death message */
+static struct DeathMessage     g_bl_dm;
+static int                     g_bl_holds;  /* transfers running now */
+static int                     g_bl_idle_s; /* seconds since the last one ended */
+static int                     g_bl_off;    /* AllowsBlanker is FALSE (ours) */
+static int                     g_bl_alive;  /* a linger process exists */
+static volatile int            g_bl_quit;
+
+/* Caller holds g_bl_sem. */
+static void _bl_drain_locked(void) {
+    struct Message *m;
+    while ((m = IExec->GetMsg(g_bl_port)) != NULL) {
+        if (m == &g_bl_dm.dm_Msg) g_bl_alive = 0;
+    }
+}
+
+/* Caller holds g_bl_sem. */
+static void _bl_allow_locked(void) {
+    if (g_bl_off && _IApp && _our_appID) {
+        _IApp->SetApplicationAttrs(_our_appID,
+            APPATTR_AllowsBlanker, (Tag)TRUE, TAG_END);
+    }
+    g_bl_off = 0;
+}
+
+static int32 _bl_linger_entry(STRPTR args, int32 len, struct ExecBase *sysbase) {
+    (void)args; (void)len; (void)sysbase;
+    for (;;) {
+        IDOS->Delay(BL_TICK_S * TICKS_PER_SECOND);
+        IExec->ObtainSemaphore(g_bl_sem);
+        int done = 0;
+        if (g_bl_quit) {
+            done = 1;
+        } else if (g_bl_holds == 0) {
+            g_bl_idle_s += BL_TICK_S;
+            if (g_bl_idle_s >= BL_LINGER_S) {
+                _bl_allow_locked();
+                done = 1;
+            }
+        }
+        IExec->ReleaseSemaphore(g_bl_sem);
+        if (done) break;
+    }
+    return 0;
+}
+
+/* Caller holds g_bl_sem. 1 if a linger process now runs. */
+static int _bl_start_linger_locked(void) {
+    _bl_drain_locked();
+    if (g_bl_alive) return 1;
+    if (g_bl_quit) return 0;
+    memset(&g_bl_dm, 0, sizeof(g_bl_dm));
+    g_bl_dm.dm_Msg.mn_ReplyPort = g_bl_port;
+    g_bl_dm.dm_Msg.mn_Length = sizeof(g_bl_dm);
+    struct Process *p = IDOS->CreateNewProcTags(
+        NP_Entry,                (Tag)_bl_linger_entry,
+        NP_Name,                 (Tag)"MCPd blanker hold",
+        NP_Priority,             0,
+        NP_StackSize,            16384,
+        NP_Child,                FALSE,
+        NP_NotifyOnDeathMessage, (Tag)&g_bl_dm,
+        TAG_DONE);
+    if (!p) return 0;
+    g_bl_alive = 1;
+    return 1;
+}
+
+/* Public: a file transfer starts (rpc.c, stream.c). Any process. */
+void applib_blanker_hold(void) {
+    if (!g_bl_sem || !_IApp || !_our_appID) return;
+    IExec->ObtainSemaphore(g_bl_sem);
+    g_bl_holds++;
+    g_bl_idle_s = 0;
+    if (!g_bl_off) {
+        _IApp->SetApplicationAttrs(_our_appID,
+            APPATTR_AllowsBlanker, (Tag)FALSE, TAG_END);
+        g_bl_off = 1;
+    }
+    IExec->ReleaseSemaphore(g_bl_sem);
+}
+
+/* Public: the transfer ended. The linger process restores the blanker;
+ * without one (CreateNewProc refused) it is restored here, at once. */
+void applib_blanker_release(void) {
+    if (!g_bl_sem || !_IApp || !_our_appID) return;
+    IExec->ObtainSemaphore(g_bl_sem);
+    if (g_bl_holds > 0) g_bl_holds--;
+    g_bl_idle_s = 0;
+    if (g_bl_holds == 0 && g_bl_off && !_bl_start_linger_locked()) {
+        _bl_allow_locked();
+    }
+    IExec->ReleaseSemaphore(g_bl_sem);
+}
+
+static void _bl_init(void) {
+    g_bl_sem = (struct SignalSemaphore *)IExec->AllocSysObjectTags(
+        ASOT_SEMAPHORE, TAG_END);
+    g_bl_port = (struct MsgPort *)IExec->AllocSysObjectTags(
+        ASOT_PORT, ASOPORT_Action, PA_IGNORE, ASOPORT_AllocSig, FALSE,
+        TAG_END);
+    if (!g_bl_sem || !g_bl_port) {
+        if (g_bl_port) IExec->FreeSysObject(ASOT_PORT, g_bl_port);
+        if (g_bl_sem) IExec->FreeSysObject(ASOT_SEMAPHORE, g_bl_sem);
+        g_bl_sem = NULL; g_bl_port = NULL;
+    }
+}
+
+static void _bl_shutdown(void) {
+    if (!g_bl_sem) return;
+    g_bl_quit = 1;
+    for (;;) {
+        IExec->ObtainSemaphore(g_bl_sem);
+        _bl_drain_locked();
+        int alive = g_bl_alive;
+        IExec->ReleaseSemaphore(g_bl_sem);
+        if (!alive) break;
+        /* The death message is written into g_bl_dm when the process
+         * ends; freeing the port first would have DOS reply into freed
+         * memory. At most one BL_TICK_S. */
+        IDOS->Delay(TICKS_PER_SECOND);
+    }
+    IExec->ObtainSemaphore(g_bl_sem);
+    _bl_allow_locked();
+    IExec->ReleaseSemaphore(g_bl_sem);
+    IExec->FreeSysObject(ASOT_PORT, g_bl_port);
+    IExec->FreeSysObject(ASOT_SEMAPHORE, g_bl_sem);
+    g_bl_sem = NULL; g_bl_port = NULL;
 }
 
 
 void applib_shutdown(void) {
+    _bl_shutdown();
     if (_IApp && _our_appID) {
         _IApp->UnregisterApplication(_our_appID, TAG_END);
         _our_appID = 0;

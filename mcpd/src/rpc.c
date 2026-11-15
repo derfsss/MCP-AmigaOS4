@@ -36,6 +36,17 @@ static const method_entry *find_method(const char *name) {
     return NULL;
 }
 
+/* The methods that move file contents over the link. */
+static int is_transfer_method(const char *name) {
+    static const char *const xfer[] = {
+        "fs.read", "fs.write", "fs.write_chunk", "fs.stream_get", "fs.stream_put", NULL
+    };
+    for (int i = 0; xfer[i]; i++) {
+        if (strcmp(name, xfer[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 int rpc_dispatch(const char *req, size_t req_len,
                  char **out, size_t *out_len) {
     cJSON *root = cJSON_ParseWithLength(req, req_len);
@@ -60,7 +71,13 @@ int rpc_dispatch(const char *req, size_t req_len,
                 err = rpc_make_error(-32601, "Method not found", data);
             } else {
                 cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
+                /* A file transfer keeps the screen blanker away for its
+                 * length (applib.c has the why). A raw stream's bytes
+                 * move after this returns; stream.c holds for those. */
+                int xfer = is_transfer_method(m->name);
+                if (xfer) applib_blanker_hold();
                 int rc = m->handler(params, &result, &err);
+                if (xfer) applib_blanker_release();
                 (void)rc;
             }
         }

@@ -114,4 +114,9 @@ MCPD_HANDLER(app_notify);
 
 #undef MCPD_HANDLER
 
+/* applib.c: keep the screen blanker away while a file transfer runs
+ * (rpc.c around the transfer methods, stream.c around a raw stream). */
+void applib_blanker_hold(void);
+void applib_blanker_release(void);
+
 #endif
