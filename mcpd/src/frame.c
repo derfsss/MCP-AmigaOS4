@@ -13,8 +13,6 @@
 
 #include "conn_ctx.h"
 
-#include <sys/filio.h>
-
 /* Parent-task fallback. Multi-client child tasks open
  * their own bsdsocket interface and stash it in tc_UserData via a
  * conn_ctx struct - bsdsocket maintains task-local state, so the
@@ -64,26 +62,41 @@ static int wait_io(struct SocketIFace *isk, int sock, int for_write) {
     return r < 0 ? -1 : (r > 0 ? 1 : 0);
 }
 
+/* Whether `sock` is this worker's connection, set non-blocking when
+ * the worker started (main.c). Then every call is tried first and
+ * WaitSelect runs only when it would block, so the time limit costs
+ * nothing while data flows. */
+static int nonblocking(int sock) {
+    struct conn_ctx *c = mcpd_conn_ctx();
+    return c && c->nbio && c->fd == sock;
+}
+
 long frame_recv_some(int sock, void *buf, size_t n) {
     struct SocketIFace *isk = _isk();
-    if (wait_io(isk, sock, 0) != 1) return -1;
-    /* Readable: a blocking recv returns what is there (or 0 at EOF). */
-    long got = isk->recv(sock, buf, n, 0);
-    return got < 0 ? -1 : got;
+    if (!nonblocking(sock)) {
+        /* Blocking socket (the stack refused FIONBIO): wait first, then
+         * recv returns what is there (or 0 at EOF). */
+        if (wait_io(isk, sock, 0) != 1) return -1;
+        long got = isk->recv(sock, buf, n, 0);
+        return got < 0 ? -1 : got;
+    }
+    for (;;) {
+        long got = isk->recv(sock, buf, n, 0);
+        if (got >= 0) return got;
+        if (isk->Errno() != BSD_EAGAIN || wait_io(isk, sock, 0) != 1)
+            return -1;
+    }
 }
 
 int frame_send_all(int sock, const void *buf, size_t n) {
     struct SocketIFace *isk = _isk();
     const char *p = (const char *)buf;
-    /* Non-blocking for the length of this call, so a peer that stops
-     * reading costs at most MCPD_IO_TIMEOUT_S without progress, not
-     * forever: a blocking send() waits until all of it is queued. */
-    LONG on = 1;
-    int nb = isk->IoctlSocket(sock, FIONBIO, (char *)&on) == 0;
-    int rc = 0;
+    int nb = nonblocking(sock);
     while (n > 0) {
         /* AmigaOS bsdsocket send() takes APTR (non-const); cast away
-         * const since we don't write to the buffer. */
+         * const since we don't write to the buffer. On a blocking
+         * socket the stack's SO_SNDTIMEO (where honoured) is the only
+         * limit. */
         long sent = isk->send(sock, (char *)(uintptr_t)p, n, 0);
         if (sent > 0) {
             p += sent;
@@ -94,14 +107,9 @@ int frame_send_all(int sock, const void *buf, size_t n) {
             wait_io(isk, sock, 1) == 1) {
             continue;
         }
-        rc = -1;
-        break;
+        return -1;
     }
-    if (nb) {
-        LONG off = 0;
-        isk->IoctlSocket(sock, FIONBIO, (char *)&off);
-    }
-    return rc;
+    return 0;
 }
 
 static int read_n(int sock, void *buf, size_t n) {

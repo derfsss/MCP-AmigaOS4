@@ -38,15 +38,31 @@ random data, same boot, SHA-256 checked both ways:
 | upload, rustsocket | 5.93 MiB/s | 14.90 MiB/s |
 | download, rustsocket | 2.56 MiB/s | 4.45 MiB/s |
 
+Checks and limits, QEMU AmigaOne guests (virtio-net), Roadshow 1.15
+and rustsocket, each with the new daemon:
+
+| | Roadshow | rustsocket |
+|---|---|---|
+| host stops reading a 256 MiB `fs.stream_get` | dropped after 126 s (before: never) | dropped after 128 s |
+| host stops sending in an `fs.stream_put` | dropped after 120 s (before: never) | dropped after 121 s |
+| upload and download broken once by the host | resumed, CRC-32 and SHA-256 match | the same |
+| idle connection, 390 s | answers | answers |
+| small request (`proto.version`), median | 3.2-16 ms -> 0.8-2.0 ms | 1.4-2.2 ms -> 1.4-1.5 ms |
+
+Stream speeds are unchanged within the run-to-run spread (Roadshow,
+three alternating pairs: upload 15.3-19.9 MiB/s before, 15.0-17.6
+after; download 3.6-4.4 and 3.3-4.0).
+
 ### Fixed
 
 - **A peer that stopped reading or sending held a connection for
   good on some stacks.** The daemon relied on `SO_RCVTIMEO`, which
   Roadshow 1.15 ignores (as it ignores `SO_SNDTIMEO`): a host that
   vanished in the middle of a frame or a stream left the worker, and
-  a stream's file, held until the next reboot. Every read and write on
-  a connection now waits with `WaitSelect` (writes non-blocking) and
-  drops the connection after 120 s without progress, on any stack.
+  a stream's file, held until the next reboot. Connections are now
+  non-blocking: each read and write is tried, waits with `WaitSelect`
+  only when it would block, and the connection is dropped after 120 s
+  without progress, on any stack.
   The socket options and `SO_KEEPALIVE` are still set; stacks that
   honour them drop dead idle connections too.
 - **Responses waited for the host's delayed ACK on Roadshow.** The

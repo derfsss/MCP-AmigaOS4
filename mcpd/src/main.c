@@ -17,6 +17,7 @@
 #include <proto/z.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/filio.h>
 #include <errno.h>
 
 #include "frame.h"
@@ -421,6 +422,14 @@ static void client_task_entry(void) {
     int ka = 1;
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_KEEPALIVE,
                             &ka, sizeof(ka));
+
+    /* Non-blocking: frame.c tries each recv / send and waits with
+     * WaitSelect, at most MCPD_IO_TIMEOUT_S, only when it would block.
+     * That limit holds on stacks that ignore SO_RCVTIMEO / SO_SNDTIMEO
+     * (Roadshow 1.15). If the stack refuses, the socket stays blocking
+     * and frame.c waits before each recv instead. */
+    LONG nbio = 1;
+    ctx.nbio = ctx.isocket->IoctlSocket(ctx.fd, FIONBIO, (char *)&nbio) == 0;
 
     /* Wire the conn_ctx into tc_UserData so frame.c's _isk() finds
      * us. (Replaces the inherited socket_id we read above.) */
