@@ -1,5 +1,156 @@
 # Change log
 
+## 2.4 — Raw file streams and 8-bit screenshots
+
+2.4 is the first release with the 2.3 work below (raw file streams,
+faster small requests, connections that cannot be held for good),
+plus:
+
+### Changed
+
+- **The version is declared once, in `VERSION` at the repository
+  root.** MCPd's Makefile passes it to the compiler (a build outside
+  the Makefile stops with an error instead of carrying an old number),
+  the host package takes it through hatchling's dynamic version, and
+  the release script reads it. It used to be repeated in five files
+  that had to be changed together.
+
+### Added
+
+- **The screen blanker stays away during file transfers** (MCPd).
+  A transfer has no user input for its whole length, so a blanker
+  could start in the middle of one; on an X5000 an animated blanker
+  then took enough CPU that uploads stalled for minutes and the link
+  dropped. `fs.read`, `fs.write`, `fs.write_chunk`, `fs.stream_get`
+  and `fs.stream_put` set application.library's
+  `APPATTR_AllowsBlanker` to FALSE (which also stops a running
+  blanker) and set it back 30 s after the last transfer. The user's
+  blanker settings are not changed.
+
+### Fixed
+
+- **A restarted daemon kept the host's old answer about streams.**
+  The host asked once per process whether a target's MCPd had
+  `fs.stream_get` / `fs.stream_put`; after the daemon was upgraded
+  and restarted, transfers stayed on the slower chunked path until
+  the MCP server was restarted too. The answer is now asked again on
+  each new connection.
+- **`qemu_start` failed on a guest with a second network card**
+  ("Property 'virtio-net-pci.hostfwd' not found"). The port forwards
+  were appended to the last `-device` instead of the user-mode
+  `-netdev`. They now go on the first user-mode netdev, skip host
+  ports the config already forwards, and leave other netdev types
+  alone.
+- **`wb.screenshot` of an 8-bit (palette) screen returned garbage.**
+  graphics.library's `ReadPixelArray` does not convert a CLUT screen
+  to `PIXF_R8G8B8`; it writes nothing, so the PNG held whatever the
+  capture buffer last contained (often exec's `0xABADCAFE` memory
+  fill). Seen on an X5000 (RX Vega 64) and a QEMU AmigaOne (SM501).
+  A screen of depth 8 or less is now read as pens and expanded
+  through the screen's palette; deeper screens are read as before.
+
+## 2.3 — Raw file streams (not released on its own; ships in 2.4)
+
+Large files move as raw bytes instead of base64 inside JSON. The
+daemon gains two methods; the host tools use them by themselves and
+fall back on older daemons.
+
+### Added
+
+- **`fs.stream_get` / `fs.stream_put`** (MCPd): a JSON-RPC response
+  followed on the same connection by the file's raw bytes. 64-bit
+  offsets, 1 MiB disk calls, one connection per transfer. Errors that
+  can be found before the bytes flow (path, offset, open) are normal
+  JSON-RPC errors; a failure while they flow drops the connection.
+- **`transfer` on `fs_upload` / `fs_download`**: `"auto"` (default)
+  streams when the target's MCPd has the methods (uploads of 1 MiB
+  and more), `"stream"` requires them, `"chunked"` keeps the old path.
+  A stream that breaks resumes on a new connection from the size
+  already transferred. Results report which path was used.
+- **`fs.stream_status`** (MCPd): the CRC-32 of the bytes the last
+  stream on the connection moved. `fs_upload` / `fs_download` check
+  every stream against their own CRC-32 when the daemon has it, send
+  or fetch a stream again on a mismatch, and report `crc32_verified`
+  (true when one checked stream carried the whole file; a resumed
+  transfer leaves the broken stream's bytes unchecked).
+  TCP's checksum does not cover the bytes before the network card when
+  the card computes it, so this is the end-to-end check;
+  `verify=True` (SHA-256 of the whole file) stays available.
+
+### Measured
+
+QEMU AmigaOne guest (virtio-net, user-mode networking), 128 MiB of
+random data, same boot, SHA-256 checked both ways:
+
+| | chunked | stream |
+|---|---|---|
+| upload, Roadshow | 5.93 MiB/s | 17.65 MiB/s |
+| download, Roadshow | 2.30 MiB/s | 4.19 MiB/s |
+| upload, rustsocket | 5.93 MiB/s | 14.90 MiB/s |
+| download, rustsocket | 2.56 MiB/s | 4.45 MiB/s |
+
+Checks and limits, QEMU AmigaOne guests (virtio-net), Roadshow 1.15
+and rustsocket, each with the new daemon:
+
+| | Roadshow | rustsocket |
+|---|---|---|
+| host stops reading a 256 MiB `fs.stream_get` | dropped after 126 s (before: never) | dropped after 128 s |
+| host stops sending in an `fs.stream_put` | dropped after 120 s (before: never) | dropped after 121 s |
+| upload and download broken once by the host | resumed, SHA-256 matches | the same |
+| idle connection, 390 s | answers | answers |
+| small request (`proto.version`), median | 3.2-16 ms -> 0.8-2.0 ms | 1.4-2.2 ms -> 1.4-1.5 ms |
+
+AmigaOne X5000 (I210, igb.device), 256 MiB to RAM:, SHA-256 checked,
+one fresh boot per run: Roadshow, old daemon 34.8 / 24.9 and 64.1 /
+66.4 MiB/s up / down, small requests 46-48 ms; new daemon 55.2 / 54.7
+and 53.6 / 56.0 MiB/s, 0.2-0.3 ms. rustsocket, new daemon: 50.0 /
+51.3 MiB/s, 0.3 ms. Stalls, resume, idle and the method sweep pass on
+both stacks there too.
+
+Stream speeds on QEMU are unchanged within the run-to-run spread (Roadshow,
+three alternating pairs: upload 15.3-19.9 MiB/s before, 15.0-17.6
+after; download 3.6-4.4 and 3.3-4.0).
+
+### Fixed
+
+- **A peer that stopped reading or sending held a connection for
+  good on some stacks.** The daemon relied on `SO_RCVTIMEO`, which
+  Roadshow 1.15 ignores (as it ignores `SO_SNDTIMEO`): a host that
+  vanished in the middle of a frame or a stream left the worker, and
+  a stream's file, held until the next reboot. Connections are now
+  non-blocking: each read and write is tried, waits with `WaitSelect`
+  only when it would block, and the connection is dropped after 120 s
+  without progress, on any stack.
+  The socket options and `SO_KEEPALIVE` are still set, for stacks
+  that honour them (how soon a dead idle connection goes depends on
+  the stack's keepalive timing; not measured).
+- **Responses waited for the host's delayed ACK.** The daemon sent a
+  frame's 4-byte header and its body in two `send()` calls, so Nagle
+  held the body until the header was acknowledged. Frames up to
+  256 KiB now go out in one `send()`, and connections set
+  `TCP_NODELAY`: Roadshow 1.15 cuts even one small `send()` into
+  ~100-byte pieces and Nagle held the rest. Raw streams and frames
+  over 256 KiB (`fs.read` answers) turn Nagle back on while they go:
+  without it Roadshow sent a large `send()` in small segments. Small requests: 15-16 ms -> about 1 ms on a QEMU
+  guest; 46-48 ms -> 0.2-0.3 ms on an AmigaOne X5000 over an I210.
+- **Resuming a broken upload could fail instead of resuming.** The
+  host read the file's size straight after the break, while the
+  daemon could still be writing what it had buffered and still held
+  the file open, so the resumed `fs.stream_put` was refused. The host
+  now closes the broken stream, waits for the size to stop changing,
+  and retries a refused resume.
+- **Chunked uploads of incompressible data failed "frame too large".**
+  24 MiB of raw bytes is exactly 32 MiB of base64, the frame limit,
+  with no room for the request around it. Any chunk sent uncompressed
+  hit it: `compression="none"`, and also the default `"auto"` on data
+  zlib cannot shrink by 5% (archives, images, random data) of 24 MiB
+  or more. Chunks are now clamped to what fits a frame.
+- **Chunked downloads of 24 MiB or more failed.** The same limit the
+  other way: a 24 MiB `fs.read` answers with 32 MiB of base64 plus the
+  envelope, so the daemon could not send it and dropped the
+  connection (`transfer="chunked"`, or any download from a daemon
+  without streams). Reads are now clamped the same way.
+
 ## 2.2 — Doctor and ready-made workflows
 
 2.2 adds a setup checker and ready-made workflows. Tools, parameters,

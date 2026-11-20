@@ -50,6 +50,12 @@ endpoint = "127.0.0.1:4422"
 endpoint = "127.0.0.1:14422"
 ```
 
+`qemu_config` names the JSON file `qemu.start` builds the QEMU command
+line from: a [Kyvos](https://ko-fi.com/s/6476fdadd2) machine's
+`config.json` (the recommended way to set up a guest), or one written from
+[`host/qemu-config.example.json`](host/qemu-config.example.json). See
+[QEMU_CONFIG.md](QEMU_CONFIG.md) for the format.
+
 Each QEMU target needs its own host-side ports. The daemon inside a
 guest always binds 4322 (TCP) and 4323 (UDP discovery); the host side
 of those forwards is what must differ, or the second guest's QEMU

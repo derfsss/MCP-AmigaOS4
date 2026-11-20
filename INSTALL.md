@@ -23,7 +23,7 @@ different places:
 | `uv` *or* `pip` | current | Python dependency manager. `uv` is recommended for reproducibility; plain `pip` works. |
 | `git` | current | Needed at install time: the `qemu-runner` dependency is installed straight from GitHub at a pinned commit. |
 | Docker Desktop | current | **Optional.** Required only if you intend to cross-compile MCPd from source rather than use a pre-built binary. |
-| QEMU PPC | 8.0 or later | **Optional.** Required only for QEMU targets. The binary `qemu-system-ppc` (Linux/macOS) or `qemu-system-ppc.exe` (Windows). |
+| QEMU PPC | 8.0 or later | **Optional.** Required only for QEMU targets. The binary `qemu-system-ppc` (Linux/macOS) or `qemu-system-ppc.exe` (Windows). Set up the emulated machine with [Kyvos](https://ko-fi.com/s/6476fdadd2) first; see [QEMU_CONFIG.md](QEMU_CONFIG.md). |
 | MCP client | per client | Claude Code, Claude Desktop, or any other MCP-aware client capable of launching a stdio server. |
 | TCP/UDP outbound | ports 4322 (TCP), 4323 (UDP) | Reach to MCPd and discovery on each target. |
 
@@ -208,7 +208,9 @@ Requires:
   endpoint in the config.
 - `qemu-system-ppc` 8.0 or later on the host.
 - A working machine config (`qemu_config = "..."`) pointing at the
-  per-machine kyvos JSON.
+  per-machine JSON: a Kyvos `config.json`, or one written from
+  `host/qemu-config.example.json` (format in
+  [QEMU_CONFIG.md](QEMU_CONFIG.md)).
 
 `qemu.savevm` / `loadvm` / `list_snapshots` / `delete_snapshot`
 additionally require a qcow2 backing image with snapshot support.
@@ -597,6 +599,14 @@ your environment.
 
 #### QEMU guests (pegasos2 / amigaone / sam460ex)
 
+Set the guest up with [Kyvos](https://ko-fi.com/s/6476fdadd2) and
+start it once from the server first; [QEMU_CONFIG.md](QEMU_CONFIG.md)
+has the whole sequence. Then:
+
+- **Release archive.** Download `MCPd-<version>.lha` in the guest and
+  run `Execute MCPd/MCPd-Install`, as in
+  [Manual install](#manual-install-no-host-helper). The simplest
+  route; it also sets up auto-start.
 - **Web browser on the guest.** Same idea as real hardware —
   if the guest image includes a browser (IBrowse, OWB,
   NetSurf, ...) and the SLIRP NAT lets it reach

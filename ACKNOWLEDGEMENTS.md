@@ -12,6 +12,9 @@ following parties, projects, and libraries enabled it.
   Desktop.
 - **The QEMU project** — for `qemu-system-ppc` and the `pegasos2`,
   `amigaone`, and `sam460ex` machine implementations.
+- **[Kyvos](https://ko-fi.com/s/6476fdadd2)** — for the QEMU front end
+  that sets up emulated AmigaOS 4 machines, and the per-machine
+  `config.json` format `qemu.start` reads.
 - **The adtools project** ([`sba1/adtools`](https://github.com/sba1/adtools))
   — for the cross and native PowerPC AmigaOS toolchain, including
   the patched GDB used for whole-system debugging.

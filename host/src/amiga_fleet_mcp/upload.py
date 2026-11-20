@@ -31,14 +31,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .errors import InvalidParams, TargetError
 from .fleet import Fleet
 from .tools import fs as fs_tool
+from .transports.mcpd import StreamBroken
 
-# Conservative chunk default: 24 MiB raw bytes.
-#   - base64 inflates by 4/3, so 24 MiB raw -> 32 MiB encoded
-#   - leaves ~0 MiB headroom for the JSON envelope (path, offsets etc.)
-#   - safer in practice if compression='auto' falls back to raw
+# Chunk default: 24 MiB raw bytes, as the tools document it. base64
+# makes 24 MiB exactly 32 MiB, the frame limit, with no room for the
+# JSON envelope, so a chunk that goes uncompressed (compression="none",
+# or "auto" on data zlib cannot shrink) failed "frame too large".
+# chunked_upload clamps every chunk to MAX_CHUNK_RAW instead.
 DEFAULT_CHUNK_RAW = 24 * 1024 * 1024
+#: The largest raw chunk whose base64 plus a 64 KiB envelope allowance
+#: fits one frame (MAX_FRAME_BYTES, 32 MiB).
+MAX_CHUNK_RAW = (32 * 1024 * 1024 - 64 * 1024) // 4 * 3
 
 
 @dataclass
@@ -49,6 +55,10 @@ class UploadStats:
     chunks: int
     compressed_chunks: int
     elapsed_s: float
+    #: One stream carried the whole file and its CRC-32 matched
+    #: fs.stream_status (streams only). False after a resume: bytes
+    #: moved by a stream that broke are not covered.
+    crc_checked: bool = False
 
     @property
     def compression_ratio(self) -> float:
@@ -79,6 +89,7 @@ async def chunked_upload(
     if not local.is_file():
         raise FileNotFoundError(f"local file does not exist: {local}")
     total = local.stat().st_size
+    chunk_size = max(1, min(chunk_size, MAX_CHUNK_RAW))
 
     sent_compressed = 0
     chunk_count = 0
@@ -176,11 +187,17 @@ class DownloadStats:
     bytes_total: int
     chunks: int
     elapsed_s: float
+    #: One stream carried the whole file and its CRC-32 matched
+    #: fs.stream_status (streams only). False after a resume: bytes
+    #: moved by a stream that broke are not covered.
+    crc_checked: bool = False
 
 
-# Conservative read default: 24 MiB raw bytes per fs.read call.
-# fs.read returns raw bytes (no compression on this side yet) so
-# stays comfortably under the 32 MiB framing cap after base64.
+# Read default: 24 MiB raw bytes per fs.read call, as the tools
+# document it. fs.read's answer is base64 (no compression on this side
+# yet), and 24 MiB of it is exactly the 32 MiB frame limit with no room
+# for the envelope: the daemon could not send it and dropped the
+# connection. chunked_download clamps every read to MAX_CHUNK_RAW.
 DEFAULT_READ_RAW = 24 * 1024 * 1024
 
 
@@ -207,6 +224,7 @@ async def chunked_download(
     """
     local = Path(local_path)
     local.parent.mkdir(parents=True, exist_ok=True)
+    chunk_size = max(1, min(chunk_size, MAX_CHUNK_RAW))
 
     # Probe remote size via fs.stat so we know when to stop.
     t = fleet.mcpd(target)
@@ -255,4 +273,257 @@ async def chunked_download(
         bytes_total=total,
         chunks=chunk_count,
         elapsed_s=time.monotonic() - t0,
+    )
+
+
+# ---- raw streams (fs.stream_put / fs.stream_get, MCPd 2.3+) --------
+
+#: Bytes per write/read on a stream: matches the daemon's 1 MiB buffer.
+STREAM_BLOCK = 1024 * 1024
+#: How long one block may take before the stream counts as broken. The
+#: daemon's own limits are SO_RCVTIMEO / SO_SNDTIMEO, 120 s
+#: (mcpd/src/main.c).
+STREAM_BLOCK_TIMEOUT_S = 130.0
+#: Before resuming a broken upload: how long to wait for the target's
+#: file to stop growing. The daemon may still be writing what was in
+#: its buffers when the host gave up, and holds the file open until it
+#: notices the connection has gone (at once on a reset, up to its
+#: receive timeout when the host vanished).
+RESUME_SETTLE_S = 1.0
+RESUME_SETTLE_MAX_S = 150.0
+
+
+class StreamCorrupt(Exception):
+    """fs.stream_status's CRC-32 of a stream differs from the host's:
+    the bytes changed on the way. The transfer redoes that stream."""
+
+
+async def _caps(t: object) -> list[str]:
+    """proto.capabilities' method names, cached on the transport for
+    as long as its connection lasts (McpdTransport clears the cache on
+    connect and close, so a restarted daemon is asked again). Any
+    failure counts as none (older daemons keep the chunked path) and
+    is not cached."""
+    stale = getattr(t, "_is_stale", None)
+    cached = getattr(t, "_method_names", None)
+    if isinstance(cached, list) and not (callable(stale) and stale()):
+        return cached
+    if not hasattr(t, "open_stream"):
+        return []
+    try:
+        caps = await t.request("proto.capabilities", timeout_s=10.0)  # type: ignore[attr-defined]
+    except Exception:
+        return []
+    got = caps.get("method_names", []) if isinstance(caps, dict) else []
+    names = [str(n) for n in got]
+    try:
+        t._method_names = names  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    return names
+
+
+async def stream_supported(t: object) -> bool:
+    """Whether this target's MCPd has the raw stream methods."""
+    names = await _caps(t)
+    return "fs.stream_put" in names and "fs.stream_get" in names
+
+
+async def _stream_crc_supported(t: object) -> bool:
+    """Whether this target's MCPd reports each stream's CRC-32
+    (fs.stream_status); without it a stream is checked by size only."""
+    return "fs.stream_status" in await _caps(t)
+
+
+async def _check_crc(s: object, crc: int, nbytes: int, path: str) -> None:
+    st = await s.call("fs.stream_status", {}, timeout_s=30.0)  # type: ignore[attr-defined]
+    their_crc = int(st["crc32"]) & 0xFFFFFFFF
+    if not st.get("complete") or int(st["bytes"]) != nbytes or their_crc != crc:
+        raise StreamCorrupt(
+            f"stream of {path!r} failed its check: host {nbytes} bytes crc32 {crc:08x}, "
+            f"target {st.get('bytes')} bytes crc32 {int(st.get('crc32', 0)):08x} "
+            f"complete={st.get('complete')}"
+        )
+
+
+async def _settled_size(t: object, path: str) -> int:
+    """The target file's size once it has stopped changing (or the
+    wait ran out: then the last size seen)."""
+    last = -1
+    waited = 0.0
+    while True:
+        try:
+            st = await t.request("fs.stat", {"path": path}, timeout_s=30.0)  # type: ignore[attr-defined]
+            size = int(st["size"])
+        except Exception:
+            size = -1
+        if size == last:
+            return max(size, 0)  # -1 twice: no file yet, start at 0
+        if waited >= RESUME_SETTLE_MAX_S:
+            return max(size, 0)
+        last = size
+        await asyncio.sleep(RESUME_SETTLE_S)
+        waited += RESUME_SETTLE_S
+
+
+async def stream_upload(
+    fleet: Fleet,
+    target: str,
+    local_path: str | Path,
+    remote_path: str,
+    *,
+    resume_from: int = 0,
+    retries: int = 3,
+) -> UploadStats:
+    """Send a file as raw bytes after one fs.stream_put.
+
+    The upload is confirmed by fs.stat on the stream connection itself
+    (the daemon closes the file before it reads that request) and, when
+    the daemon has fs.stream_status, by the CRC-32 of the stream.
+
+    If the connection breaks, the stream is closed first, then the
+    target file's size is read once it has stopped growing, and a new
+    stream continues from there (up to `retries` times). While
+    resuming, a refused put (the file still held open by the old
+    stream, or its size moved on) is retried the same way. A CRC
+    mismatch starts the file again from 0.
+    """
+    local = Path(local_path)
+    total = local.stat().st_size
+    t = fleet.mcpd(target)
+    with_crc = await _stream_crc_supported(t)
+    offset = resume_from
+    attempts = 0
+    crc_checked = False
+    t0 = time.monotonic()
+    while True:
+        resuming = attempts > 0
+        s = None
+        try:
+            s = await t.open_stream()
+            await s.call("fs.stream_put", {
+                "path": remote_path, "offset": offset,
+                "length": total - offset,
+            }, timeout_s=30.0)
+            t.last_write_at = time.monotonic()
+            crc = 0
+            with local.open("rb") as fh:
+                fh.seek(offset)
+                while True:
+                    blk = fh.read(STREAM_BLOCK)
+                    if not blk:
+                        break
+                    crc = zlib.crc32(blk, crc)
+                    await s.send_raw(blk, timeout_s=STREAM_BLOCK_TIMEOUT_S)
+            st = await s.call("fs.stat", {"path": remote_path},
+                              timeout_s=STREAM_BLOCK_TIMEOUT_S)
+            t.last_write_at = time.monotonic()
+            if int(st["size"]) != total:
+                raise RuntimeError(
+                    f"stream upload of {remote_path!r} ended at "
+                    f"{st['size']} bytes, expected {total}"
+                )
+            if with_crc:
+                await _check_crc(s, crc, total - offset, remote_path)
+                crc_checked = offset == 0
+            break
+        except Exception as e:
+            retryable = isinstance(e, (StreamBroken, StreamCorrupt)) or (
+                # A resume refused because the old stream still holds
+                # the file, or it grew after the size was read.
+                resuming and isinstance(e, (TargetError, InvalidParams))
+            )
+            if not retryable or attempts >= retries:
+                raise
+            attempts += 1
+            if s is not None:
+                await s.close()
+                s = None
+            if isinstance(e, StreamCorrupt):
+                offset = 0
+            else:
+                await asyncio.sleep(0.5 * attempts)
+                offset = await _settled_size(t, remote_path)
+                offset = min(offset, total)
+        finally:
+            if s is not None:
+                await s.close()
+    return UploadStats(
+        path=remote_path,
+        bytes_total=total,
+        bytes_sent_compressed=total - resume_from,
+        chunks=1 + attempts,
+        compressed_chunks=0,
+        elapsed_s=time.monotonic() - t0,
+        crc_checked=crc_checked,
+    )
+
+
+async def stream_download(
+    fleet: Fleet,
+    target: str,
+    remote_path: str,
+    local_path: str | Path,
+    *,
+    resume_from: int = 0,
+    retries: int = 3,
+) -> DownloadStats:
+    """Receive a file as raw bytes after one fs.stream_get. A broken
+    connection is resumed from the local file's size on a new stream
+    (up to `retries` times). With fs.stream_status each stream's CRC-32
+    is checked; a mismatch drops what that stream wrote and fetches it
+    again."""
+    local = Path(local_path)
+    local.parent.mkdir(parents=True, exist_ok=True)
+    t = fleet.mcpd(target)
+    with_crc = await _stream_crc_supported(t)
+    offset = resume_from
+    attempts = 0
+    total = 0
+    crc_checked = False
+    t0 = time.monotonic()
+    while True:
+        s = None
+        start = offset
+        try:
+            s = await t.open_stream()
+            r = await s.call("fs.stream_get", {
+                "path": remote_path, "offset": offset,
+            }, timeout_s=30.0)
+            n = int(r["length"])
+            total = int(r["total_size"])
+            crc = 0
+            with local.open("ab" if offset > 0 else "wb") as fh:
+                if offset > 0:
+                    fh.truncate(offset)
+                got = 0
+                try:
+                    while got < n:
+                        data = await s.read_raw(min(STREAM_BLOCK, n - got),
+                                                timeout_s=STREAM_BLOCK_TIMEOUT_S)
+                        crc = zlib.crc32(data, crc)
+                        fh.write(data)
+                        got += len(data)
+                finally:
+                    offset += got
+            if with_crc:
+                await _check_crc(s, crc, n, remote_path)
+                crc_checked = start == 0
+            break
+        except Exception as e:
+            if not isinstance(e, (StreamBroken, StreamCorrupt)) or attempts >= retries:
+                raise
+            attempts += 1
+            if isinstance(e, StreamCorrupt):
+                offset = start  # drop this stream's bytes, fetch them again
+            await asyncio.sleep(0.5 * attempts)
+        finally:
+            if s is not None:
+                await s.close()
+    return DownloadStats(
+        path=str(local),
+        bytes_total=total,
+        chunks=1 + attempts,
+        elapsed_s=time.monotonic() - t0,
+        crc_checked=crc_checked,
     )

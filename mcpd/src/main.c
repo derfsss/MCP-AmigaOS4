@@ -17,6 +17,8 @@
 #include <proto/z.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/filio.h>
 #include <errno.h>
 
 #include "frame.h"
@@ -49,7 +51,12 @@ extern int input_is_enabled(void);
  * an idle client between frames is handled by WaitSelect rather than
  * this. Without it, a peer that sends a frame header and then stops
  * parks a worker Process for the uptime of the daemon. */
-#define MCPD_RECV_TIMEOUT_S 120
+#define MCPD_RECV_TIMEOUT_S MCPD_IO_TIMEOUT_S
+
+/* How long one send() may make no progress before the connection is
+ * dropped: a peer that has stopped reading (or is gone) must not hold
+ * a worker, and a stream's file, forever. */
+#define MCPD_SEND_TIMEOUT_S MCPD_IO_TIMEOUT_S
 
 /* MCPD_MAX_CLIENTS (live connection workers) is in rpc.h. */
 
@@ -268,6 +275,7 @@ static void handle_connection(int sock) {
         size_t resp_len = 0;
         if (rpc_dispatch(req, req_len, &resp, &resp_len) != 0) {
             frame_free(req);
+            if (ctx) mcpd_stream_cancel(ctx);
             return;
         }
         frame_free(req);
@@ -282,7 +290,15 @@ static void handle_connection(int sock) {
 
         int wrote = frame_write(sock, resp, resp_len);
         free(resp);
-        if (wrote != 0) return;
+        if (wrote != 0) {
+            if (ctx) mcpd_stream_cancel(ctx);
+            return;
+        }
+
+        /* fs.stream_get / fs.stream_put: the raw bytes follow the
+         * response at once, before WaitSelect's timeout path can put
+         * an event frame into them. */
+        if (ctx && mcpd_stream_run(ctx) != 0) return;
     }
 }
 
@@ -389,6 +405,43 @@ static void client_task_entry(void) {
     rcv_to.tv_usec = 0;
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_RCVTIMEO,
                             &rcv_to, sizeof(rcv_to));
+
+    /* Send timeout, the same window: a peer that stops reading (or
+     * vanishes) mid-response or mid fs.stream_get would otherwise
+     * block send() for good, holding this worker's slot and the
+     * stream's file. Best-effort, as above. */
+    struct timeval snd_to;
+    snd_to.tv_sec = MCPD_SEND_TIMEOUT_S;
+    snd_to.tv_usec = 0;
+    ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_SNDTIMEO,
+                            &snd_to, sizeof(snd_to));
+
+    /* Keepalive: an idle connection whose peer has gone (host crashed,
+     * cable pulled) is dropped by the stack instead of holding a
+     * worker. How soon depends on the stack (minutes on some, hours
+     * on classic BSD defaults); best-effort, ignored where refused. */
+    int ka = 1;
+    ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_KEEPALIVE,
+                            &ka, sizeof(ka));
+
+    /* No Nagle: a response must not wait for the peer's delayed ACK.
+     * Roadshow 1.15 cuts even a single small send() into ~100-byte
+     * mbufs and sends only the first at once; with Nagle on, the rest
+     * waited ~45 ms for the PC's delayed ACK (X5000, I210). Raw
+     * streams turn it back on while they run (stream.c): without
+     * Nagle, Roadshow sent a 1 MiB send() in small segments and
+     * downloads fell from 54 to 2 MiB/s. Best-effort, as above. */
+    int nd = 1;
+    ctx.nodelay = ctx.isocket->setsockopt(ctx.fd, IPPROTO_TCP, TCP_NODELAY,
+                                          &nd, sizeof(nd)) == 0;
+
+    /* Non-blocking: frame.c tries each recv / send and waits with
+     * WaitSelect, at most MCPD_IO_TIMEOUT_S, only when it would block.
+     * That limit holds on stacks that ignore SO_RCVTIMEO / SO_SNDTIMEO
+     * (Roadshow 1.15). If the stack refuses, the socket stays blocking
+     * and frame.c waits before each recv instead. */
+    LONG nbio = 1;
+    ctx.nbio = ctx.isocket->IoctlSocket(ctx.fd, FIONBIO, (char *)&nbio) == 0;
 
     /* Wire the conn_ctx into tc_UserData so frame.c's _isk() finds
      * us. (Replaces the inherited socket_id we read above.) */

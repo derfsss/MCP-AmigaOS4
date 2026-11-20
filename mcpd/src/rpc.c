@@ -36,6 +36,17 @@ static const method_entry *find_method(const char *name) {
     return NULL;
 }
 
+/* The methods that move file contents over the link. */
+static int is_transfer_method(const char *name) {
+    static const char *const xfer[] = {
+        "fs.read", "fs.write", "fs.write_chunk", "fs.stream_get", "fs.stream_put", NULL
+    };
+    for (int i = 0; xfer[i]; i++) {
+        if (strcmp(name, xfer[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 int rpc_dispatch(const char *req, size_t req_len,
                  char **out, size_t *out_len) {
     cJSON *root = cJSON_ParseWithLength(req, req_len);
@@ -60,7 +71,13 @@ int rpc_dispatch(const char *req, size_t req_len,
                 err = rpc_make_error(-32601, "Method not found", data);
             } else {
                 cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
+                /* A file transfer keeps the screen blanker away for its
+                 * length (applib.c has the why). A raw stream's bytes
+                 * move after this returns; stream.c holds for those. */
+                int xfer = is_transfer_method(m->name);
+                if (xfer) applib_blanker_hold();
                 int rc = m->handler(params, &result, &err);
+                if (xfer) applib_blanker_release();
                 (void)rc;
             }
         }
@@ -148,6 +165,9 @@ const method_entry mcpd_methods[] = {
     { "fs.rename",          fs_rename,          "Rename / move a file or directory" },
     { "fs.protect",         fs_protect,         "Set protection bits on a path" },
     { "fs.copy",            fs_copy,            "Copy a file (preserves protection + date via CLONE)" },
+    { "fs.stream_get",      fs_stream_get,      "Raw bulk read: params path, offset (default 0), length (default to the end). The response {path, offset, length, total_size} is followed on the connection by exactly `length` raw bytes. A failure mid-stream drops the connection; resume from the bytes received." },
+    { "fs.stream_put",      fs_stream_put,      "Raw bulk write: params path, offset (0 creates/replaces; >0 resumes and must equal the file's size), length (required). After the response {..., ready:true} the client sends exactly `length` raw bytes. A failure mid-stream drops the connection; confirm with fs.stat on the same connection, resume from its size." },
+    { "fs.stream_status",   fs_stream_status,   "The last raw stream on this connection: {dir (get|put), offset, bytes, complete, crc32}. crc32 is zlib's CRC-32 of the bytes moved; compare it with your own to check the stream end to end." },
     { "fs.sync",            fs_sync,            "Flush a filesystem's cached writes to disk and wait for it (ACTION_FLUSH). params: path (default \"SYS:\"). AmigaOS buffers writes and flushes on its own schedule, so a guest killed or a machine powered off shortly after a write can lose it; call this when the write has to be durable before something abrupt happens. Returns path + flushed." },
     { "fs.hash",            fs_hash,            "Streaming SHA-256 of a file (algo=sha256 only for now)" },
     { "exec.cmd",           exec_cmd,           "Run an AmigaDOS command as a tracked job and wait up to timeout_ms for it. params: command, args[], cwd, timeout_ms, priority (default -2, capped below the daemon's workers), sandboxed (the command runs a program under SandboxVM; lets exec.kill force it), return_running (on timeout return {state:running, job_id} instead of an error), stream. Returns output, exit_code, result2, job_id, state, truncated." },

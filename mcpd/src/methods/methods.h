@@ -73,6 +73,9 @@ MCPD_HANDLER(fs_protect);
 MCPD_HANDLER(fs_copy);
 MCPD_HANDLER(fs_sync);
 MCPD_HANDLER(fs_hash);
+MCPD_HANDLER(fs_stream_get);
+MCPD_HANDLER(fs_stream_put);
+MCPD_HANDLER(fs_stream_status);
 
 MCPD_HANDLER(exec_cmd);
 MCPD_HANDLER(exec_status);
@@ -111,5 +114,10 @@ MCPD_HANDLER(events_test_emit);
 MCPD_HANDLER(app_notify);
 
 #undef MCPD_HANDLER
+
+/* applib.c: keep the screen blanker away while a file transfer runs
+ * (rpc.c around the transfer methods, stream.c around a raw stream). */
+void applib_blanker_hold(void);
+void applib_blanker_release(void);
 
 #endif
