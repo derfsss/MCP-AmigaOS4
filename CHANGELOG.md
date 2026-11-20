@@ -39,6 +39,13 @@ random data, same boot, SHA-256 checked both ways:
   hit it: `compression="none"`, and also the default `"auto"` on data
   zlib cannot shrink by 5% (archives, images, random data) of 24 MiB
   or more. Chunks are now clamped to what fits a frame.
+- **`wb.screenshot` of an 8-bit (palette) screen returned garbage.**
+  graphics.library's `ReadPixelArray` does not convert a CLUT screen
+  to `PIXF_R8G8B8`; it writes nothing, so the PNG held whatever the
+  capture buffer last contained (often exec's `0xABADCAFE` memory
+  fill). Seen on an X5000 (RX Vega 64) and a QEMU AmigaOne (SM501).
+  A screen of depth 8 or less is now read as pens and expanded
+  through the screen's palette; deeper screens are read as before.
 
 ## 2.2 — Doctor and ready-made workflows
 
