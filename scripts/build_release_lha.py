@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
 import sys
 from pathlib import Path
 
@@ -57,12 +56,11 @@ DRAWER = "MCPd"
 
 
 def daemon_version(root: Path) -> str:
-    """Read the version out of rpc.h -- the single source of truth."""
-    text = (root / "mcpd" / "src" / "rpc.h").read_text(encoding="utf-8")
-    m = re.search(r'#define\s+MCPD_VERSION_STR\s+"([^"]+)"', text)
-    if not m:
-        raise SystemExit("could not find MCPD_VERSION_STR in mcpd/src/rpc.h")
-    return m.group(1)
+    """Read the repository's VERSION file -- the one declaration."""
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    if not version:
+        raise SystemExit("VERSION is empty")
+    return version
 
 
 async def sh(fleet: Fleet, target: str, cmd: str, *,

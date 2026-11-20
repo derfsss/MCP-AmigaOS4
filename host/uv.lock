@@ -10,7 +10,6 @@ resolution-markers = [
 
 [[package]]
 name = "amiga-fleet-mcp"
-version = "2.3"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
