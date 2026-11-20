@@ -57,19 +57,50 @@ GUEST_PORT_MCPD = 4322
 GUEST_PORT_DISCOVERY = 4323
 
 
-def _inject_hostfwd(netdev_arg: str, fwds: list[str]) -> str:
-    """Inject `,hostfwd=tcp::H-:G` clauses into a `-netdev user,...` arg.
+def _fwd_key(clause: str) -> tuple[str, str] | None:
+    """(protocol, host port) of a `hostfwd=[tcp|udp]:[addr]:port-...`
+    clause; QEMU refuses two rules on the same pair."""
+    if not clause.startswith("hostfwd="):
+        return None
+    spec = clause[len("hostfwd="):]
+    proto, sep, rest = spec.partition(":")
+    if not sep:
+        return None
+    host = rest.split("-", 1)[0]
+    return (proto or "tcp", host.rsplit(":", 1)[-1])
 
-    Idempotent on duplicate hostfwd entries (de-dup by exact string).
+
+def _inject_hostfwd(netdev_arg: str, fwds: list[str]) -> str:
+    """Inject `,hostfwd=tcp::H-:G` clauses into the network arg string.
+
+    The string may hold several options (`-netdev user,... -device
+    virtio-net-pci,... -netdev user,...`). The clauses go on the first
+    user-mode netdev, never onto whatever happens to be last. A clause
+    whose protocol and host port some netdev already forwards is left
+    out: the config forwards it already, and QEMU aborts on a duplicate.
     """
     if not fwds:
         return netdev_arg
-    parts = netdev_arg.split(",")
-    existing = {p for p in parts if p.startswith("hostfwd=")}
-    extra = [f for f in fwds if f not in existing]
+    tokens = _split_arg_string(netdev_arg)
+    # Indices of user-mode netdev values: after -netdev / -nic, or the
+    # whole string when it is a bare `user,...` value.
+    users = [
+        i + 1 for i, tok in enumerate(tokens[:-1])
+        if tok in ("-netdev", "-nic") and tokens[i + 1].split(",")[0] == "user"
+    ]
+    if not users and len(tokens) == 1 and tokens[0].split(",")[0] == "user":
+        users = [0]
+    if not users:
+        return netdev_arg
+    taken = {
+        k for i in users for part in tokens[i].split(",")
+        if (k := _fwd_key(part)) is not None
+    }
+    extra = [f for f in fwds if _fwd_key(f) not in taken]
     if not extra:
         return netdev_arg
-    return ",".join([*parts, *extra])
+    tokens[users[0]] = ",".join([tokens[users[0]], *extra])
+    return " ".join(f'"{t}"' if " " in t else t for t in tokens)
 
 
 def build_cmdline(

@@ -31,6 +31,37 @@ def test_inject_hostfwd_dedups() -> None:
     assert out.count("hostfwd=tcp::4322-:4322") == 1
 
 
+# Two user-mode NICs, each with its -device, as config_rs.json has.
+_TWO_NICS = (
+    "-netdev user,id=vnet,net=10.0.3.0/24,hostfwd=tcp::4425-10.0.3.15:4322,"
+    "hostfwd=udp::4425-10.0.3.15:4323 "
+    "-device virtio-net-pci,netdev=vnet,mac=52:54:00:12:34:57 "
+    "-netdev user,id=vnet2,net=10.0.4.0/24 "
+    "-device virtio-net-pci,netdev=vnet2,addr=0x0c"
+)
+
+
+def test_inject_hostfwd_never_onto_a_device() -> None:
+    out = _inject_hostfwd(_TWO_NICS, ["hostfwd=tcp::4500-:4322"])
+    toks = out.split(" ")
+    assert toks[1].endswith(",hostfwd=tcp::4500-:4322")
+    assert all("hostfwd" not in t for t in toks if t.startswith("virtio-net-pci"))
+    assert out.count("hostfwd=tcp::4500-:4322") == 1
+
+
+def test_inject_hostfwd_skips_a_host_port_already_forwarded() -> None:
+    # The config forwards 4425 to a fixed guest address already; a
+    # second rule on tcp/4425 or udp/4425 would make QEMU abort.
+    out = _inject_hostfwd(
+        _TWO_NICS, ["hostfwd=tcp::4425-:4322", "hostfwd=udp::4425-:4323"])
+    assert out == _TWO_NICS
+
+
+def test_inject_hostfwd_leaves_non_user_netdev_alone() -> None:
+    arg = "-netdev tap,id=t0,ifname=tap0 -device rtl8139,netdev=t0"
+    assert _inject_hostfwd(arg, ["hostfwd=tcp::4322-:4322"]) == arg
+
+
 def test_build_cmdline_injects_mcpd_and_qmp(tmp_path: Path) -> None:
     cfg_path = tmp_path / "kyvos.json"
     cfg_path.write_text(json.dumps({
