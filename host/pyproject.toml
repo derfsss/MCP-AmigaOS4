@@ -4,7 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amiga-fleet-mcp"
-version = "2.3"
+# The version is the repository's VERSION file (see [tool.hatch.version]),
+# the one declaration MCPd's build and the release script read as well.
+dynamic = ["version"]
 description = "MCP server for driving AmigaOS 4 fleets (QEMU + real hardware)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,6 +56,11 @@ Homepage = "https://github.com/derfsss/MCP-AmigaOS4"
 [tool.hatch.metadata]
 # Needed for the git-URL qemu-runner dependency.
 allow-direct-references = true
+
+[tool.hatch.version]
+# The repository's VERSION file: one line, the version and nothing else.
+path = "../VERSION"
+pattern = '^(?P<version>[0-9][^\s]*)\s*$'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amiga_fleet_mcp"]

@@ -37,8 +37,16 @@ MCPD_CFLAGS += -DMCPD_TIME=\"$(BUILD_TIME)\"
 SDK_VERSION ?= AmigaOS 4.1 FE SDK 54.16 + GCC 11.5 (walkero/amigagccondocker:os4-gcc11)
 MCPD_CFLAGS += -DMCPD_SDK_VERSION="\"$(SDK_VERSION)\""
 
-# Distribution
-VERSION = 2.3
+# The version, from the repository's one declaration: the VERSION file at
+# the root, which the host package (host/pyproject.toml) and the release
+# script read too. It reaches the code only through MCPD_VERSION_STR, so
+# a build that bypasses this Makefile fails in rpc.h rather than shipping
+# a stale number.
+VERSION := $(strip $(shell tr -d '\r' < ../VERSION))
+ifeq ($(VERSION),)
+$(error ../VERSION is missing or empty)
+endif
+MCPD_CFLAGS += -DMCPD_VERSION_STR="\"$(VERSION)\""
 
 SRC_DIR = src
 METHODS_DIR = $(SRC_DIR)/methods
@@ -97,7 +105,7 @@ endif
 
 all: MCPd
 
-MCPd: $(SRCS) $(HDRS)
+MCPd: $(SRCS) $(HDRS) ../VERSION
 	$(CC) $(CFLAGS) $(MCPD_CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
 
 # Run `make all` inside the cross-compile container. Invoke from the

@@ -10,20 +10,19 @@
 #include <stddef.h>
 #include "cJSON.h"
 
-/* SINGLE SOURCE OF TRUTH for the daemon version.
- *
- * Previously main.c's MCPD_VERSION and this file's MCPD_SERVER_VERSION
- * were independent literals, so a release bump that touched one and
- * not the other left `MCPd --version` and `proto.version` disagreeing
- * (and discovery.c advertising a third answer). Derive them all from
- * one define instead -- also keep mcpd/Makefile's VERSION in step,
- * which is only used for packaging.
+/* THE DAEMON VERSION comes from the repository's VERSION file, the one
+ * declaration the host package and the release script read as well.
+ * mcpd/Makefile passes it as -DMCPD_VERSION_STR; nothing here repeats
+ * the number. Every daemon-side spelling (`MCPd --version`, the $VER
+ * cookie, `proto.version`, discovery) derives from this one define.
  *
  * The wire protocol version is deliberately separate: it tracks
  * framing / error-code / notification semantics, not the daemon
  * build, and only changes when those become incompatible. Adding
  * methods is backward-compatible and does NOT bump it. */
-#define MCPD_VERSION_STR      "2.3"
+#ifndef MCPD_VERSION_STR
+#error "MCPD_VERSION_STR is not set: build through mcpd/Makefile, which reads ../VERSION"
+#endif
 #define MCPD_PROTOCOL_VERSION "1.0"
 #define MCPD_SERVER_VERSION   "mcpd/" MCPD_VERSION_STR
 

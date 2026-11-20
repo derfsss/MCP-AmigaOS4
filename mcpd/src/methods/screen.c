@@ -10,7 +10,11 @@
  *      LockIBase, read its geometry.
  *   2. IGraphics->ReadPixelArray() the RastPort into a chunky
  *      24-bit RGB buffer (PIXF_R8G8B8). graphics.library converts
- *      from whatever the screen depth / RTG format happens to be.
+ *      from every 15/16/24/32-bit RTG format, but NOT from an 8-bit
+ *      CLUT screen: there it writes nothing at all (measured on an
+ *      X5000, graphics.library 54, 2026-11-20), so a screen of depth
+ *      8 or less is read as pens (PIXF_CLUT) and expanded here through
+ *      the screen's ColorMap.
  *   3. PNG-encode that buffer ourselves: filtered scanlines deflated
  *      via z.library (the same shared zlib MCPd already opens for
  *      fs.c), framed into IHDR / IDAT / IEND chunks with CRC32.
@@ -168,8 +172,9 @@ int wb_screenshot(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     /* No AVT_Clear here: AVT_Clear is AVT_ClearWithValue (the tag data
      * is the FILL BYTE, not a boolean), so AVT_Clear,TRUE would fill
-     * with 0x01 and corrupt the PNG filter bytes. ReadPixelArray fills
-     * every pixel; the filter bytes are zeroed explicitly post-capture. */
+     * with 0x01 and corrupt the PNG filter bytes. ReadPixelArray (or the
+     * pen expansion below) fills every pixel; the filter bytes are
+     * zeroed explicitly post-capture. */
     uint8_t *raw = (uint8_t *)IExec->AllocVecTags((uint32)rawlen,
         AVT_Type, MEMF_SHARED, TAG_END);
     if (!raw) {
@@ -178,6 +183,22 @@ int wb_screenshot(cJSON *params, cJSON **out_result, cJSON **out_err) {
         *out_err = rpc_make_error(MCPD_ERR_INTERNAL,
             "out of memory for capture buffer", NULL);
         return 0;
+    }
+
+    /* A palette screen needs its colour table: 256 RGB32 triplets,
+     * allocated here because nothing is allocated under LockIBase. */
+    uint32 *pal = NULL;
+    if (depth <= 8) {
+        pal = (uint32 *)IExec->AllocVecTags(256u * 3u * sizeof(uint32),
+            AVT_Type, MEMF_PRIVATE, AVT_ClearWithValue, 0, TAG_END);
+        if (!pal) {
+            IExec->FreeVec(raw);
+            IExec->DropInterface((struct Interface *)ii);
+            IExec->CloseLibrary(ibase);
+            *out_err = rpc_make_error(MCPD_ERR_INTERNAL,
+                "out of memory for palette", NULL);
+            return 0;
+        }
     }
 
     /* Phase 2: re-lock, confirm the screen is still present at the same
@@ -190,9 +211,21 @@ int wb_screenshot(cJSON *params, cJSON **out_result, cJSON **out_err) {
         if (idx == screen_index) {
             if (s == target && (int)s->Width == width &&
                 (int)s->Height == height) {
-                IGraphics->ReadPixelArray(&s->RastPort, 0, 0,
-                    raw + 1, 0, 0, rowstride, PIXF_R8G8B8,
-                    (uint32)width, (uint32)height);
+                if (pal) {
+                    /* Pens land in the last third of each row's RGB
+                     * bytes and are expanded in place after the lock. */
+                    struct ColorMap *cm = s->ViewPort.ColorMap;
+                    uint32 n = cm ? (uint32)cm->Count : 0;
+                    if (n > 256) n = 256;
+                    if (n) IGraphics->GetRGB32(cm, 0, n, pal);
+                    IGraphics->ReadPixelArray(&s->RastPort, 0, 0,
+                        raw + 1 + 2u * (uint32_t)width, 0, 0, rowstride,
+                        PIXF_CLUT, (uint32)width, (uint32)height);
+                } else {
+                    IGraphics->ReadPixelArray(&s->RastPort, 0, 0,
+                        raw + 1, 0, 0, rowstride, PIXF_R8G8B8,
+                        (uint32)width, (uint32)height);
+                }
                 captured = 1;
             }
             break;
@@ -203,6 +236,24 @@ int wb_screenshot(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
     IExec->DropInterface((struct Interface *)ii);
     IExec->CloseLibrary(ibase);
+
+    if (captured && pal) {
+        /* Expand each row front to back: pixel i's three bytes go to
+         * 3i..3i+2, and the pen they overwrite (at 2*width + j for
+         * j <= i) has already been read. */
+        for (uint32_t r = 0; r < (uint32_t)height; r++) {
+            uint8_t *row = raw + (size_t)r * rowstride + 1;
+            const uint8_t *pens = row + 2u * (uint32_t)width;
+            for (uint32_t i = 0; i < (uint32_t)width; i++) {
+                uint32_t p = pens[i];
+                row[i * 3u + 0u] = (uint8_t)(pal[p * 3u + 0u] >> 24);
+                row[i * 3u + 1u] = (uint8_t)(pal[p * 3u + 1u] >> 24);
+                row[i * 3u + 2u] = (uint8_t)(pal[p * 3u + 2u] >> 24);
+            }
+        }
+    }
+    if (pal)
+        IExec->FreeVec(pal);
 
     if (!captured) {
         IExec->FreeVec(raw);

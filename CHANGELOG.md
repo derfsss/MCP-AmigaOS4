@@ -1,6 +1,29 @@
 # Change log
 
-## 2.3 — Raw file streams (in progress on `develop`)
+## 2.4 — 8-bit screenshots (in progress on `develop`)
+
+Everything in 2.3 below, plus:
+
+### Changed
+
+- **The version is declared once, in `VERSION` at the repository
+  root.** MCPd's Makefile passes it to the compiler (a build outside
+  the Makefile stops with an error instead of carrying an old number),
+  the host package takes it through hatchling's dynamic version, and
+  the release script reads it. It used to be repeated in five files
+  that had to be changed together.
+
+### Fixed
+
+- **`wb.screenshot` of an 8-bit (palette) screen returned garbage.**
+  graphics.library's `ReadPixelArray` does not convert a CLUT screen
+  to `PIXF_R8G8B8`; it writes nothing, so the PNG held whatever the
+  capture buffer last contained (often exec's `0xABADCAFE` memory
+  fill). Seen on an X5000 (RX Vega 64) and a QEMU AmigaOne (SM501).
+  A screen of depth 8 or less is now read as pens and expanded
+  through the screen's palette; deeper screens are read as before.
+
+## 2.3 — Raw file streams (not released on its own; ships in 2.4)
 
 Large files move as raw bytes instead of base64 inside JSON. The
 daemon gains two methods; the host tools use them by themselves and

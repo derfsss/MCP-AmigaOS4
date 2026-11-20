@@ -16,3 +16,7 @@ host/src/amiga_fleet_mcp/installer/resources/*   text eol=lf
 # would expect.
 mcpd/src/**         text eol=lf
 mcpd/Makefile       text eol=lf
+
+# The version: read by make inside a Linux container, where a CR would
+# end up inside the version string.
+VERSION             text eol=lf
