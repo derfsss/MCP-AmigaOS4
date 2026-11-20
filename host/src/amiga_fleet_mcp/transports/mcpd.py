@@ -143,6 +143,11 @@ class McpdTransport:
         #: Monotonic time of the last connect or completed exchange, for
         #: the STALE_AFTER_S check. None while not connected.
         self._last_io_at: float | None = None
+        #: proto.capabilities' method names (upload._caps), for the
+        #: daemon behind the current connection only: a new connection
+        #: may reach a restarted daemon of another version, so
+        #: connecting and closing both clear it.
+        self._method_names: list[str] | None = None
 
     def subscribe_notifications(
         self,
@@ -196,6 +201,7 @@ class McpdTransport:
             ) from e
         self._reader, self._writer = r, w
         self._last_io_at = time.monotonic()
+        self._method_names = None
 
     def _is_stale(self) -> bool:
         """True when the open connection is known or likely to be dead:
@@ -219,6 +225,7 @@ class McpdTransport:
         self._writer = None
         self._reader = None
         self._last_io_at = None
+        self._method_names = None
         if w is not None:
             try:
                 w.close()

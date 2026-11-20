@@ -59,6 +59,8 @@ class StreamDaemon:
         self.break_get_after: int | None = None
         self.calls: list[str] = []
         self.connections = 0
+        #: the server side of every connection, to drop them all (a restart)
+        self.writers: list[asyncio.StreamWriter] = []
         self.server: asyncio.base_events.Server | None = None
         self.port = 0
 
@@ -82,6 +84,7 @@ class StreamDaemon:
 
     async def _serve(self, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
         self.connections += 1
+        self.writers.append(w)
         last: dict[str, Any] | None = None
         try:
             while True:
@@ -271,6 +274,31 @@ async def test_old_daemon(tmp_path: Path) -> None:
             await fs_tool.fs_upload(fleet, "q", local_path=str(src),
                                     remote_path="DH0:a", transfer="stream")
         assert await fs_tool._use_stream(fleet, "q", "auto", 10 * 1024 * 1024) is False
+        await fleet.mcpd("q").close()
+    finally:
+        await d.stop()
+
+
+@pytest.mark.asyncio
+async def test_stream_support_asked_again_after_daemon_restart(tmp_path: Path) -> None:
+    """A daemon that restarts as a newer version is asked again: the
+    capability cache lasts only as long as the connection it came on."""
+    d = StreamDaemon(with_streams=False)
+    await d.start()
+    try:
+        fleet = _fleet(d.port)
+        assert await fs_tool._use_stream(fleet, "q", "auto", 10 * 1024 * 1024) is False
+        # Same connection, same daemon: answered from the cache.
+        asked = d.calls.count("proto.capabilities")
+        assert await fs_tool._use_stream(fleet, "q", "auto", 10 * 1024 * 1024) is False
+        assert d.calls.count("proto.capabilities") == asked
+        # The daemon restarts with streams: its end of the connection closes.
+        d.with_streams = True
+        for w in d.writers:
+            w.close()
+        await asyncio.sleep(0.1)
+        assert await fs_tool._use_stream(fleet, "q", "auto", 10 * 1024 * 1024) is True
+        assert d.calls.count("proto.capabilities") == asked + 1
         await fleet.mcpd("q").close()
     finally:
         await d.stop()

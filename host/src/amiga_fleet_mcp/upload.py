@@ -299,19 +299,23 @@ class StreamCorrupt(Exception):
 
 
 async def _caps(t: object) -> list[str]:
-    """proto.capabilities' method names, cached on the transport; any
-    failure counts as none (older daemons keep the chunked path)."""
+    """proto.capabilities' method names, cached on the transport for
+    as long as its connection lasts (McpdTransport clears the cache on
+    connect and close, so a restarted daemon is asked again). Any
+    failure counts as none (older daemons keep the chunked path) and
+    is not cached."""
+    stale = getattr(t, "_is_stale", None)
     cached = getattr(t, "_method_names", None)
-    if isinstance(cached, list):
+    if isinstance(cached, list) and not (callable(stale) and stale()):
         return cached
-    names: list[str] = []
-    if hasattr(t, "open_stream"):
-        try:
-            caps = await t.request("proto.capabilities", timeout_s=10.0)  # type: ignore[attr-defined]
-            got = caps.get("method_names", []) if isinstance(caps, dict) else []
-            names = [str(n) for n in got]
-        except Exception:
-            names = []
+    if not hasattr(t, "open_stream"):
+        return []
+    try:
+        caps = await t.request("proto.capabilities", timeout_s=10.0)  # type: ignore[attr-defined]
+    except Exception:
+        return []
+    got = caps.get("method_names", []) if isinstance(caps, dict) else []
+    names = [str(n) for n in got]
     try:
         t._method_names = names  # type: ignore[attr-defined]
     except AttributeError:
