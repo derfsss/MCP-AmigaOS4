@@ -41,6 +41,15 @@ fall back on older daemons.
   and more), `"stream"` requires them, `"chunked"` keeps the old path.
   A stream that breaks resumes on a new connection from the size
   already transferred. Results report which path was used.
+- **`fs.stream_status`** (MCPd): the CRC-32 of the bytes the last
+  stream on the connection moved. `fs_upload` / `fs_download` check
+  every stream against their own CRC-32 when the daemon has it, send
+  or fetch a stream again on a mismatch, and report `crc32_verified`
+  (true when one checked stream carried the whole file; a resumed
+  transfer leaves the broken stream's bytes unchecked).
+  TCP's checksum does not cover the bytes before the network card when
+  the card computes it, so this is the end-to-end check;
+  `verify=True` (SHA-256 of the whole file) stays available.
 
 ### Measured
 
@@ -54,14 +63,67 @@ random data, same boot, SHA-256 checked both ways:
 | upload, rustsocket | 5.93 MiB/s | 14.90 MiB/s |
 | download, rustsocket | 2.56 MiB/s | 4.45 MiB/s |
 
+Checks and limits, QEMU AmigaOne guests (virtio-net), Roadshow 1.15
+and rustsocket, each with the new daemon:
+
+| | Roadshow | rustsocket |
+|---|---|---|
+| host stops reading a 256 MiB `fs.stream_get` | dropped after 126 s (before: never) | dropped after 128 s |
+| host stops sending in an `fs.stream_put` | dropped after 120 s (before: never) | dropped after 121 s |
+| upload and download broken once by the host | resumed, SHA-256 matches | the same |
+| idle connection, 390 s | answers | answers |
+| small request (`proto.version`), median | 3.2-16 ms -> 0.8-2.0 ms | 1.4-2.2 ms -> 1.4-1.5 ms |
+
+AmigaOne X5000 (I210, igb.device), 256 MiB to RAM:, SHA-256 checked,
+one fresh boot per run: Roadshow, old daemon 34.8 / 24.9 and 64.1 /
+66.4 MiB/s up / down, small requests 46-48 ms; new daemon 55.2 / 54.7
+and 53.6 / 56.0 MiB/s, 0.2-0.3 ms. rustsocket, new daemon: 50.0 /
+51.3 MiB/s, 0.3 ms. Stalls, resume, idle and the method sweep pass on
+both stacks there too.
+
+Stream speeds on QEMU are unchanged within the run-to-run spread (Roadshow,
+three alternating pairs: upload 15.3-19.9 MiB/s before, 15.0-17.6
+after; download 3.6-4.4 and 3.3-4.0).
+
 ### Fixed
 
+- **A peer that stopped reading or sending held a connection for
+  good on some stacks.** The daemon relied on `SO_RCVTIMEO`, which
+  Roadshow 1.15 ignores (as it ignores `SO_SNDTIMEO`): a host that
+  vanished in the middle of a frame or a stream left the worker, and
+  a stream's file, held until the next reboot. Connections are now
+  non-blocking: each read and write is tried, waits with `WaitSelect`
+  only when it would block, and the connection is dropped after 120 s
+  without progress, on any stack.
+  The socket options and `SO_KEEPALIVE` are still set, for stacks
+  that honour them (how soon a dead idle connection goes depends on
+  the stack's keepalive timing; not measured).
+- **Responses waited for the host's delayed ACK.** The daemon sent a
+  frame's 4-byte header and its body in two `send()` calls, so Nagle
+  held the body until the header was acknowledged. Frames up to
+  256 KiB now go out in one `send()`, and connections set
+  `TCP_NODELAY`: Roadshow 1.15 cuts even one small `send()` into
+  ~100-byte pieces and Nagle held the rest. Raw streams and frames
+  over 256 KiB (`fs.read` answers) turn Nagle back on while they go:
+  without it Roadshow sent a large `send()` in small segments. Small requests: 15-16 ms -> about 1 ms on a QEMU
+  guest; 46-48 ms -> 0.2-0.3 ms on an AmigaOne X5000 over an I210.
+- **Resuming a broken upload could fail instead of resuming.** The
+  host read the file's size straight after the break, while the
+  daemon could still be writing what it had buffered and still held
+  the file open, so the resumed `fs.stream_put` was refused. The host
+  now closes the broken stream, waits for the size to stop changing,
+  and retries a refused resume.
 - **Chunked uploads of incompressible data failed "frame too large".**
   24 MiB of raw bytes is exactly 32 MiB of base64, the frame limit,
   with no room for the request around it. Any chunk sent uncompressed
   hit it: `compression="none"`, and also the default `"auto"` on data
   zlib cannot shrink by 5% (archives, images, random data) of 24 MiB
   or more. Chunks are now clamped to what fits a frame.
+- **Chunked downloads of 24 MiB or more failed.** The same limit the
+  other way: a 24 MiB `fs.read` answers with 32 MiB of base64 plus the
+  envelope, so the daemon could not send it and dropped the
+  connection (`transfer="chunked"`, or any download from a daemon
+  without streams). Reads are now clamped the same way.
 
 ## 2.2 — Doctor and ready-made workflows
 

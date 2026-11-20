@@ -19,22 +19,34 @@
  * Offsets and lengths are 64-bit (JSON numbers are exact to 2^53).
  * Everything that can be checked before the bytes flow (path, offset,
  * open) comes back as a normal JSON-RPC error. A failure while they
- * flow (read or write error, the peer stalling past SO_RCVTIMEO)
+ * flow (read or write error, the peer stalling past MCPD_IO_TIMEOUT_S)
  * drops the connection: nothing else can tell the peer where the
  * stream stopped. The client then resumes from fs.stat's size (put)
  * or its own file's size (get); a put is confirmed by fs.stat on the
  * same connection once the bytes are sent (the file is closed before
  * that request is read).
+ *
+ *   fs.stream_status {}
+ *     -> {dir, offset, bytes, complete, crc32} of the last stream on
+ *        this connection: the CRC-32 (zlib's) of the bytes it moved,
+ *        for the client to check against its own. With a network
+ *        card that computes TCP checksums itself, TCP no longer
+ *        covers the bytes between the stack and the card; this does,
+ *        end to end, on any stack and any card.
  */
 
 #include "../conn_ctx.h"
 #include "../rpc.h"
 #include "methods.h"
+#include "../crc32.h"
+#include "../frame.h"
 
 #include <stdint.h>
 #include <string.h>
 
 #include <proto/bsdsocket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <dos/dos.h>
@@ -139,6 +151,7 @@ int fs_stream_get(cJSON *params, cJSON **out_result, cJSON **out_err) {
     ctx->stream.fh = fh;
     ctx->stream.dir = MCPD_STREAM_GET;
     ctx->stream.remaining = n;
+    ctx->stream.offset = offset;
     *out_result = r;
     return 0;
 }
@@ -206,6 +219,7 @@ int fs_stream_put(cJSON *params, cJSON **out_result, cJSON **out_err) {
     ctx->stream.fh = fh;
     ctx->stream.dir = MCPD_STREAM_PUT;
     ctx->stream.remaining = length;
+    ctx->stream.offset = offset;
     *out_result = r;
     return 0;
 }
@@ -219,16 +233,41 @@ void mcpd_stream_cancel(struct conn_ctx *ctx) {
     ctx->stream.fh = ZERO;
     ctx->stream.dir = 0;
     ctx->stream.remaining = 0;
+    ctx->stream.offset = 0;
+}
+
+/* ---- fs.stream_status ------------------------------------------ */
+
+int fs_stream_status(cJSON *params, cJSON **out_result, cJSON **out_err) {
+    (void)params;
+    struct conn_ctx *ctx = mcpd_conn_ctx();
+    if (!ctx || !ctx->isocket) {
+        *out_err = rpc_make_error(MCPD_ERR_INTERNAL,
+            "streams run only on a connection worker", NULL);
+        return 0;
+    }
+    if (!ctx->last.valid) {
+        *out_err = rpc_make_error(MCPD_ERR_INVPARAMS,
+            "no stream has run on this connection", NULL);
+        return 0;
+    }
+    cJSON *r = cJSON_CreateObject();
+    if (!r) {
+        *out_err = rpc_make_error(MCPD_ERR_INTERNAL, "out of memory", NULL);
+        return 0;
+    }
+    cJSON_AddStringToObject(r, "dir",
+        ctx->last.dir == MCPD_STREAM_GET ? "get" : "put");
+    cJSON_AddNumberToObject(r, "offset", (double)ctx->last.offset);
+    cJSON_AddNumberToObject(r, "bytes", (double)ctx->last.bytes);
+    cJSON_AddBoolToObject(r, "complete", ctx->last.complete);
+    cJSON_AddNumberToObject(r, "crc32", (double)ctx->last.crc32);
+    *out_result = r;
+    return 0;
 }
 
 static int send_all(struct conn_ctx *ctx, const char *p, uint32 n) {
-    while (n > 0) {
-        long sent = ctx->isocket->send(ctx->fd, (APTR)p, n, 0);
-        if (sent <= 0) return -1;
-        p += sent;
-        n -= (uint32)sent;
-    }
-    return 0;
+    return frame_send_all(ctx->fd, p, n);
 }
 
 int mcpd_stream_run(struct conn_ctx *ctx) {
@@ -236,6 +275,17 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
     int dir = ctx->stream.dir;
     long long rem = ctx->stream.remaining;
     int rc = 0;
+    uint32_t crc = 0;
+    long long moved = 0;
+
+    /* Nagle on for the raw bytes (main.c turned it off for frames):
+     * without it Roadshow sends a large send() in small segments. */
+    int nagle_toggled = 0;
+    if (ctx->nodelay && rem > 0) {
+        int off = 0;
+        nagle_toggled = ctx->isocket->setsockopt(ctx->fd, IPPROTO_TCP,
+            TCP_NODELAY, &off, sizeof(off)) == 0;
+    }
 
     /* The bytes move here, after the RPC that set the stream up has
      * returned: hold the blanker away for them too (applib.c). */
@@ -255,30 +305,53 @@ int mcpd_stream_run(struct conn_ctx *ctx) {
             LONG got = IDOS->Read(ctx->stream.fh, buf, (LONG)want);
             /* A short read before the promised length (the file
              * shrank, or a read error) cannot be told to the peer. */
-            if (got <= 0 || send_all(ctx, buf, (uint32)got) != 0) {
+            if (got <= 0) {
                 rc = -1;
                 break;
             }
+            crc = mcpd_crc32(crc, buf, (size_t)got);
+            if (send_all(ctx, buf, (uint32)got) != 0) {
+                rc = -1;
+                break;
+            }
+            moved += got;
             rem -= got;
         } else {
             /* Fill the buffer, then write it in one DOS call. */
             uint32 have = 0;
             while (have < want) {
-                long got = ctx->isocket->recv(ctx->fd, buf + have, want - have, 0);
+                long got = frame_recv_some(ctx->fd, buf + have, want - have);
                 if (got <= 0) {
                     rc = -1;
                     break;
                 }
                 have += (uint32)got;
             }
-            if (have > 0 && IDOS->Write(ctx->stream.fh, buf, (LONG)have) != (LONG)have) {
-                rc = -1;
+            if (have > 0) {
+                if (IDOS->Write(ctx->stream.fh, buf, (LONG)have) != (LONG)have) {
+                    rc = -1;
+                } else {
+                    crc = mcpd_crc32(crc, buf, have);
+                    moved += have;
+                }
             }
             rem -= have;
         }
     }
 
     if (buf) IExec->FreeVec(buf);
+    if (nagle_toggled) {
+        /* Back to no Nagle; setting it also sends what Nagle held. */
+        int on = 1;
+        ctx->isocket->setsockopt(ctx->fd, IPPROTO_TCP, TCP_NODELAY,
+                                 &on, sizeof(on));
+    }
+    ctx->last.valid = 1;
+    ctx->last.dir = dir;
+    ctx->last.offset = ctx->stream.offset;
+    ctx->last.bytes = moved;
+    ctx->last.crc32 = crc;
+    ctx->last.complete = (rc == 0 && rem == 0);
     /* Close before the next request is read, so the client's fs.stat
      * on this connection sees the whole file. */
     mcpd_stream_cancel(ctx);

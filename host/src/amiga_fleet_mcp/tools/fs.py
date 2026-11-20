@@ -300,6 +300,12 @@ class UploadResult(BaseModel):
     sha256: str | None = None
     #: "stream" (raw bytes, fs.stream_put) or "chunked" (fs.write_chunk).
     transfer: str = "chunked"
+    #: One stream carried the whole file and its CRC-32 matched the
+    #: target's (fs.stream_status, MCPd 2.3+): checked end to end.
+    #: False after a resume (each later stream is still checked, but
+    #: the bytes of a broken one are not); verify=True re-reads the
+    #: file on the target for SHA-256 in every case.
+    crc32_verified: bool = False
 
 
 #: Files at least this big go as a raw stream under transfer="auto"
@@ -339,6 +345,8 @@ class DownloadResult(BaseModel):
     sha256_verified: bool = False
     sha256: str | None = None
     transfer: str = "chunked"
+    #: As UploadResult.crc32_verified.
+    crc32_verified: bool = False
 
 
 async def fs_upload(
@@ -472,6 +480,7 @@ async def fs_upload(
         sha256_verified=sha_ok,
         sha256=sha,
         transfer="stream" if streamed else "chunked",
+        crc32_verified=getattr(stats, "crc_checked", False),
     )
 
 
@@ -567,4 +576,5 @@ async def fs_download(
         sha256_verified=sha_ok,
         sha256=sha,
         transfer="stream" if streamed else "chunked",
+        crc32_verified=getattr(stats, "crc_checked", False),
     )

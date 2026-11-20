@@ -45,14 +45,30 @@ struct mcpd_stream {
     BPTR      fh;
     int       dir;          /* MCPD_STREAM_GET / MCPD_STREAM_PUT */
     long long remaining;    /* bytes still to move */
+    long long offset;       /* where in the file it starts */
+};
+
+/* What the last stream on this connection did, for fs.stream_status:
+ * the client checks the CRC-32 of the bytes against its own (TCP's
+ * checksum may be the network card's, and covers nothing in between). */
+struct mcpd_stream_last {
+    int       valid;        /* a stream has run on this connection */
+    int       dir;          /* MCPD_STREAM_GET / MCPD_STREAM_PUT */
+    int       complete;     /* every promised byte moved */
+    long long offset;       /* the file offset it started at */
+    long long bytes;        /* bytes moved (and, for a put, written) */
+    uint32_t  crc32;        /* CRC-32 of those bytes (crc32.h) */
 };
 
 struct conn_ctx {
     struct Library     *socket_base; /* OpenLibrary("bsdsocket.library") */
     struct SocketIFace *isocket;     /* GetInterface(socket_base, "main") */
     int                 fd;          /* connection fd in this task's table */
+    int                 nbio;        /* fd is non-blocking (frame.c waits) */
+    int                 nodelay;     /* TCP_NODELAY set (off during streams) */
     struct ev_state     ev;          /* per-task events subscription state */
     struct mcpd_stream  stream;      /* raw bytes after this response */
+    struct mcpd_stream_last last;    /* the last stream's result */
 };
 
 /* Run the stream a handler set up, if any, and clear it (the file is

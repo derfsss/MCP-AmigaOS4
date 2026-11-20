@@ -9,6 +9,10 @@ Verifies:
 - a daemon error before the bytes flow is raised, not retried
 - transfer="stream" against a daemon without the methods is NotCapable
 - transfer="auto" against such a daemon falls back to the chunked path
+- fs.stream_status: each stream's CRC-32 is checked; a corrupted
+  stream is sent / fetched again
+- a broken put whose last bytes the daemon writes late (and whose file
+  it still holds) resumes from the settled size
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import asyncio
 import json
 import os
 import struct
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +43,18 @@ class StreamDaemon:
     fs.stream_put, fs.stream_get. `break_put_after` / `break_get_after`
     drop the connection once that many raw bytes have moved (once)."""
 
-    def __init__(self, with_streams: bool = True) -> None:
+    def __init__(self, with_streams: bool = True, with_status: bool = False) -> None:
         self.files: dict[str, bytearray] = {}
         self.with_streams = with_streams
+        self.with_status = with_status
+        #: flip one stored (put) or sent (get) byte, once
+        self.corrupt_put_once = False
+        self.corrupt_get_once = False
+        #: on a broken put: bytes the daemon still writes after the break,
+        #: `late_after_s` later, and how long it refuses a resume meanwhile
+        self.late_bytes = 0
+        self.late_after_s = 0.0
+        self.locked_until = 0.0
         self.break_put_after: int | None = None
         self.break_get_after: int | None = None
         self.calls: list[str] = []
@@ -68,6 +82,7 @@ class StreamDaemon:
 
     async def _serve(self, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
         self.connections += 1
+        last: dict[str, Any] | None = None
         try:
             while True:
                 try:
@@ -82,6 +97,8 @@ class StreamDaemon:
                     names = ["fs.stat", "fs.sync"]
                     if self.with_streams:
                         names += ["fs.stream_put", "fs.stream_get"]
+                    if self.with_status:
+                        names.append("fs.stream_status")
                     await self._frame(w, {"jsonrpc": "2.0", "id": rid,
                                           "result": {"method_names": names}})
                 elif method == "fs.stat":
@@ -94,8 +111,18 @@ class StreamDaemon:
                 elif method == "fs.sync":
                     await self._frame(w, {"jsonrpc": "2.0", "id": rid,
                                           "result": {"path": p["path"], "flushed": True}})
+                elif method == "fs.stream_status" and self.with_status:
+                    if last is None:
+                        await self._frame(w, self._err(rid, -32602, "no stream"))
+                    else:
+                        await self._frame(w, {"jsonrpc": "2.0", "id": rid, "result": last})
                 elif method == "fs.stream_put" and self.with_streams:
                     off, length = int(p["offset"]), int(p["length"])
+                    loop = asyncio.get_running_loop()
+                    if off > 0 and loop.time() < self.locked_until:
+                        await self._frame(w, self._err(rid, -32001,
+                            "cannot open the file to resume"))
+                        continue
                     if off == 0:
                         self.files[p["path"]] = bytearray()
                     elif len(self.files.get(p["path"], b"")) != off:
@@ -119,15 +146,29 @@ class StreamDaemon:
                             room = self.break_put_after - (len(buf) - off)
                             if room <= len(chunk):
                                 buf.extend(chunk[:max(room, 0)])
+                                late = chunk[max(room, 0):max(room, 0) + self.late_bytes]
+                                if late:
+                                    self.locked_until = loop.time() + self.late_after_s + 0.5
+                                    loop.call_later(self.late_after_s, buf.extend, late)
                                 self.break_put_after = None
                                 w.transport.abort()
                                 return
+                        if self.corrupt_put_once:
+                            chunk = bytes([chunk[0] ^ 0xFF]) + chunk[1:]
+                            self.corrupt_put_once = False
                         buf.extend(chunk)
                         left -= len(chunk)
+                    last = {"dir": "put", "offset": off, "bytes": length,
+                            "complete": True, "crc32": zlib.crc32(bytes(buf[off:]))}
                 elif method == "fs.stream_get" and self.with_streams:
                     data = bytes(self.files[p["path"]])
                     off = int(p.get("offset", 0))
                     out = data[off:]
+                    last = {"dir": "get", "offset": off, "bytes": len(out),
+                            "complete": True, "crc32": zlib.crc32(out)}
+                    if self.corrupt_get_once and out:
+                        out = bytes([out[0] ^ 0xFF]) + out[1:]
+                        self.corrupt_get_once = False
                     await self._frame(w, {"jsonrpc": "2.0", "id": rid, "result": {
                         "path": p["path"], "offset": off, "length": len(out),
                         "total_size": len(data)}})
@@ -233,3 +274,59 @@ async def test_old_daemon(tmp_path: Path) -> None:
         await fleet.mcpd("q").close()
     finally:
         await d.stop()
+
+
+@pytest.mark.asyncio
+async def test_stream_crc_checked_and_corruption_redone(tmp_path: Path) -> None:
+    d = StreamDaemon(with_status=True)
+    await d.start()
+    try:
+        fleet = _fleet(d.port)
+        src = tmp_path / "big.bin"
+        src.write_bytes(os.urandom(2 * 1024 * 1024 + 5))
+        up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:c")
+        assert up.crc32_verified and up.chunks == 1
+        d.corrupt_put_once = True
+        up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:c")
+        assert up.crc32_verified and up.chunks == 2
+        assert bytes(d.files["DH0:c"]) == src.read_bytes()
+        # A broken (then resumed) stream leaves bytes unchecked.
+        d.break_put_after = 700_000
+        up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:c")
+        assert up.chunks == 2 and not up.crc32_verified
+        assert bytes(d.files["DH0:c"]) == src.read_bytes()
+        d.break_get_after = 900_001
+        dst2 = tmp_path / "c2.bin"
+        down = await fs_tool.fs_download(fleet, "q", remote_path="DH0:c", local_path=str(dst2))
+        assert down.chunks == 2 and not down.crc32_verified
+        assert dst2.read_bytes() == src.read_bytes()
+        d.corrupt_get_once = True
+        dst = tmp_path / "c.bin"
+        down = await fs_tool.fs_download(fleet, "q", remote_path="DH0:c", local_path=str(dst))
+        assert down.crc32_verified and down.chunks == 2
+        assert dst.read_bytes() == src.read_bytes()
+        await fleet.mcpd("q").close()
+    finally:
+        await d.stop()
+
+
+@pytest.mark.asyncio
+async def test_broken_put_with_late_writes_resumes(
+    daemon: StreamDaemon, tmp_path: Path,
+) -> None:
+    """The daemon writes 300 KB more after the break and refuses a
+    resume until it has: an fs.stat straight after the break reads a
+    size that is about to change."""
+    fleet = _fleet(daemon.port)
+    src = tmp_path / "big.bin"
+    src.write_bytes(os.urandom(3 * 1024 * 1024))
+    daemon.break_put_after = 1_000_000
+    daemon.late_bytes = 300_000
+    daemon.late_after_s = 1.2
+    try:
+        up = await fs_tool.fs_upload(fleet, "q", local_path=str(src), remote_path="DH0:late")
+        assert bytes(daemon.files["DH0:late"]) == src.read_bytes()
+        assert not up.crc32_verified  # this daemon has no fs.stream_status
+        assert up.chunks >= 2
+    finally:
+        await fleet.mcpd("q").close()
