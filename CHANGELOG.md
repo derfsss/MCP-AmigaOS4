@@ -1,8 +1,10 @@
 # Change log
 
-## 2.4 — 8-bit screenshots (in progress on `develop`)
+## 2.4 — Raw file streams and 8-bit screenshots
 
-Everything in 2.3 below, plus:
+2.4 is the first release with the 2.3 work below (raw file streams,
+faster small requests, connections that cannot be held for good),
+plus:
 
 ### Changed
 
@@ -13,8 +15,32 @@ Everything in 2.3 below, plus:
   the release script reads it. It used to be repeated in five files
   that had to be changed together.
 
+### Added
+
+- **The screen blanker stays away during file transfers** (MCPd).
+  A transfer has no user input for its whole length, so a blanker
+  could start in the middle of one; on an X5000 an animated blanker
+  then took enough CPU that uploads stalled for minutes and the link
+  dropped. `fs.read`, `fs.write`, `fs.write_chunk`, `fs.stream_get`
+  and `fs.stream_put` set application.library's
+  `APPATTR_AllowsBlanker` to FALSE (which also stops a running
+  blanker) and set it back 30 s after the last transfer. The user's
+  blanker settings are not changed.
+
 ### Fixed
 
+- **A restarted daemon kept the host's old answer about streams.**
+  The host asked once per process whether a target's MCPd had
+  `fs.stream_get` / `fs.stream_put`; after the daemon was upgraded
+  and restarted, transfers stayed on the slower chunked path until
+  the MCP server was restarted too. The answer is now asked again on
+  each new connection.
+- **`qemu_start` failed on a guest with a second network card**
+  ("Property 'virtio-net-pci.hostfwd' not found"). The port forwards
+  were appended to the last `-device` instead of the user-mode
+  `-netdev`. They now go on the first user-mode netdev, skip host
+  ports the config already forwards, and leave other netdev types
+  alone.
 - **`wb.screenshot` of an 8-bit (palette) screen returned garbage.**
   graphics.library's `ReadPixelArray` does not convert a CLUT screen
   to `PIXF_R8G8B8`; it writes nothing, so the PNG held whatever the

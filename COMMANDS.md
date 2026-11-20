@@ -42,7 +42,8 @@ auto-start watchdog.
 
 ## RPC methods (daemon side)
 
-Every method advertised by `proto.capabilities` — 64 since MCPd 2.0.
+Every method advertised by `proto.capabilities` — 67 since MCPd 2.3
+(64 in 2.0-2.2).
 JSON-RPC 2.0 over a 4-byte big-endian length-prefix framed TCP socket
 on port 4322.
 
