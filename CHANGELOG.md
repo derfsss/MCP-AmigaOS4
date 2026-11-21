@@ -1,6 +1,6 @@
 # Change log
 
-## 2.5 — Notifications that return (in progress on `develop`)
+## 2.5 — Notifications that return (not released yet)
 
 ### Fixed
 
