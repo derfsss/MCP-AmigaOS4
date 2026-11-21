@@ -5,10 +5,15 @@ The transport for in-Amiga method dispatch.
 Wire format (matches mcpd/src/frame.c on the daemon side):
     uint32_be length | <length> bytes UTF-8 JSON-RPC
 
-One TCP connection per target, lazy-initiated, serialised with an
-asyncio.Lock (we don't multiplex requests over a single connection
-since the daemon spawns a fresh handler task per connection). The
-transport silently reconnects on EOF.
+One TCP connection per target for requests, lazy-initiated,
+serialised with an asyncio.Lock (we don't multiplex requests over a
+single connection since the daemon spawns a fresh handler task per
+connection). A bulk raw transfer (fs.stream_get / fs.stream_put)
+opens a second, private connection of its own (`open_stream`).
+
+The transport reconnects on EOF, but resends a request only when that
+cannot run it twice: the send itself failed, or the method is in
+IDEMPOTENT_METHODS (see `request`).
 """
 
 from __future__ import annotations
@@ -99,7 +104,8 @@ IDEMPOTENT_METHODS = frozenset({
 })
 
 #: The daemon drops a connection that has sent nothing for
-#: MCPD_RECV_TIMEOUT_S (120 s, mcpd/src/main.c). A request written into
+#: MCPD_RECV_TIMEOUT_S (mcpd/src/main.c; = MCPD_IO_TIMEOUT_S, 120 s,
+#: mcpd/src/frame.h). A request written into
 #: a connection it has already dropped fails with EOF and was never
 #: run, but from here that looks the same as one that ran and lost its
 #: reply. So reconnect before sending once a connection has been idle
@@ -146,7 +152,8 @@ class McpdTransport:
         #: proto.capabilities' method names (upload._caps), for the
         #: daemon behind the current connection only: a new connection
         #: may reach a restarted daemon of another version, so
-        #: connecting and closing both clear it.
+        #: connecting and closing both clear it, and upload._caps
+        #: asks again when the connection looks stale.
         self._method_names: list[str] | None = None
 
     def subscribe_notifications(
@@ -255,9 +262,10 @@ class McpdTransport:
         On a freshly-booted MCPd the TCP listener accepts connections
         before its dispatch path is fully ready, so the first 1-2
         RPCs occasionally drop silently. Fire a couple of cheap
-        sys.uptime probes; ignore responses + errors. Caller holds
-        `_lock` so this is safe to interleave with the real request
-        build below.
+        sys.uptime probes; ignore responses + errors. `request()`
+        runs it only on its second attempt, after a reconnect and
+        before the resend, never on a first connect. Caller holds
+        `_lock` so this is safe to interleave with the real request.
         """
         for i in range(2):
             try:

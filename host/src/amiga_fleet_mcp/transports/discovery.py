@@ -88,9 +88,10 @@ async def discover(
 ) -> list[dict[str, Any]]:
     """Send UDP discovery probes; collect responses for `timeout_s`.
 
-    Returns a list of `{ip, tcp_port, endpoint, server, host, methods,
-    latency_ms}` deduplicated by `(ip, tcp_port)`. Newer responses
-    (lower latency) replace older entries.
+    Returns a list of `{ip, tcp_port, endpoint, server, protocol, host,
+    methods, latency_ms, target}` deduplicated by `(ip, tcp_port)`
+    (a later reply replaces an earlier one), sorted fastest-first.
+    `target` is None unless `endpoint_map` supplies it.
 
     `broadcast_addrs` defaults to 255.255.255.255 plus the host's
     detected /24 subnet broadcasts. `include_loopback` adds

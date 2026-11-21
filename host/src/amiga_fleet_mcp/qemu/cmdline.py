@@ -1,11 +1,11 @@
 """Build a QEMU command line from a kyvos-style config.json + our
-target config (which knows the SerialShell / QMP / MCPd port-forwards
-to inject).
+target config (which knows the MCPd TCP + discovery UDP port-forwards
+to inject, and the QMP / GDB listeners to add).
 
 Mirrors qemu-runner/qemu_manager.py:build_qemu_cmdline + _split_arg_string
-but lives in this codebase so phase-2 tests don't depend on the
-neighbour project being importable. Kept deliberately simple — no
-auto-restart loop, no idle watchdog.
+but lives in this codebase so the command line can be built and tested
+without qemu-runner. Kept deliberately simple — no auto-restart loop,
+no idle watchdog.
 """
 
 from __future__ import annotations
@@ -41,9 +41,9 @@ def _split_arg_string(s: str) -> list[str]:
     return result
 
 
-# Drop kyvos-specific args that we'll override (we always replace
-# the pidfile, and we add our own qmp). User-provided values for
-# these in the kyvos config are ignored.
+# Kyvos config args that are dropped, whatever their value. No
+# pidfile is written: the process is tracked by its handle. (QMP
+# and GDB are added from the target's own channels, below.)
 _DROPPED_ARG_KEYS = {"pidfile"}
 
 # In-guest listen port for MCPd. The host port (from config.toml)
@@ -52,8 +52,8 @@ _DROPPED_ARG_KEYS = {"pidfile"}
 GUEST_PORT_MCPD = 4322
 
 # In-guest UDP port for the LAN discovery responder. Same port as
-# the daemon binds; the host's discover() targets 127.0.0.1:4323 so
-# the QEMU hostfwd path picks it up.
+# the daemon binds. The host side of its hostfwd rule is per target
+# (see build_cmdline), and fleet.discover probes each one directly.
 GUEST_PORT_DISCOVERY = 4323
 
 
@@ -71,13 +71,15 @@ def _fwd_key(clause: str) -> tuple[str, str] | None:
 
 
 def _inject_hostfwd(netdev_arg: str, fwds: list[str]) -> str:
-    """Inject `,hostfwd=tcp::H-:G` clauses into the network arg string.
+    """Inject `,hostfwd=tcp::H-:G` / `,hostfwd=udp::H-:G` clauses into
+    the network arg string.
 
     The string may hold several options (`-netdev user,... -device
     virtio-net-pci,... -netdev user,...`). The clauses go on the first
     user-mode netdev, never onto whatever happens to be last. A clause
     whose protocol and host port some netdev already forwards is left
     out: the config forwards it already, and QEMU aborts on a duplicate.
+    With no user-mode netdev the string is returned unchanged.
     """
     if not fwds:
         return netdev_arg

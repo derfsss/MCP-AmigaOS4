@@ -14,7 +14,8 @@ JSON wire is binary-safe).
 
 Channel name defaults to `"uboot"` since that's the rear-panel
 (U-Boot + AOS4 kernel debug) UART — the most common case. Pass
-`channel="mcu"` for the MCU UART once it's wired.
+`channel="mcu"` for the MCU UART (which power.* also uses: the two
+cannot share the port at once).
 """
 
 from __future__ import annotations

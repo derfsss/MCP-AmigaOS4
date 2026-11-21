@@ -228,7 +228,7 @@ async def exec_kill(
     `force=True` is for jobs started with `sandbox=True` only: it asks
     SandboxVM to abort the guest, which frees everything the guest
     opened. It needs a SandboxVM that supports that (sandbox.probe
-    `abort_supported`; requested in derfsss/SandboxVM#1)."""
+    `abort_supported`; SandboxVM 1.1 or later, derfsss/SandboxVM#1)."""
     params: dict[str, object] = {
         "job_id": job_id, "signal": signal, "wait_ms": int(wait_s * 1000),
     }

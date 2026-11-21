@@ -1,8 +1,9 @@
 """sandbox.* unit tests via fake transport.
 
-Covers Phase A surface: probe (hit / miss / broken / Pegasos2),
-deploy (cache invalidation), run_guest (happy path / trap exit /
-config-driven defaults / per-target deny merge / per-target lock).
+Covers probe (hit / miss / broken / Pegasos2), deploy (cache
+invalidation), run_guest (happy path / trap exit / config-driven
+defaults / per-target deny merge / per-target lock), run_driver,
+last_trap and run_batch.
 """
 
 from __future__ import annotations

@@ -26,9 +26,8 @@ def required_files(machine: str) -> list[dict[str, str]]:
       filename — exact filename to look for (or, for "iso", a prefix
                  pattern; the actual ISO is matched by prefix)
 
-    For A1222 the "enhancer" role is replaced by an external RescueV2
-    USB volume — see machines.A1222_BACKUP_VOLS — so it's not in the
-    file manifest. Callers who need that should check separately.
+    Every machine, A1222 included, gets the same "enhancer" entry
+    (the Enhancer 2.2 LHA); the old A1222 RescueV2 USB path is gone.
     """
     if machine not in SUPPORTED_MACHINES:
         raise ValueError(

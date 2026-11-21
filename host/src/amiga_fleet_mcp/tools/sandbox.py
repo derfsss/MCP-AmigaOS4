@@ -1,20 +1,24 @@
 """sandbox.* — drive SandboxVM on AmigaOS 4 targets.
 
-Phase A surface (this file): probe, deploy, run_guest. Each call goes
-through `_ensure_available` first so a missing / broken / Pegasos2
-target fails fast with a typed error, never half-runs.
+Surface (this file): probe, deploy, run_guest, run_driver, last_trap,
+run_batch, plus the helpers exec.cmd sandbox=True uses
+(`sandbox_job_command` / `sandbox_job_result`). Every call but probe
+goes through `_ensure_available` first so a missing / broken /
+Pegasos2 target fails fast with a typed error, never half-runs.
 
 Surface contract:
 
     sandbox.probe(target=None) -> SandboxProbeResult
         Eager probe. Path resolution + executable check + machine
-        compatibility. Writes to the in-process cache (60 s TTL).
+        compatibility. Writes a positive result to the in-process
+        cache (60 s TTL).
 
     sandbox.deploy(target=None, source=None, dest_path=None,
                    confirm=False) -> DeployResult
         Convenience wrapper around fs.upload that places the host's
-        bin/sandboxvm onto the target's resolved path. Invalidates
-        the probe cache for that target on success.
+        sandboxvm (`source`, else `[paths] sandboxvm`) onto the
+        target's resolved path, then re-probes that path and caches
+        the result.
 
     sandbox.run_guest(target=None, guest=None, args=None,
                       extmem_mb=None, window_mb=None, deny_libs=None,
@@ -31,8 +35,9 @@ Cross-references:
     SandboxVM: use `tests.run_suite`.
   - For the source upload step in isolation: `fs.upload`.
 
-The full kernel debug ring + SandboxVM trap-line filtering arrive
-in Phase B (`sys.debug_ring` + `sandbox.last_trap`).
+`sandbox.last_trap` filters the kernel debug ring (`sys.debug_ring`)
+for SandboxVM trap reports; check its `ring_usable` before reading
+"no trap" as a result.
 """
 
 from __future__ import annotations
@@ -113,9 +118,9 @@ TRAP_KIND_BY_EXIT_CODE: dict[int, str] = {
 }
 
 # Regexes used to fingerprint specific trap shapes in the (rare) cases
-# where the exit-code alone isn't enough. Currently only the upstream-
-# documented kmod-libcall NULL+4 signature; more arrive in Phase B
-# when sandbox.last_trap lands.
+# where the exit-code alone isn't enough. Only the upstream-documented
+# kmod-libcall NULL+4 signature; sandbox.last_trap applies the same
+# hints to debug-ring text (_KMOD_HINTS).
 KMOD_LIBCALL_NULL4_HINTS = (
     "Traptype=0x300",
     "dar=0x4",
@@ -775,9 +780,9 @@ def _classify_exit(exit_code: int,
 
     Fingerprints are best-effort string-match against the trap
     output; the only one currently recognised is the documented
-    kmod-libcall NULL+4 signature for `HD_SCSICMD via DoIO`. Phase B's
-    `sandbox.last_trap` adds debug-ring-based fingerprints for
-    cases where stderr alone doesn't carry the signature."""
+    kmod-libcall NULL+4 signature for `HD_SCSICMD via DoIO`.
+    `sandbox.last_trap` looks for the same signature in the debug
+    ring, for cases where stderr alone doesn't carry it."""
     trap_kind = TRAP_KIND_BY_EXIT_CODE.get(exit_code)
     fingerprint: str | None = None
     if all(h in stderr for h in KMOD_LIBCALL_NULL4_HINTS):
@@ -1357,9 +1362,10 @@ class BatchEntryResult(BaseModel):
     name: str
     exit_code: int
     #: False when the exit code could not be read back and the 0 above
-    #: is a placeholder rather than a result. Happens when the kernel
-    #: debug ring rolled past this guest, and on any machine whose ring
-    #: was already full before MCPd started -- see `ring_usable`.
+    #: is a placeholder rather than a result. Happens when the debug
+    #: ring read holds no line for this guest -- the buffer does not
+    #: wrap, so a ring that filled (before MCPd started, or during the
+    #: batch) stops taking them; see `ring_usable`.
     exit_code_known: bool = True
     trap_kind: str | None = None
     trap_fingerprint: str | None = None
@@ -1413,8 +1419,9 @@ def _parse_per_guest_exits(
     (oldest-first within the trailing window).
 
     Returns a list of (path, rc) pairs. May be shorter than
-    `expected` if the ring rotated past the older guests before we
-    could capture it -- the caller pads with a sentinel rc."""
+    `expected` if the ring read is missing some guests' lines (the
+    buffer filled and stopped taking entries, or they fell outside
+    the `max_lines` window) -- the caller pads with a sentinel rc."""
     matches: list[tuple[str, int]] = []
     for line in ring_lines:
         m = _RE_GUEST_EXIT.search(line)
@@ -1469,11 +1476,13 @@ async def sandbox_run_batch(
     SandboxVM's ``-x`` semantics).
 
     Per-guest exit codes are parsed from the kernel debug ring
-    (``[sandboxvm] guest_run_elf <path> returned <rc>``). When the
-    ring rolls past older entries before we capture it, missing
-    per-guest results are reported as ``exit_code=0`` with
-    ``stdout=""`` -- the aggregate ``aggregate_exit_code`` is still
-    correct because SandboxVM itself returns the last non-zero rc.
+    (``[sandboxvm] guest_run_elf <path> returned <rc>``). A guest
+    whose line the ring read does not hold (the buffer does not wrap,
+    so a full one takes no more) is reported as ``exit_code=0`` with
+    ``exit_code_known=False``, and ``ring_usable=False`` when the ring
+    shows nothing from MCPd or SandboxVM at all. The aggregate
+    ``aggregate_exit_code`` is still correct because SandboxVM itself
+    returns the last non-zero rc.
 
     Args:
         guests: List of BatchGuestSpec entries (or equivalent dicts
@@ -1483,6 +1492,8 @@ async def sandbox_run_batch(
         timeout_s: Host-side request timeout. Higher default than
             run_guest (600 s vs 120 s) because a 16-guest batch can
             comfortably exceed the single-guest budget.
+        priority: Task priority SandboxVM runs at (default
+            `[defaults] exec_priority`, else the daemon's -2).
 
     For JSON-config-driven multi-step bundles without the SandboxVM
     harness, use ``tests.run_suite`` instead."""
@@ -1588,10 +1599,12 @@ async def sandbox_run_batch(
             await _delete_capture(fleet, target, err_path)
 
             # Match per-guest exit by ordinal — the ring entries we
-            # parsed are in batch order, but if the ring rotated
-            # past older guests, the K we captured map to the LAST
-            # K guests in the batch (oldest got dropped). Compute
-            # an alignment offset accordingly.
+            # parsed are in batch order. Fewer than expected are
+            # taken to be the LAST K guests (the oldest cut off by
+            # the max_lines window), and an alignment offset is
+            # computed accordingly. The buffer does not wrap, so one
+            # that fills mid-batch loses the newest lines instead,
+            # and this alignment is then wrong.
             #
             # A missing entry becomes 0 with exit_code_known=False.
             # It used to become a bare 0, which reads as "this guest
