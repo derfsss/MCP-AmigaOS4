@@ -1430,6 +1430,33 @@ def _parse_per_guest_exits(
     return matches[-expected:] if expected > 0 else []
 
 
+def _align_guest_exits(
+    guests: Sequence[str], matches: Sequence[tuple[str, int]],
+) -> list[int | None]:
+    """Match this batch's guests to the ring's "returned" lines.
+
+    `matches` are the trailing (path, rc) lines from the ring, oldest
+    first; this run's lines are the last m of them, for some m, and
+    belong to a contiguous run of the batch: they start at guest 0
+    when the newest lines are missing (the kernel buffer does not wrap,
+    so one that fills mid-batch stops taking lines) and end at the last
+    guest when the oldest fell outside the read window. Tries the
+    largest m first; for each, every start position whose guest paths
+    match, preferring the front (the buffer-full case). Returns one rc
+    per guest, None where its line is missing."""
+    n = len(guests)
+    want = [g.lower() for g in guests]
+    for m in range(min(n, len(matches)), 0, -1):
+        tail = [p.lower() for p, _ in matches[-m:]]
+        for start in range(0, n - m + 1):
+            if want[start:start + m] == tail:
+                out: list[int | None] = [None] * n
+                for k, (_, rc) in enumerate(matches[-m:]):
+                    out[start + k] = rc
+                return out
+    return [None] * n
+
+
 def _build_batch_command(sandboxvm_path: str, *,
                          guests: Sequence[str],
                          extmem_mb: int,
@@ -1575,6 +1602,9 @@ async def sandbox_run_batch(
             max_lines=2000,
         )
         per_guest_exits = _parse_per_guest_exits(ring.lines, len(specs))
+        aligned = _align_guest_exits(
+            [spec.guest for spec in specs], per_guest_exits,
+        )
         # A ring that holds nothing from MCPd or SandboxVM is not
         # reporting on this daemon -- it filled before the daemon
         # started and stopped accepting entries. Every per-guest exit
@@ -1598,25 +1628,19 @@ async def sandbox_run_batch(
             await _delete_capture(fleet, target, out_path)
             await _delete_capture(fleet, target, err_path)
 
-            # Match per-guest exit by ordinal — the ring entries we
-            # parsed are in batch order. Fewer than expected are
-            # taken to be the LAST K guests (the oldest cut off by
-            # the max_lines window), and an alignment offset is
-            # computed accordingly. The buffer does not wrap, so one
-            # that fills mid-batch loses the newest lines instead,
-            # and this alignment is then wrong.
+            # Match per-guest exit by guest path (_align_guest_exits):
+            # the ring may be missing the oldest lines (outside the
+            # read window) or the newest (the buffer filled and stopped
+            # taking lines; it does not wrap).
             #
             # A missing entry becomes 0 with exit_code_known=False.
             # It used to become a bare 0, which reads as "this guest
             # passed" -- and on a machine whose debug buffer filled
             # before boot finished, that was every guest in the batch,
             # every time, regardless of what actually happened.
-            ring_offset = len(specs) - len(per_guest_exits)
-            known = ring_usable and idx >= ring_offset
-            if known:
-                exit_code = per_guest_exits[idx - ring_offset][1]
-            else:
-                exit_code = 0
+            rc_found = aligned[idx]
+            known = ring_usable and rc_found is not None
+            exit_code = rc_found if known and rc_found is not None else 0
 
             trap_kind, fingerprint = _classify_exit(exit_code, stderr)
 

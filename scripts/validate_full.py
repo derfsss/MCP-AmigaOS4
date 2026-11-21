@@ -627,13 +627,6 @@ async def section_v2(r: Reporter, fleet: Fleet) -> None:
     t = fleet.mcpd("target")
     caps = await t.request("proto.capabilities")
     names = set(caps.get("method_names", []))
-    # "mcpd/2.4" -> (2, 4); (0, 0) if the string has another shape.
-    try:
-        ver = tuple(int(x) for x in
-                    str(caps.get("server", "")).split("/")[1].split(".")[:2])
-    except (IndexError, ValueError):
-        ver = (0, 0)
-
     # ---- exec jobs: status / output / list / kill ------------------
     if {"exec.status", "exec.output", "exec.list",
             "exec.kill"} <= names:
@@ -722,31 +715,48 @@ async def section_v2(r: Reporter, fleet: Fleet) -> None:
             await fs_tool.fs_delete(fleet, "target", remote)
 
     # ---- blanker hold ----------------------------------------------
-    # A transfer sets application.library's AllowsBlanker FALSE; a
-    # linger process named "MCPd blanker hold" sets it back 30 s after
-    # the last one (mcpd/src/methods/applib.c). Its presence right
-    # after the transfers shows the hold engaged; it says nothing
-    # about what a blanker would have done.
+    # A transfer sets MCPd's application.library AllowsBlanker FALSE,
+    # and it goes back to TRUE 30 s after the last transfer ended
+    # (mcpd/src/methods/applib.c). MCPd 2.5 reports the attribute in
+    # sys.applications (allows_blanker); 2.4 had the hold but no way
+    # to see it, and older daemons have no hold.
+    def _mcpd_entry(
+        apps: sys_tool.ApplicationsResult | None,
+    ) -> sys_tool.AppEntry | None:
+        if apps is None:
+            return None
+        return next((a for a in apps.applications
+                     if a.url_identifier == "com.derfsss.mcpd"), None)
+
     apps = await sys_tool.sys_applications(fleet, "target")
-    registered = apps.available and any(
-        a.url_identifier == "com.derfsss.mcpd" for a in apps.applications
-    )
-    if not registered:
+    me = _mcpd_entry(apps) if apps.available else None
+    if me is None:
         r.skip("blanker hold during transfers",
                "MCPd not registered with application.library")
+    elif me.allows_blanker is None:
+        r.skip("blanker hold during transfers",
+               f"{caps.get('server')} does not report allows_blanker")
     else:
-        tasks = await sys_tool.sys_tasks(fleet, "target")
-        held = any(x.name == "MCPd blanker hold"
-                   for x in tasks.ready + tasks.waiting)
-        if held:
-            r.ok("blanker hold engaged after transfers")
-        elif ver >= (2, 4):
-            r.fail("blanker hold engaged after transfers",
-                   f"no 'MCPd blanker hold' task on {caps.get('server')}")
-        else:
-            # 2.4 added the hold, without a method of its own.
-            r.skip("blanker hold engaged after transfers",
-                   f"{caps.get('server')} predates the hold")
+        r.assert_("blanker held off right after the transfers",
+                  me.allows_blanker is False,
+                  f"allows_blanker={me.allows_blanker}")
+        await asyncio.sleep(35)
+        me = _mcpd_entry(await sys_tool.sys_applications(fleet, "target"))
+        r.assert_("blanker allowed again 30 s after the last transfer",
+                  me is not None and me.allows_blanker is True,
+                  f"allows_blanker={me.allows_blanker if me else None}")
+        # A transfer after a notification must still work: on 2.4 a
+        # stuck app.notify wedged every transfer behind it.
+        if "app.notify" in names:
+            nf = await sys_tool.app_notify(
+                fleet, "target", title="validate_full",
+                text="notify, then a transfer", priority=0)
+            r.assert_("app.notify answers", nf.queued,
+                      f"rc={nf.result_code}")
+            await fs_tool.fs_write(fleet, "target", "RAM:vfull_after_notify",
+                                   base64.b64encode(b"ok").decode())
+            await fs_tool.fs_delete(fleet, "target", "RAM:vfull_after_notify")
+            r.ok("fs.write right after app.notify")
 
     # ---- wb.screenshot ---------------------------------------------
     if "wb.screenshot" in names:

@@ -25,6 +25,13 @@ class QmpTransport:
         self._client: Any = None
         self._lock = asyncio.Lock()
 
+    @property
+    def connected(self) -> bool:
+        """This transport holds an open QMP connection. QEMU's QMP
+        socket takes one client at a time, so while it does, a fresh
+        connect to the port is refused."""
+        return self._client is not None
+
     async def _ensure_connected(self, timeout: float = 5.0) -> Any:
         if self._client is not None:
             return self._client

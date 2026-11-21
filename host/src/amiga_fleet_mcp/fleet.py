@@ -101,6 +101,10 @@ class Fleet:
         """
         return self._mcpd.get(name)
 
+    def qmp_if_open(self, name: str) -> QmpTransport | None:
+        """The target's QMP transport if one exists, without making one."""
+        return self._qmp.get(name)
+
     def qmp(self, name: str) -> QmpTransport:
         """Return (lazy-connected) QMP transport for a QEMU target."""
         if name in self._qmp:

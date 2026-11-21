@@ -57,13 +57,29 @@ def test_check_hmp_error_silent_on_clean_output() -> None:
 
 
 class FakeQmp:
+    """HMP replies by command; `running` is the VM state, and a command
+    listed in `stops` leaves the VM stopped (as a failed loadvm does)."""
+
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.responses: dict[str, str] = {}
+        self.running = True
+        self.stops: set[str] = set()
 
     async def hmp(self, command: str) -> str:
         self.calls.append(command)
+        if command in self.stops:
+            self.running = False
         return self.responses.get(command, "")
+
+    async def query_status(self) -> dict[str, Any]:
+        return {"return": {"running": self.running}}
+
+    async def command(self, name: str, **args: Any) -> dict[str, Any]:
+        self.calls.append(f"qmp:{name}")
+        if name == "cont":
+            self.running = True
+        return {"return": {}}
 
 
 def _fleet_with_qmp(qmp: Any) -> Fleet:
@@ -114,9 +130,39 @@ async def test_list_snapshots_parses() -> None:
 async def test_loadvm_round_trip() -> None:
     q = FakeQmp()
     fleet = _fleet_with_qmp(q)
-    r = await snap_tool.qemu_loadvm(fleet, "qemu-pegasos2", "snap1")
-    assert q.calls == ["loadvm snap1"]
-    assert r.name == "snap1"
+    q.responses["info snapshots"] = SAMPLE_INFO_SNAPSHOTS
+    r = await snap_tool.qemu_loadvm(fleet, "qemu-pegasos2", "before-test")
+    assert q.calls == ["info snapshots", "loadvm before-test"]
+    assert r.name == "before-test"
+
+
+@pytest.mark.asyncio
+async def test_loadvm_unknown_name_never_touches_the_vm() -> None:
+    """A loadvm of a missing snapshot stops the VM in QEMU and leaves
+    it in "restore-vm"; refuse the name before asking QEMU."""
+    q = FakeQmp()
+    q.responses["info snapshots"] = SAMPLE_INFO_SNAPSHOTS
+    fleet = _fleet_with_qmp(q)
+    with pytest.raises(TargetError) as exc:
+        await snap_tool.qemu_loadvm(fleet, "qemu-pegasos2", "nope")
+    assert "no snapshot named" in exc.value.message
+    assert q.calls == ["info snapshots"]
+    assert q.running
+
+
+@pytest.mark.asyncio
+async def test_failed_loadvm_resumes_the_vm() -> None:
+    q = FakeQmp()
+    q.responses["info snapshots"] = SAMPLE_INFO_SNAPSHOTS
+    q.responses["loadvm before-test"] = (
+        "Error: Device 'vd0' is writable but does not support snapshots")
+    q.stops.add("loadvm before-test")
+    fleet = _fleet_with_qmp(q)
+    with pytest.raises(TargetError) as exc:
+        await snap_tool.qemu_loadvm(fleet, "qemu-pegasos2", "before-test")
+    assert exc.value.data["vm_resumed"] is True
+    assert q.running
+    assert q.calls[-1] == "qmp:cont"
 
 
 @pytest.mark.asyncio

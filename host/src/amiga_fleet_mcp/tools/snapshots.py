@@ -9,6 +9,7 @@ success / failure.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -111,20 +112,53 @@ def _check_hmp_error(out: str, *, op: str) -> None:
 # ---------- public methods ----------------------------------------
 
 
+async def _vm_running(qmp: Any) -> bool:
+    st = await qmp.query_status()
+    ret = st.get("return", st) if isinstance(st, dict) else {}
+    return bool(ret.get("running"))
+
+
+async def _run_keeping_vm_up(qmp: Any, command: str, *, op: str) -> str:
+    """Run an HMP snapshot command. QEMU stops the VM for savevm /
+    loadvm; when the command fails it can leave it stopped (a failed
+    loadvm leaves it in "restore-vm" for good, and the guest then
+    answers nothing). If the VM was running before and is not after a
+    failure, resume it, and say so in the error's data."""
+    was_running = await _vm_running(qmp)
+    out = await qmp.hmp(command)
+    try:
+        _check_hmp_error(out, op=op)
+    except TargetError as e:
+        resumed = False
+        if was_running and not await _vm_running(qmp):
+            await qmp.command("cont")
+            resumed = True
+        data = dict(e.data) if isinstance(e.data, dict) else {}
+        data["vm_resumed"] = resumed
+        raise TargetError(e.message, data=data) from e
+    return str(out)
+
+
 async def qemu_savevm(fleet: Fleet, target: str, name: str) -> SavevmResult:
     """Save the running VM state under `name` (in the qcow2 backing
-    store)."""
+    store). On failure the VM keeps running."""
     qmp = fleet.qmp(target)
-    out = await qmp.hmp(f"savevm {name}")
-    _check_hmp_error(out, op="savevm")
+    out = await _run_keeping_vm_up(qmp, f"savevm {name}", op="savevm")
     return SavevmResult(target=target, name=name, output=out)
 
 
 async def qemu_loadvm(fleet: Fleet, target: str, name: str) -> LoadvmResult:
-    """Restore VM state from the snapshot `name`."""
+    """Restore VM state from the snapshot `name`. A name that is not in
+    `info snapshots` is refused without touching the VM; any other
+    failure leaves the VM running if it was."""
     qmp = fleet.qmp(target)
-    out = await qmp.hmp(f"loadvm {name}")
-    _check_hmp_error(out, op="loadvm")
+    names = {e.name for e in _parse_info_snapshots(await qmp.hmp("info snapshots"))}
+    if name not in names:
+        raise TargetError(
+            f"loadvm: no snapshot named {name!r}",
+            data={"snapshots": sorted(names)},
+        )
+    out = await _run_keeping_vm_up(qmp, f"loadvm {name}", op="loadvm")
     return LoadvmResult(target=target, name=name, output=out)
 
 
