@@ -1,4 +1,4 @@
-MCPd 2.4 - the AmigaOS 4 daemon for MCP-AmigaOS4
+MCPd @VERSION@ - the AmigaOS 4 daemon for MCP-AmigaOS4
 ================================================
 
 MCPd lets an MCP-aware client on another machine drive this Amiga:
@@ -10,7 +10,7 @@ This archive was assembled on AmigaOS, so every file already carries
 the right protection bits. Unpack it with LhA and the binary is
 runnable as-is - no Protect needed:
 
-    LhA x MCPd-2.4.lha
+    LhA x MCPd-@VERSION@.lha
 
 
 Installing
