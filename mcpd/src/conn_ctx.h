@@ -65,7 +65,8 @@ struct conn_ctx {
     struct SocketIFace *isocket;     /* GetInterface(socket_base, "main") */
     int                 fd;          /* connection fd in this task's table */
     int                 nbio;        /* fd is non-blocking (frame.c waits) */
-    int                 nodelay;     /* TCP_NODELAY set (off during streams) */
+    int                 nodelay;     /* TCP_NODELAY set (off during streams
+                                        and frames > 256 KiB) */
     struct ev_state     ev;          /* per-task events subscription state */
     struct mcpd_stream  stream;      /* raw bytes after this response */
     struct mcpd_stream_last last;    /* the last stream's result */

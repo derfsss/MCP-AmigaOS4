@@ -887,8 +887,8 @@ const char *sys_detect_board(void) {
  * Returns: { queued: true, delay_ms: N }
  *
  * Note: ColdReboot is not graceful - filesystems are not synced. The
- * caller is expected to have done an Inhibit/Diskchange dance first
- * if they care about disk consistency. For our use case (recovering
+ * caller is expected to have called fs.sync first if they care about
+ * disk consistency. For our use case (recovering
  * a wedged guest under autonomous test loops) that's acceptable.
  */
 
@@ -1184,8 +1184,11 @@ int sys_tlb_dump(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
 /* ---- sys.read_pa --------------------------------------------------- *
  *
- * Generic supervisor-mode read at any 36-bit physical address. Width 1
- * (byte), 2 (halfword), or 4 (word). Returns an array of integer
+ * Generic supervisor-mode read at an address. Width 1 (byte), 2
+ * (halfword), or 4 (word). `pa` is cast to 32 bits and read through
+ * the kernel's current TLB mapping (super_read_pa is a memcpy from
+ * that address), so it is a physical address only where the kernel
+ * maps it 1:1; there is no access to PAs above 4 GiB. Returns an array of integer
  * values, hex strings, AND a base64 blob of the raw bytes (handy for
  * 256-byte structure dumps where you want to feed it straight into a
  * disassembler / hex viewer host-side).

@@ -14,8 +14,10 @@
 #include <dos/dos.h>
 
 
-/* Maximum output exec.cmd returns inline; the rest stays readable
- * through exec.output while the job record lasts. 1 MiB. */
+/* Maximum output exec.cmd returns inline. 1 MiB. A job that has
+ * finished has its output file deleted once exec.cmd returns, so
+ * output beyond this is lost; while a job still runs (return_running)
+ * exec.output can read all of it. */
 #define EXEC_CAP_MAX (1u << 20)
 
 /* Default and ceiling for one exec.output read. */
@@ -52,10 +54,10 @@ static void _send_chunk(int sock, uint32_t job_id, const char *text,
 
 
 /* Conservative AmigaDOS-style quoting. Any arg that contains a space,
- * tab, double-quote, or asterisk gets wrapped in double quotes, with
- * embedded asterisks doubled (** -> *) and embedded quotes prefixed
- * with asterisk (*" -> "). Empty args become "". Returns malloc'd
- * string; caller frees. */
+ * tab, newline, double-quote, or asterisk gets wrapped in double
+ * quotes, with each embedded asterisk doubled (* becomes **) and each
+ * embedded quote escaped with an asterisk (" becomes *"). Empty args
+ * become "". Returns malloc'd string; caller frees. */
 static char *_quote_arg(const char *a) {
     if (!a) a = "";
     int needs_quote = (*a == '\0');

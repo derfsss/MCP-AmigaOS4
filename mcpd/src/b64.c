@@ -3,9 +3,10 @@
  * Whitespace tolerated on input. Encoder always emits canonical
  * padding. Used for fs.read / fs.write payloads on the wire.
  *
- * Memory: encoded/decoded buffers are allocated via IExec->AllocVecTags
- * MEMF_SHARED, NOT clib4 malloc. The buffers can be 32 MiB for big
- * fs.read/fs.write payloads, and clib4's heap fragments under repeated
+ * Memory: encoded/decoded buffers are allocated via
+ * IExec->AllocVecTags (default MEMF_PRIVATE), NOT newlib malloc. The
+ * buffers can be 32 MiB for big fs.read/fs.write payloads, and
+ * newlib's heap fragments under repeated
  * multi-MiB churn (chunked-upload tests reproduce this on the third
  * sequential 4-10 MiB chunk). The OS allocator handles those large
  * blocks much better. Callers MUST release via b64_free, not free().

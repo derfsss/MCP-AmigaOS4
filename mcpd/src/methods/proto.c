@@ -37,7 +37,8 @@ static int _add_unique_feature(cJSON *features, const char *name) {
 }
 
 
-/* In sys.c. AttnFlags + GetCPUInfo + xena/fsldma resource probes. */
+/* In sys.c. expansion.library GetMachineInfo, falling back to
+ * GetCPUInfo + an fsldma.resource probe. */
 extern const char *sys_detect_board(void);
 extern const char *sys_machine_string(void);
 
@@ -95,7 +96,7 @@ int proto_capabilities(cJSON *params, cJSON **out_result, cJSON **out_err) {
     cJSON *limits = cJSON_AddObjectToObject(r, "limits");
     cJSON_AddNumberToObject(limits, "max_payload_bytes",
                             (double)MCPD_FRAME_MAX_PAYLOAD);
-    /* Each connection gets its own worker (main.c MCPD_MAX_CLIENTS)
+    /* Each connection gets its own worker (rpc.h MCPD_MAX_CLIENTS)
      * and handles one request at a time. */
     cJSON_AddNumberToObject(limits, "max_concurrent_clients",
                             MCPD_MAX_CLIENTS);

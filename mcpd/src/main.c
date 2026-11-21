@@ -39,7 +39,7 @@ extern void input_init_gate(int cli_flag);
  * beacon can say whether this daemon will accept injection. */
 extern int input_is_enabled(void);
 
-/* Derived from rpc.h so there is exactly one place to bump. */
+/* MCPD_VERSION_STR comes from ../VERSION via the Makefile (rpc.h). */
 #define MCPD_VERSION MCPD_VERSION_STR
 #define DEFAULT_PORT 4322
 #define BACKLOG 4
@@ -100,10 +100,10 @@ struct Library     *SocketBase = NULL;
 struct SocketIFace *ISocket    = NULL;
 
 /* z.library - AmigaOS 4 shared zlib (Hyperion port). Used by
- * fs.c's _decompress_zlib path. Routing zlib's internal allocator
- * through the OS shared library avoids fragmenting clib4's heap
- * with the multi-MiB inflate buffers (option 2 from the size-cap
- * report). Drop -lz from LDFLAGS once this lands. */
+ * fs.c's _decompress_zlib path and wb.screenshot's PNG encoder.
+ * Routing zlib's internal allocator through the OS shared library
+ * avoids fragmenting newlib's heap with the multi-MiB inflate buffers;
+ * MCPd no longer links a static -lz. */
 struct Library  *ZBase = NULL;
 struct ZIFace   *IZ    = NULL;
 
@@ -306,7 +306,7 @@ static void handle_connection(int sock) {
 
 /* Entry point for a per-connection child Process spawned via
  * CreateNewProcTags. The inherited socket id is passed through
- * NP_Child / tc_UserData (we set it to the int32 id pre-spawn).
+ * NP_UserData / tc_UserData (we set it to the int32 id pre-spawn).
  * The child opens its own bsdsocket interface (bsdsocket maintains
  * task-local state, so it cannot reuse the parent's), claims the
  * inherited fd, runs handle_connection(), and exits.
@@ -323,8 +323,7 @@ static void handle_connection(int sock) {
  * path: sys.read_pa with an unmapped PA, supervisor-mode reads
  * that race with TLB1 expunge. Diagnose via sys.uptime (alive),
  * sys.crashhook_status (exception_count), sys.lastalert, then
- * exec.cmd C:DumpDebugBuffer for the full register/stack dump.
- * See memory entry reference_mcpd_per_connection_isolation.md. */
+ * exec.cmd C:DumpDebugBuffer for the full register/stack dump. */
 
 /* Live connection workers, capped at MCPD_MAX_CLIENTS.
  *
@@ -333,9 +332,11 @@ static void handle_connection(int sock) {
  * is enough to make the read-modify-write indivisible -- no atomics
  * needed, and the critical section is three instructions long.
  *
- * The parent claims a slot before spawning; the child releases it on
- * the way out, including after a crash-killed handler, because the
- * kernel unwinds to the Process exit path. */
+ * The parent claims a slot before spawning; the child releases it at
+ * the end of client_task_entry, after handle_connection returns. The
+ * child's early returns (no bsdsocket interface, ObtainSocket failed)
+ * and a handler killed by a crash do not reach that line, so each of
+ * those leaves its slot claimed. */
 static int g_live_clients = 0;
 
 static int client_slot_claim(void) {
@@ -398,8 +399,9 @@ static void client_task_entry(void) {
     ctx.isocket->setsockopt(ctx.fd, SOL_SOCKET, SO_LINGER,
                             &lng, sizeof(lng));
 
-    /* Receive timeout: see MCPD_RECV_TIMEOUT_S. Best-effort -- if the
-     * stack doesn't honour it we are no worse off than before. */
+    /* Receive timeout: see MCPD_RECV_TIMEOUT_S. Best-effort: Roadshow
+     * 1.15 ignores it, so the limit that holds is frame.c's WaitSelect
+     * on the non-blocking socket (below). */
     struct timeval rcv_to;
     rcv_to.tv_sec = MCPD_RECV_TIMEOUT_S;
     rcv_to.tv_usec = 0;
@@ -409,7 +411,8 @@ static void client_task_entry(void) {
     /* Send timeout, the same window: a peer that stops reading (or
      * vanishes) mid-response or mid fs.stream_get would otherwise
      * block send() for good, holding this worker's slot and the
-     * stream's file. Best-effort, as above. */
+     * stream's file. Best-effort and ignored by Roadshow 1.15, as
+     * above; frame.c keeps the same limit itself. */
     struct timeval snd_to;
     snd_to.tv_sec = MCPD_SEND_TIMEOUT_S;
     snd_to.tv_usec = 0;
@@ -427,10 +430,12 @@ static void client_task_entry(void) {
     /* No Nagle: a response must not wait for the peer's delayed ACK.
      * Roadshow 1.15 cuts even a single small send() into ~100-byte
      * mbufs and sends only the first at once; with Nagle on, the rest
-     * waited ~45 ms for the PC's delayed ACK (X5000, I210). Raw
-     * streams turn it back on while they run (stream.c): without
-     * Nagle, Roadshow sent a 1 MiB send() in small segments and
-     * downloads fell from 54 to 2 MiB/s. Best-effort, as above. */
+     * waited ~45 ms for the PC's delayed ACK (X5000, I210). Frames
+     * up to 256 KiB go out in one send() (frame.c). Raw streams, and
+     * frames larger than that, turn Nagle back on while they go
+     * (stream.c, frame.c): without Nagle, Roadshow sent a 1 MiB send()
+     * in small segments and downloads fell from 54 to 2 MiB/s.
+     * Best-effort: ctx.nodelay records whether the stack took it. */
     int nd = 1;
     ctx.nodelay = ctx.isocket->setsockopt(ctx.fd, IPPROTO_TCP, TCP_NODELAY,
                                           &nd, sizeof(nd)) == 0;
@@ -459,7 +464,7 @@ static void client_task_entry(void) {
 
 /* Spawn a child Process to handle `client_fd`. Releases the fd from
  * the parent's task into the global socket namespace, then passes
- * the released id to the child via NP_Child. Returns 0 on success,
+ * the released id to the child via NP_UserData. Returns 0 on success,
  * -1 if the spawn failed (caller should close the fd as a fallback).
  *
  * Stack: 65536 - matches discovery's worker, comfortable headroom for
@@ -483,8 +488,8 @@ static int spawn_client_worker(int client_fd) {
         /* +1, above ordinary programs, so one spinning at priority 0
          * can't starve MCPd (seen on the X5000). Commands a worker
          * starts run lower, as jobs (-2 by default, 0 at most). Idle
-         * clients sleep on socket Wait() so this only matters during
-         * active RPC work. */
+         * clients sleep in WaitSelect (200 ms ticks) so this only
+         * matters during active RPC work. */
         NP_Priority,     jobs_worker_priority(),
         NP_UserData,     (Tag)(intptr_t)id,
         NP_Output,       (Tag)ZERO,
@@ -603,10 +608,11 @@ int main(int argc, char **argv) {
      * application.library v53.11+ isn't available. */
     applib_register();
 
-    /* Install the global IDebug crash hook so a kernel exception in
-     * any task surfaces as a debug.exception notification. Best-
-     * effort: a failure here just means clients fall back to the
-     * LastAlert-polling path. */
+    /* Install the IDebug crash hook on this task; the Processes it
+     * creates inherit it (crashhook.c), so an exception in one of them
+     * surfaces as a debug.exception notification. Best-effort: a
+     * failure here just means clients fall back to the LastAlert-
+     * polling path. */
     if (crashhook_init() != 0) {
         IDOS->Printf("MCPd: crash hook registration failed "
                      "(non-fatal)\n");

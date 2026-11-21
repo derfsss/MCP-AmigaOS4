@@ -16,11 +16,13 @@
  *   on AOS 4.1 FE. The hook fires in a forbid-style
  *   context so we do the absolute minimum: snapshot a few register
  *   fields from the ExceptionContext that arrived in the hook
- *   message, set a flag, signal the main task, return. The main
- *   task's WaitSelect loop wakes on the signal and ships a
- *   `debug.exception` JSON-RPC notification with the captured
- *   data, riding the same idle-poll plumbing used by
- *   events_emit_pending().
+ *   message, set a flag, signal the main task, return. Nothing waits
+ *   on that signal (the main task blocks in accept()); instead every
+ *   connection worker calls crashhook_drain() on each 200 ms
+ *   WaitSelect timeout and before each response, and the first one
+ *   to see the flag ships a `debug.exception` JSON-RPC notification
+ *   with the captured data to its own client, whether or not that
+ *   client subscribed to it.
  *
  * Hook message layout (per exec.doc/AddDebugHook):
  *   [ uint32 type ; APTR content ]

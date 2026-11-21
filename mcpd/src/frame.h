@@ -11,16 +11,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Maximum payload size accepted by read_frame(). 32 MiB is enough to
- * cover most shipped AmigaOS 4 binaries plus base64 expansion overhead
- * with comfortable headroom; the X5000's 2 GiB makes the transient
+/* Maximum payload size accepted by frame_read() and sent by
+ * frame_write(). 32 MiB is enough to cover most shipped AmigaOS 4
+ * binaries plus base64 expansion overhead with comfortable headroom; the X5000's 2 GiB makes the transient
  * allocation cost trivial. For arbitrarily-large transfers use
  * fs.stream_get / fs.stream_put (raw bytes after the response,
  * methods/stream.c) rather than raising this further. */
 #define MCPD_FRAME_MAX_PAYLOAD (32u * 1024u * 1024u)  /* 32 MiB */
 
 /* Read one framed message from `sock`. Allocates *out via the OS
- * allocator (IExec->AllocVecTags MEMF_SHARED); caller MUST release
+ * allocator (IExec->AllocVecTags); caller MUST release
  * via frame_free, NOT C free(). *out_len receives payload length on
  * success.
  *
@@ -29,7 +29,7 @@
 int frame_read(int sock, char **out, size_t *out_len);
 
 /* Release a buffer returned by frame_read. Routes to IExec->FreeVec
- * since frame_read uses AllocVecTags (better behaviour than clib4
+ * since frame_read uses AllocVecTags (better behaviour than newlib
  * malloc for the multi-MiB transient allocations). */
 void frame_free(char *buf);
 

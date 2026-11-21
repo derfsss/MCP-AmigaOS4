@@ -12,8 +12,12 @@
  *
  * Topics:
  *   sys.lastalert    - ExecBase->LastAlert[0] changed (raw)
- *   sys.task         - task added or removed (by name)
+ *   sys.task         - task added or removed (by name; events.wait only)
  *   debug.exception  - new dead-end / crash alert (decoded)
+ *
+ * The crash hook (crashhook.c) also sends debug.exception
+ * notifications, with register state, outside this subscription
+ * mechanism.
  *
  * Every connection has its own worker Process and its own ev_state,
  * so one client's subscriptions never see another's.
@@ -404,11 +408,10 @@ int events_unsubscribe(cJSON *params, cJSON **out_result, cJSON **out_err) {
 }
 
 
-/* Public: called by main.c handle_connection() on disconnect. Single-
- * client model means subscription state is global; if a client closes
- * its connection without an explicit events.unsubscribe, the next
- * client must not inherit the previous client's topics or pending
- * synthetic notification. */
+/* Clear this connection's subscription and any pending synthetic
+ * notification. Nothing calls it today (main.c only declares it):
+ * each connection's ev_state lives in its own conn_ctx and ends with
+ * its worker, so a new client never inherits an old one's topics. */
 void events_client_reset(void) {
     ev_state()->topics_mask = 0;
     ev_state()->baseline_initialized = 0;
@@ -421,7 +424,8 @@ void events_client_reset(void) {
 
 
 /* Drain the synthetic-notification slot if populated. Called from
- * events_emit_pending() on every idle/response-edge tick. */
+ * events_emit_pending(), which handle_connection runs on every idle
+ * tick and just before each response frame. */
 int events_drain_synthetic(int sock) {
     if (!ev_state()->pending_synthetic) return 0;
     char *json = cJSON_PrintUnformatted((cJSON *)ev_state()->pending_synthetic);
@@ -438,8 +442,9 @@ int events_drain_synthetic(int sock) {
 /* events.test_emit { topic: string, data?: object }
  *
  * Synthesize a JSON-RPC notification for the test harness to verify
- * the server-push path works end-to-end. The notification is
- * delivered by the next idle-poll tick (within ~200ms). */
+ * the server-push path works end-to-end. handle_connection drains it
+ * before writing this call's own response, so the notification
+ * arrives just ahead of that response. */
 int events_test_emit(cJSON *params, cJSON **out_result, cJSON **out_err) {
     const char *topic = p_str(params, "topic", out_err);
     if (!topic) return 0;

@@ -5,7 +5,7 @@
  * loops responding to discovery probes. The reply carries:
  *
  *   {"mcp_discovery":1, "v":1,
- *    "server":"mcpd/1.4", "protocol":"1.0",
+ *    "server":"mcpd/<VERSION>", "protocol":"1.0",
  *    "tcp_port":NNNN, "host":"<hostname>",
  *    "methods":NN, "tag":"<echoed>"}
  *

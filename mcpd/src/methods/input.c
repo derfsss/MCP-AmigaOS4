@@ -53,7 +53,7 @@
  * -----------
  * Follows the house style: open libraries/devices per call and drop
  * them on exit (see wb.c), device I/O via AllocSysObjectTags with a
- * `goto cleanup` unwind (see mcu.c:66-130).
+ * `goto cleanup` unwind (see mcu.c).
  */
 
 #include "../rpc.h"
@@ -475,7 +475,7 @@ static int _ascii_to_raw(unsigned char c, uint8_t *out_code, int *out_shift) {
 static const named_key *_find_named_key(const char *name) {
     for (const named_key *k = g_named_keys; k->name != NULL; k++) {
         /* Case-insensitive without depending on locale-sensitive
-         * tolower() from clib4. */
+         * tolower() from newlib. */
         const char *a = k->name, *b = name;
         while (*a && *b) {
             char ca = *a, cb = *b;
