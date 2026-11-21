@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -135,10 +136,17 @@ async def main() -> int:
     readme = Path(args.readme) if args.readme else (
         root / "mcpd" / "install" / "Archive-README")
     if readme.is_file():
-        await fs_tool.fs_upload(
-            fleet, t, local_path=str(readme),
-            remote_path=f"{STAGE}/{DRAWER}/README", verify=True)
-        print(f"  README (from {readme.name})", flush=True)
+        # @VERSION@ in the README becomes this release's version, so
+        # the file never needs editing for a release.
+        text = readme.read_bytes().replace(b"@VERSION@", version.encode())
+        with tempfile.TemporaryDirectory() as td:
+            staged = Path(td) / "README"
+            staged.write_bytes(text)
+            await fs_tool.fs_upload(
+                fleet, t, local_path=str(staged),
+                remote_path=f"{STAGE}/{DRAWER}/README", verify=True)
+        print(f"  README (from {readme.name}, version {version})",
+              flush=True)
     else:
         print(f"  no README at {readme} -- archive will omit it",
               flush=True)
