@@ -14,10 +14,9 @@
 #include <dos/dos.h>
 
 
-/* Maximum output exec.cmd returns inline. 1 MiB. A job that has
- * finished has its output file deleted once exec.cmd returns, so
- * output beyond this is lost; while a job still runs (return_running)
- * exec.output can read all of it. */
+/* Maximum output exec.cmd returns inline. 1 MiB. Beyond it the answer
+ * is truncated (truncated: true, output_bytes: the full size) and the
+ * capture file is kept, so exec.output can read the rest. */
 #define EXEC_CAP_MAX (1u << 20)
 
 /* Default and ceiling for one exec.output read. */
@@ -275,7 +274,10 @@ int exec_cmd(cJSON *params, cJSON **out_result, cJSON **out_err) {
                                   "exec.cmd: capture failed", NULL);
         return 0;
     }
-    if (ji.state == JOB_EXITED) jobs_drop_output(id);
+    /* Delete the capture once all of it has been returned. A truncated
+     * answer keeps the file, so exec.output can read the rest; it goes
+     * when the job's slot is reused, or at shutdown (jobs.c). */
+    if (ji.state == JOB_EXITED && raw >= total) jobs_drop_output(id);
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "output", out);

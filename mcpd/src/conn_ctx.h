@@ -68,6 +68,7 @@ struct conn_ctx {
     int                 nodelay;     /* TCP_NODELAY set (off during streams
                                         and frames > 256 KiB) */
     struct ev_state     ev;          /* per-task events subscription state */
+    uint32_t            crash_seen;  /* crash hook sequence already handled */
     struct mcpd_stream  stream;      /* raw bytes after this response */
     struct mcpd_stream_last last;    /* the last stream's result */
 };

@@ -42,13 +42,13 @@
  * compression="zlib" requests then return -32602. */
 extern struct ZIFace *IZ;
 
-/* Per-call ceiling on a single fs.read slice, the same number as the
- * framing cap in frame.h. The response must also fit in
- * MCPD_FRAME_MAX_PAYLOAD, and base64 makes it a third larger than the
- * slice, so in practice a slice must stay below 24 MiB: a larger one
- * passes this check, then frame_write refuses the response and the
- * connection is dropped. */
-#define FS_READ_MAX_BYTES (32u * 1024u * 1024u)
+/* Per-call ceiling on a single fs.read slice: the largest slice whose
+ * base64 answer (a third larger) still fits MCPD_FRAME_MAX_PAYLOAD
+ * with 64 KiB left for the JSON around it. The same number as the
+ * host's MAX_CHUNK_RAW (upload.py), 25116672 bytes. A larger slice is
+ * refused with an error; it used to pass a 32 MiB check, then
+ * frame_write refused the answer and the connection was dropped. */
+#define FS_READ_MAX_BYTES ((32u * 1024u * 1024u - 65536u) / 4u * 3u)
 
 /* Per-call ceiling on a decompressed fs.write/write_chunk payload.
  * Higher than FS_READ_MAX_BYTES because zlib compression can multiply
@@ -464,7 +464,7 @@ int fs_read(cJSON *params, cJSON **out_result, cJSON **out_err) {
             cJSON_AddNumberToObject(data, "max", (double)FS_READ_MAX_BYTES);
         }
         *out_err = rpc_make_error(MCPD_ERR_TARGET,
-                                  "fs.read slice exceeds 32 MiB cap", data);
+                                  "fs.read slice too large for one frame (max 25116672 bytes; read it in slices)", data);
         return 0;
     }
 

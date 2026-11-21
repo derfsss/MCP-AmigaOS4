@@ -288,7 +288,12 @@ callback with `subscribe_notifications(handler)` on the transport, or
 poll the queue with `get_notification(timeout_s)`.
 
 `events.subscribe` accepts the topics `sys.lastalert` and
-`debug.exception`. It is a daemon method, not an MCP tool.
+`debug.exception`. It is a daemon method, not an MCP tool. A
+`debug.exception` event says where it came from in `data.source`:
+`"crash_hook"` for a crash the IDebug hook caught (task name and
+registers; every task exception, even one whose alert code matches an
+earlier one) or `"lastalert"` for a new dead-end alert. One crash can
+produce both. `events.wait` reports both kinds too (MCPd 2.5).
 
 `events.wait` is the long-poll alternative for clients that prefer not
 to maintain a persistent connection, and the one exposed as an MCP
@@ -413,7 +418,9 @@ While any transfer method runs (`fs.read`, `fs.write`,
 `fs.write_chunk`, `fs.stream_get`, `fs.stream_put`), MCPd keeps the
 screen blanker from starting, and allows it again 30 s after the last
 transfer ends. A blanker starting mid-transfer could slow an upload
-to a stall. The user's blanker settings are not changed.
+to a stall. The user's blanker settings are not changed. On MCPd 2.5
+`sys_applications` shows it: MCPd's entry has `allows_blanker: false`
+while the hold is on.
 
 For library callers, the same surface is reachable via
 `amiga_fleet_mcp.tools.fs.fs_upload` / `fs_download`.

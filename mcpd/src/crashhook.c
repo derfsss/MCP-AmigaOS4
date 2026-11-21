@@ -16,13 +16,14 @@
  *   on AOS 4.1 FE. The hook fires in a forbid-style
  *   context so we do the absolute minimum: snapshot a few register
  *   fields from the ExceptionContext that arrived in the hook
- *   message, set a flag, signal the main task, return. Nothing waits
- *   on that signal (the main task blocks in accept()); instead every
- *   connection worker calls crashhook_drain() on each 200 ms
- *   WaitSelect timeout and before each response, and the first one
- *   to see the flag ships a `debug.exception` JSON-RPC notification
- *   with the captured data to its own client, whether or not that
- *   client subscribed to it.
+ *   message, bump a sequence number, return. Every connection worker
+ *   calls crashhook_drain() on each 200 ms WaitSelect timeout and
+ *   before each response; a connection subscribed to debug.exception
+ *   (events.subscribe) gets each new crash once, as a debug.exception
+ *   JSON-RPC notification, and every other connection skips it. A
+ *   connection starts at the crash count it found, so it is never
+ *   sent crashes from before it connected. events.wait with the
+ *   debug.exception topic also returns when the count moves.
  *
  * Hook message layout (per exec.doc/AddDebugHook):
  *   [ uint32 type ; APTR content ]
@@ -31,14 +32,14 @@
  *   that type; everything else returns 0 (continue normal handling).
  *
  * Limits:
- *   - One pending crash record at a time. Two crashes in <200ms
- *     could lose the second; in practice users see the first
- *     GrimReaper before they trigger another.
+ *   - One crash record. Two crashes within one 200 ms poll are both
+ *     counted, but only the second one's registers are sent.
  *   - The hook returns 0 unconditionally, so normal exception
  *     handling (GrimReaper) still runs after us.
  */
 
 #include "rpc.h"
+#include "conn_ctx.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -59,7 +60,8 @@ extern int frame_write(int sock, const char *buf, size_t len);
 /* ---- captured state, written by hook, read by drain --------- */
 
 struct _crash_record {
-    volatile int   armed;          /* 1 while a record awaits drain */
+    volatile uint32_t seq;         /* bumped twice per crash: odd while
+                                      the hook writes, even when done */
     volatile int   fire_count;     /* total times hook has been entered */
     volatile int   exception_count;/* times hook saw DBHMT_EXCEPTION */
     int            registered;     /* 1 if AddDebugHook returned TRUE */
@@ -106,6 +108,7 @@ static uint32 _crash_hook_entry(struct Hook *h, APTR object, APTR message) {
     struct ExceptionContext *ctx = (struct ExceptionContext *)m[1];
     if (!ctx) return 0;
 
+    _crash.seq++;                  /* odd: being written */
     struct Task *task = (struct Task *)object;
     const char *src = (task && task->tc_Node.ln_Name) ?
                       task->tc_Node.ln_Name : "<unnamed>";
@@ -127,7 +130,7 @@ static uint32 _crash_hook_entry(struct Hook *h, APTR object, APTR message) {
     for (int g = 0; g < 8; g++) {
         _crash.gpr[g] = (uint32_t)ctx->gpr[g];
     }
-    _crash.armed = 1;
+    _crash.seq++;                  /* even: complete */
 
     if (_main_task && _signal_bit >= 0) {
         IExec->Signal(_main_task, 1u << (uint32)_signal_bit);
@@ -191,9 +194,56 @@ uint32_t crashhook_signal_mask(void) {
 extern void _add_decoded_alert(cJSON *parent, uint32_t code);
 
 
+/* The crash count, as an even sequence number (0: none yet). */
+uint32_t crashhook_seq(void) {
+    return _crash.seq & ~1u;
+}
+
+/* Copy the last crash into `data` (task, registers, synthetic alert
+ * code, decoded). Retries if a crash lands while it copies. Returns
+ * its sequence number, 0 if there has been none. */
+uint32_t crashhook_fill(cJSON *data) {
+    struct _crash_record c;
+    uint32_t s1, s2;
+    int tries = 0;
+    do {
+        s1 = _crash.seq;
+        memcpy(&c, (const void *)&_crash, sizeof(c));
+        s2 = _crash.seq;
+    } while ((s1 != s2 || (s1 & 1u)) && ++tries < 1000);
+    if (s1 == 0) return 0;
+    c.task_name[sizeof(c.task_name) - 1] = '\0';
+    cJSON_AddStringToObject(data, "source", "crash_hook");
+    cJSON_AddStringToObject(data, "task", c.task_name);
+    cJSON_AddNumberToObject(data, "traptype", (double)c.traptype);
+    cJSON_AddNumberToObject(data, "pc",       (double)c.pc);
+    cJSON_AddNumberToObject(data, "sp",       (double)c.sp);
+    cJSON_AddNumberToObject(data, "lr",       (double)c.lr);
+    cJSON_AddNumberToObject(data, "msr",      (double)c.msr);
+    cJSON_AddNumberToObject(data, "cr",       (double)c.cr);
+    cJSON_AddNumberToObject(data, "dar",      (double)c.dar);
+    cJSON_AddNumberToObject(data, "dsisr",    (double)c.dsisr);
+    cJSON *gpr = cJSON_AddArrayToObject(data, "gpr");
+    for (int g = 0; g < 8; g++) {
+        cJSON_AddItemToArray(gpr, cJSON_CreateNumber((double)c.gpr[g]));
+    }
+    /* Synthetic alert code for downstream decoders. PowerPC traps
+     * map roughly to the AOS 0x80000000 + traptype convention. */
+    uint32_t synthetic = 0x80000000u | (c.traptype & 0xFFFFu);
+    cJSON_AddNumberToObject(data, "alert_code", (double)synthetic);
+    _add_decoded_alert(data, synthetic);
+    return s1;
+}
+
+extern int events_wants_debug_exception(void);
+
 int crashhook_drain(int sock) {
-    if (!_crash.armed) return 0;
-    _crash.armed = 0;
+    struct conn_ctx *ctx = mcpd_conn_ctx();
+    if (!ctx) return 0;
+    uint32_t cur = crashhook_seq();
+    if (cur == ctx->crash_seen) return 0;
+    ctx->crash_seen = cur;
+    if (!events_wants_debug_exception()) return 0;
 
     cJSON *env = cJSON_CreateObject();
     if (!env) return 0;
@@ -202,27 +252,7 @@ int crashhook_drain(int sock) {
     cJSON *params = cJSON_AddObjectToObject(env, "params");
     cJSON_AddStringToObject(params, "topic", "debug.exception");
     cJSON *data = cJSON_AddObjectToObject(params, "data");
-
-    cJSON_AddStringToObject(data, "task", _crash.task_name);
-    cJSON_AddNumberToObject(data, "traptype", (double)_crash.traptype);
-    cJSON_AddNumberToObject(data, "pc",       (double)_crash.pc);
-    cJSON_AddNumberToObject(data, "sp",       (double)_crash.sp);
-    cJSON_AddNumberToObject(data, "lr",       (double)_crash.lr);
-    cJSON_AddNumberToObject(data, "msr",      (double)_crash.msr);
-    cJSON_AddNumberToObject(data, "cr",       (double)_crash.cr);
-    cJSON_AddNumberToObject(data, "dar",      (double)_crash.dar);
-    cJSON_AddNumberToObject(data, "dsisr",    (double)_crash.dsisr);
-    cJSON *gpr = cJSON_AddArrayToObject(data, "gpr");
-    for (int g = 0; g < 8; g++) {
-        cJSON_AddItemToArray(gpr,
-            cJSON_CreateNumber((double)_crash.gpr[g]));
-    }
-
-    /* Synthetic alert code for downstream decoders. PowerPC traps
-     * map roughly to the AOS 0x80000000 + traptype convention. */
-    uint32_t synthetic = 0x80000000u | (_crash.traptype & 0xFFFFu);
-    cJSON_AddNumberToObject(data, "alert_code", (double)synthetic);
-    _add_decoded_alert(data, synthetic);
+    (void)crashhook_fill(data);
 
     char *json = cJSON_PrintUnformatted(env);
     cJSON_Delete(env);
@@ -231,3 +261,4 @@ int crashhook_drain(int sock) {
     free(json);
     return 1;
 }
+

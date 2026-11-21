@@ -82,7 +82,7 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.hardware.i2c` | Enumerate I²C buses and probe addresses via `i2c.resource`. |
 | `sys.hardware.perfcounters` | Live CPU performance counters via `performancemonitor.resource`. |
 | `sys.executable.symbols` | Read the ELF symbol table of a binary on the target via `elf.library`. |
-| `sys.applications` | Applications registered with `application.library`. |
+| `sys.applications` | Applications registered with `application.library`: name, URL identifier, file name, description, hidden, and (MCPd 2.5+) `allows_blanker`, which is false on MCPd's own entry during file transfers and for 30 s after. |
 | `sys.alert_decode` | Decode an arbitrary AmigaOS alert code. |
 | `sys.modules` | Loaded libraries / devices / resources with load base + size, for crash-address mapping. |
 | `sys.crashhook_status` | Diagnostic counters for the daemon's IDebug crash hook (registered, fire count, exception count). |
@@ -108,7 +108,7 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 |---|---|
 | `fs.list` | Directory listing. Optional `recursive` + `max_depth`. |
 | `fs.stat` | File or directory metadata. |
-| `fs.read` | Byte-level read: returns base64 of `length` bytes from `offset` (defaults: whole file from 0). Effective per-call cap ~24 MiB raw post-base64, so loop client-side for larger ranges — or use `fs.download`. |
+| `fs.read` | Byte-level read: returns base64 of `length` bytes from `offset` (defaults: whole file from 0). At most 25116672 bytes (just under 24 MiB) per call, so the base64 answer fits a frame; MCPd 2.5 refuses a larger slice with an error (older daemons dropped the connection). Loop client-side for larger ranges, or use `fs_download`. |
 | `fs.write` | Byte-level one-shot write: takes base64 payload in the request, writes the whole file. Same ~24 MiB raw cap. For larger payloads use `fs.write_chunk` (or `fs.upload`). |
 | `fs.write_chunk` | Byte-level chunked / resumable write at `offset`. First chunk truncates by default; later chunks seek-and-write. Optional `compression="zlib"` + `raw_size`. Optional `total_size` on the first chunk pre-extends the file. Building block for `fs.upload` on daemons before 2.3. |
 | `fs.stream_get` | (2.3+) Raw bulk read. Params `path`, `offset` (default 0), `length` (default: to the end). The response `{path, offset, length, total_size}` is followed on the same connection by exactly `length` raw bytes, with no base64 and no further frames. A failure while the bytes flow drops the connection; resume from the bytes received. Building block for `fs.download`. |
@@ -136,7 +136,7 @@ a missing volume fails instead of opening "Please insert volume".
 
 | Method | Description |
 |---|---|
-| `exec.cmd` | Run an AmigaDOS command and wait up to `timeout_ms` (enforced). Optional `args[]`, `cwd`, `priority`, `stream`, `sandboxed` (the command runs a program under SandboxVM; set by the host's sandbox mode). Returns `output`, `exit_code`, `result2` (IoErr), `job_id`, `state`, `pid`, `priority`, `elapsed_ms`, `truncated` (output over 1 MiB). Still running at the deadline: an error (-32001) whose `data.job_id` names the job, or with `return_running: true` a normal result with `state: "running"` and `exit_code: null`. Either way the command **keeps running**. |
+| `exec.cmd` | Run an AmigaDOS command and wait up to `timeout_ms` (enforced). Optional `args[]`, `cwd`, `priority`, `stream`, `sandboxed` (the command runs a program under SandboxVM; set by the host's sandbox mode). Returns `output`, `exit_code`, `result2` (IoErr), `job_id`, `state`, `pid`, `priority`, `elapsed_ms`, `truncated` (output over 1 MiB; on MCPd 2.5+ the rest stays readable with `exec.output` from that offset), `output_bytes` (the full size). Still running at the deadline: an error (-32001) whose `data.job_id` names the job, or with `return_running: true` a normal result with `state: "running"` and `exit_code: null`. Either way the command **keeps running**. |
 | `exec.status` | A job's state without its output: running or exited, `exit_code`, `result2`, `pid`, `priority`, `elapsed_ms`, free memory before and after, the break signals sent. `job_id`. |
 | `exec.output` | Read a job's output from `offset` (up to `max_bytes`, default 64 KiB), running or finished; `eof` once it has exited and all of it was read. AmigaDOS often flushes a command's output only when the command ends, so a running job may show less than it has printed. Output that `exec.cmd` already returned in full is deleted. |
 | `exec.kill` | Send a running job a break signal (`signal` c, d, e or f; default c) and wait up to `wait_ms` (default 2000) for it to exit. A program that ignores breaks keeps running and comes back `exited: false`; nothing is removed by force. `force: true` is accepted only for a `sandboxed` job: it sends CTRL-F, SandboxVM's abort signal. The process id is checked against the live process list first. |
@@ -200,7 +200,7 @@ Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
 | Method | Description |
 |---|---|
 | `events.wait` | Long-poll the given topics (default all three; no subscription needed); returns on first delta or timeout (default 5000 ms, max 60000). |
-| `events.subscribe` | Server-push: register topics. Daemon emits JSON-RPC notifications on change. |
+| `events.subscribe` | Server-push: set this connection's topics (`sys.lastalert`, `debug.exception`). Daemon emits `events.notify` notifications on change. A `debug.exception` subscriber gets every crash the IDebug hook catches after the connection opened (`data.source: "crash_hook"`, with registers) as well as dead-end alerts (`"lastalert"`); unsubscribed connections get neither (MCPd 2.5; 2.4 and earlier sent each hook crash to whichever connection looked first). |
 | `events.unsubscribe` | Server-push: clear the subscription. |
 | `events.test_emit` | Synthesize a JSON-RPC notification (test path for the server-push wiring). |
 
@@ -208,7 +208,7 @@ Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
 
 | Method | Description |
 |---|---|
-| `app.notify` | Post a Ringhio notification via `application.library`. |
+| `app.notify` | Post a Ringhio notification via `application.library`. `title`, `text`, `priority` (default 0; above 8 flashes the screen, 10 stays until closed). Returns `result_code`, `queued`. Fails after 10 s if the library does not answer. Before 2.5 this call never returned (see CHANGELOG). |
 
 ## MCP tools (host side)
 
@@ -246,7 +246,7 @@ prints the live list.
 | `qemu_reset` | Restart the guest by stopping and starting it — the only restart an AmigaOS 4 guest reliably survives. `system_reset=True` sends the raw QMP command instead, for non-AmigaOS guests. |
 | `qemu_status` | Whether a guest is alive, whoever started it, plus `owned` — true only when this process holds the QEMU handle (a `pid` is available only then). |
 | `qemu_screenshot` | PNG of the framebuffer via QMP `screendump`. |
-| `qemu_savevm` / `qemu_loadvm` / `qemu_list_snapshots` / `qemu_delete_snapshot` | Guest-state checkpoint / restore / inspect / delete. |
+| `qemu_savevm` / `qemu_loadvm` / `qemu_list_snapshots` / `qemu_delete_snapshot` | Guest-state checkpoint / restore / inspect / delete (qcow2 internal snapshots, RAM included). QEMU refuses `savevm` while a VirtFS share (`SHARED:`) is mounted. `qemu_loadvm` refuses a name `info snapshots` does not list; a failed save or load leaves the VM running. |
 
 The captured QEMU serial output is exposed as the read-only resource
 `amiga://{target}/qemu/serial_log`, not as a tool.
@@ -256,7 +256,7 @@ The captured QEMU serial output is exposed as the read-only resource
 | Tool | Description |
 |---|---|
 | `fleet_list_targets` | List configured targets with their channel summary. Optional `tags` filter (a target must carry every tag). |
-| `fleet_target_status` | Per-target reachability and active channels. |
+| `fleet_target_status` | Per-target reachability: `qemu_running` (true when the guest's ports answer, whoever started it), `mcpd_reachable`, `qmp_reachable`. |
 | `fleet_snapshot` | One-call health summary across the entire fleet. |
 | `fleet_run_on_all` | Run a method on every (or tag-filtered) target in parallel. |
 | `fleet_barrier` | Same as `run_on_all` but with a per-target timeout (`per_target_timeout_s`, default 30); a slow target gets a -32002 entry. |
@@ -473,6 +473,7 @@ package, which is installed only as a host dependency.
 |---|---|
 | `validate.py --endpoint host:port [--rounds 1,2,3,4,5]` | Parametric runner for the validation suites against any endpoint. |
 | `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, MCPd 2.x jobs, chunked and streamed transfers (CRC-checked), the screen-blanker hold, `wb.screenshot` (including 8-bit screens), stress, and the host MCP protocol layer. Checks skip when the daemon lacks the method. The place for coverage of a new method. |
+| `validate_regressions.py --endpoint host:port` | Regression checks for the bugs fixed in MCPd 2.5, on a freshly booted QEMU guest: `app.notify` answers and transfers still work after it, the blanker hold is visible, `fs.read` refuses a slice too large for a frame without dropping the connection, a truncated `exec.cmd` answer leaves the rest readable, crash-hook reports reach only `debug.exception` subscribers, and the 16-worker cap holds and frees its slots. Runs a deliberately crashing program (leaves a GrimReaper requester). |
 | `validate_input.py --target <name> [--shared-dir DIR] [--restart-mode qemu\|cold\|manual] [--keep-running]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. By default kills/relaunches QEMU for the restarts; on real hardware use `--restart-mode cold` (`sys.cold_reboot`, with an MCU power-cycle fallback) or `manual`. |
 | `validate_durability.py --endpoint host:port [--skip-long]` | Out-of-the-box durability sweep: raw-socket frame fuzzing, JSON-RPC envelope abuse, error-code coverage, connection lifecycle, long-running stability, filesystem corner cases, exec.cmd corners, subscription state transitions, concurrency, numeric boundaries, cross-method workflows, MCP resources, fleet host tools, CLI flags. |
 | `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, against `$MCPD_ENDPOINT` (default `127.0.0.1:4322`). |

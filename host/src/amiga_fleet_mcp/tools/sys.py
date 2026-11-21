@@ -400,6 +400,9 @@ class AppEntry(BaseModel):
     filename: str | None = None
     description: str | None = None
     hidden: bool = False
+    # MCPd 2.5+: False while the app keeps the screen blanker away
+    # (MCPd's own entry: during file transfers and 30 s after).
+    allows_blanker: bool | None = None
 
 
 class ApplicationsResult(BaseModel):

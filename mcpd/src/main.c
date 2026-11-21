@@ -223,6 +223,7 @@ extern int crashhook_init(void);
 extern void crashhook_shutdown(void);
 extern uint32_t crashhook_signal_mask(void);
 extern int crashhook_drain(int sock);
+extern uint32_t crashhook_seq(void);
 
 /* Handle one connection. WaitSelect with a 200ms timeout drives an
  * idle-poll loop: when the socket is readable, dispatch the request
@@ -376,12 +377,21 @@ static void client_task_entry(void) {
     int32 socket_id = (int32)(intptr_t)self->tc_UserData;
 
     struct conn_ctx ctx = { 0 };
+    /* Crashes from before this connection are not sent to it. */
+    ctx.crash_seen = crashhook_seq();
+    /* Every return below releases the worker slot the parent claimed
+     * for us; an early return that skipped it used to leak the slot
+     * towards MCPD_MAX_CLIENTS. */
     ctx.socket_base = IExec->OpenLibrary("bsdsocket.library", 4);
-    if (!ctx.socket_base) return;
+    if (!ctx.socket_base) {
+        client_slot_release();
+        return;
+    }
     ctx.isocket = (struct SocketIFace *)IExec->GetInterface(
         ctx.socket_base, "main", 1, NULL);
     if (!ctx.isocket) {
         IExec->CloseLibrary(ctx.socket_base);
+        client_slot_release();
         return;
     }
 
@@ -390,6 +400,7 @@ static void client_task_entry(void) {
     if (ctx.fd < 0) {
         IExec->DropInterface((struct Interface *)ctx.isocket);
         IExec->CloseLibrary(ctx.socket_base);
+        client_slot_release();
         return;
     }
 
