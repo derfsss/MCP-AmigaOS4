@@ -1,19 +1,22 @@
 """End-to-end method sweep against a real X5000.
 
 Reads the target endpoint from $MCPD_ENDPOINT (or --endpoint) and
-exercises every QEMU-validated method against real hardware:
+exercises the core methods against real hardware:
 
   - proto.capabilities + sys.version + sys.tasks / libraries / devices
     / ports / lastalert
-  - fs.list / stat / read / write / delete / makedir / rename / copy
-    / protect (binary-clean round-trip)
+  - fs.list / stat / read / write / delete / makedir, then copy /
+    rename / protect checked with fs.hash (binary-clean round-trip)
   - exec.cmd
   - wb.screens / wb.windows
   - debug.task_snapshot (against a stable system task)
   - events.wait
+  - sys.tlb_dump (X5000 / A1222) and sys.mcu_cmd cmd="t" (X5000 only),
+    both read-only, chosen by proto.capabilities board.detected
 
-Compares numbers against the QEMU pegasos2 reference where it makes
-sense (e.g. AmigaOS version, library count).
+Compares the Kickstart version against the QEMU pegasos2 reference
+(54.57) and notes a difference. scripts/validate_full.py covers the
+wider (board-independent) surface, including the MCPd 2.x methods.
 
 Assumes MCPd is already running on the X5000 (run
 x5000_bootstrap_mcpd.py first).
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import os
 import sys
 import time
@@ -84,6 +88,8 @@ async def amain() -> int:
     target = "x5000-real"
     failures = 0
 
+    method_names: list[str] = []
+    board = ""
     try:
         # ---- proto.capabilities + version --------------------------
 
@@ -92,6 +98,7 @@ async def amain() -> int:
             caps = await fleet.mcpd(target).request("proto.capabilities")
             archive.log_call("proto.capabilities", target, {}, result=caps)
             method_names = sorted(m["name"] for m in caps["methods"])
+            board = str(caps.get("board", {}).get("detected", ""))
             print(f"    server={caps['server']} protocol={caps['protocol']}")
             print(f"    advertises {len(method_names)} methods")
             need = {
@@ -140,7 +147,7 @@ async def amain() -> int:
 
         print("[v] sys.libraries")
         try:
-            libs = await sys_tool.sys_libraries(fleet, target)
+            libs = (await sys_tool.sys_libraries(fleet, target)).libraries
             archive.log_call("sys.libraries", target, {},
                              result=[L.model_dump() for L in libs])
             print(f"    {len(libs)} libraries")
@@ -157,7 +164,7 @@ async def amain() -> int:
 
         print("[v] sys.devices")
         try:
-            devs = await sys_tool.sys_devices(fleet, target)
+            devs = (await sys_tool.sys_devices(fleet, target)).devices
             archive.log_call("sys.devices", target, {},
                              result=[d.model_dump() for d in devs])
             print(f"    {len(devs)} devices")
@@ -169,7 +176,7 @@ async def amain() -> int:
 
         print("[v] sys.ports")
         try:
-            ports = await sys_tool.sys_ports(fleet, target)
+            ports = (await sys_tool.sys_ports(fleet, target)).ports
             archive.log_call("sys.ports", target, {},
                              result=[p.model_dump() for p in ports])
             print(f"    {len(ports)} public ports "
@@ -192,7 +199,7 @@ async def amain() -> int:
 
         print("[v] fs.list \"RAM:\"")
         try:
-            entries = await fs_tool.fs_list(fleet, target, "RAM:")
+            entries = (await fs_tool.fs_list(fleet, target, "RAM:")).entries
             archive.log_call("fs.list", target, {"path": "RAM:"},
                              result=[e.model_dump() for e in entries])
             print(f"    {len(entries)} entries: "
@@ -204,11 +211,13 @@ async def amain() -> int:
         print("[v] fs makedir + write + stat + read + delete cycle")
         TEST_DIR = "RAM:fleet_sweep"
         TEST_FILE = f"{TEST_DIR}/blob.bin"
+        TEST_COPY = f"{TEST_DIR}/copy.bin"
+        TEST_MOVED = f"{TEST_DIR}/moved.bin"
         # 256-byte blob with NULs / 0xFF / a recognisable marker.
         BLOB = (b"x5000 sweep marker\n" + bytes(range(256)))[:256]
         try:
             # Pre-clean.
-            for p in (TEST_FILE, TEST_DIR):
+            for p in (TEST_FILE, TEST_COPY, TEST_MOVED, TEST_DIR):
                 try: await fs_tool.fs_delete(fleet, target, p)
                 except (TargetError, Exception): pass
 
@@ -234,11 +243,22 @@ async def amain() -> int:
                 failures += 1
             else:
                 print(f"    OK: {len(BLOB)}-byte binary blob round-tripped")
+
+            # copy + rename + protect, checked by hash against the blob.
+            await fs_tool.fs_copy(fleet, target, TEST_FILE, TEST_COPY)
+            await fs_tool.fs_rename(fleet, target, TEST_COPY, TEST_MOVED)
+            await fs_tool.fs_protect(fleet, target, TEST_MOVED, bits=0)
+            h = await fs_tool.fs_hash(fleet, target, TEST_MOVED)
+            if h.hash != hashlib.sha256(BLOB).hexdigest():
+                print(f"    FAIL: copy+rename+protect hash {h.hash}")
+                failures += 1
+            else:
+                print("    OK: fs.copy + fs.rename + fs.protect + fs.hash")
         except Exception as e:
             print(f"    FAIL: {e}")
             failures += 1
         finally:
-            for p in (TEST_FILE, TEST_DIR):
+            for p in (TEST_FILE, TEST_COPY, TEST_MOVED, TEST_DIR):
                 try: await fs_tool.fs_delete(fleet, target, p)
                 except (TargetError, Exception): pass
 
@@ -263,14 +283,14 @@ async def amain() -> int:
 
         print("[v] wb.screens + wb.windows")
         try:
-            screens = await wb_tool.wb_screens(fleet, target)
+            screens = (await wb_tool.wb_screens(fleet, target)).screens
             archive.log_call("wb.screens", target, {},
                              result=[s.model_dump() for s in screens])
             print(f"    {len(screens)} screens")
             for s in screens[:4]:
                 print(f"      [{s.index}] {s.width}x{s.height} "
                       f"title={s.title!r} windows={s.window_count}")
-            wins = await wb_tool.wb_windows(fleet, target)
+            wins = (await wb_tool.wb_windows(fleet, target)).windows
             archive.log_call("wb.windows", target, {},
                              result=[w.model_dump() for w in wins])
             print(f"    {len(wins)} windows total")
@@ -343,6 +363,39 @@ async def amain() -> int:
         except Exception as e:
             print(f"    FAIL: {e}")
             failures += 1
+
+        # ---- board-specific, read-only -----------------------------
+
+        if board in ("x5000", "a1222") and "sys.tlb_dump" in method_names:
+            print(f"[v] sys.tlb_dump ({board})")
+            try:
+                tlb = await sys_tool.sys_tlb_dump(fleet, target)
+                valid = [e for e in tlb.table if e.v]
+                print(f"    TLB{tlb.tlb}: {tlb.entries} entries, "
+                      f"{len(valid)} valid")
+                if not valid:
+                    print("    FAIL: no valid TLB1 entry")
+                    failures += 1
+            except Exception as e:
+                print(f"    FAIL: {e}")
+                failures += 1
+        else:
+            print(f"[v] sys.tlb_dump SKIP: board={board!r}")
+
+        # `t` (temperatures) only: read-only. Never send `s` (power off).
+        if board == "x5000" and "sys.mcu_cmd" in method_names:
+            print("[v] sys.mcu_cmd cmd='t' (UART1 temperatures)")
+            try:
+                mc = await sys_tool.sys_mcu_cmd(fleet, target, cmd="t")
+                print(f"    reply={mc.reply!r} parsed={mc.parsed}")
+                if mc.timed_out or mc.parsed is None:
+                    print("    FAIL: no parseable $t reply")
+                    failures += 1
+            except Exception as e:
+                print(f"    FAIL: {e}")
+                failures += 1
+        else:
+            print(f"[v] sys.mcu_cmd SKIP: board={board!r}")
 
     finally:
         await fleet.close_all()

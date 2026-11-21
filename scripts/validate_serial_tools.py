@@ -1,8 +1,19 @@
-"""End-to-end validation of the new serial.* tools against the live X5000.
+"""End-to-end validation of the serial.* tools against a live X5000.
 
 Imports the same functions the MCP tool decorators wrap, drives a full
-start -> reboot -> capture -> read -> stop cycle, and decodes the
-captured bytes to check we see the U-Boot banner.
+start -> reboot -> capture -> read -> tail -> stop cycle on the
+target's `uboot` serial channel, and decodes the captured bytes to
+check we see the U-Boot banner.
+
+The target and its serial channel come from the amiga-fleet-mcp
+config.toml; --mcpd-endpoint is only used to send the reboot, a raw
+exec.cmd `Run >NIL: <NIL: C:Reboot` (a warm reboot). Run from the
+repository root: host/src is put on sys.path relative to the current
+directory.
+
+Usage:
+    python scripts/validate_serial_tools.py [--target x5000]
+                                            [--mcpd-endpoint host:port]
 """
 
 from __future__ import annotations

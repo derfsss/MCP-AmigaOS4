@@ -1,17 +1,23 @@
 """Install MCPd + refresh SerialShell on a remote AmigaOS via SerialShell.
 
 Steps:
-  1. Connect to SerialShell at <host>:4321
-  2. Upload SerialShell binary -> T:SerialShell
-  3. Copy T:SerialShell -> C:SerialShell (+rwed)
-  4. Upload MCPd binary -> T:MCPd
-  5. Upload mcpd/install/MCPd-Install script -> T:MCPd-Install
-  6. CD T: + Execute MCPd-Install (copies binary, edits S:Network-Startup)
-  7. Verify both binaries are in place
+  1. Connect to SerialShell at <host>:<port> (default 4321)
+  2. Upload the SerialShell binary -> T:SerialShell, copy it to
+     C:SerialShell, Protect +rwed
+  3. Upload the MCPd binary -> T:MCPd
+  4. Run the MCPd-Install steps one by one (MakeDir
+     SYS:System/MCPd, Copy, Protect +rwed); the --mcpd-install-script
+     file is only checked for existence, not uploaded or executed
+  5. Download S:Network-Startup, drop any earlier MCPd lines, append a
+     bare `Run >NIL: <NIL: SYS:System/MCPd/MCPd` line (no watchdog),
+     copy the current file to S:Network-Startup.before-mcpd and upload
+     the new one
+  6. Verify on a fresh connection: C:SerialShell, SYS:System/MCPd/ and
+     the Network-Startup line
 
-Used to bring up MCPd on a fleet member that doesn't have it yet
-(e.g. A1222 today). Once MCPd is running we can use the host MCP
-tools instead.
+Used to bring up MCPd on a fleet member that doesn't have it yet.
+Once MCPd is running, scripts/install_mcpd_autostart.py switches the
+launch line to the watchdog, and the host MCP tools take over.
 
 The SerialShell protocol used here is the same one qemu-runner's
 serial_client.py speaks: SERIALSHELL_READY banner, line-based
@@ -278,7 +284,7 @@ def main() -> int:
                   + "; MCPd - Model Context Protocol daemon\n"
                   + "Run >NIL: <NIL: SYS:System/MCPd/MCPd\n")
 
-        # Backup the cleaned original (NOT the corrupted current).
+        # Back up the current file (overwrites an earlier backup).
         run(c, 'Copy S:Network-Startup S:Network-Startup.before-mcpd CLONE')
         c.upload_bytes(new_ns.encode("latin-1"), "T:netstart.new")
         run(c, 'Copy T:netstart.new S:Network-Startup CLONE')

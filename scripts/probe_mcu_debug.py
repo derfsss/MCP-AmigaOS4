@@ -1,7 +1,17 @@
 """Probe the X5000 Cyrus MCU debug shell on P18 (host COM5).
 
 The MCU debug interface is interactive (>> prompt) at 38400 8N1.
-Send CR to wake the prompt, then run `help` to enumerate commands.
+Send CR to wake the prompt, then run each --cmds entry (default
+`help`); `watch:N` listens N seconds for unsolicited output instead.
+
+The host `power.*` tools (power.help, power.shell, ...) drive the same
+shell with confirm guards; prefer them.
+
+WARNING: only `p` (on) and `s` (off) are safe to send while the board
+is powered off. `help` or any other command can leave the MCU
+unresponsive until the PSU is switched off at the mains (see
+host/src/amiga_fleet_mcp/tools/power.py _refuse_if_board_cold). Run
+this only with the board powered on.
 """
 from __future__ import annotations
 

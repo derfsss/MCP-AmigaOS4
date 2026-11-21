@@ -1,4 +1,7 @@
-"""Validate round-3 SDK-survey additions on the live X5000:
+"""Validate the round-3 SDK-survey additions on the live X5000.
+
+Target: $MCPD_ENDPOINT (default 127.0.0.1:4322); the CPU and board
+checks below expect an X5000 and fail on other machines. Checks:
 
   sys.hardware                CPU + AttnFlags + resource probes
   proto.capabilities.board    real (not "unknown") detection

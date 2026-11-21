@@ -7,7 +7,9 @@ or an environment variable.
 Conventions:
 
   $MCPD_ENDPOINT       — default <host>:<port> for `validate.py`-style scripts
-  $AMIGA_INSTALL_SUPPORT_DIR — where to find diskimage-bootstrap/, SerialShell
+
+Only repo_root() is used by the scripts today; each script that
+imports amiga_fleet_mcp puts host/src on sys.path itself.
 
 Scripts that import `serial_client` / `qmp_client` need the qemu-runner
 package, which is a host dependency: run them with host/.venv's Python

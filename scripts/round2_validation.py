@@ -1,4 +1,7 @@
-"""Validate round-2 §7-gap additions on the live X5000:
+"""Validate the round-2 additions on the live X5000.
+
+Target: $MCPD_ENDPOINT (default 127.0.0.1:4322, a QEMU guest's
+forwarded port); scripts/validate.py sets it. Checks:
 
   proto.capabilities    enrichment (build/methods objects/method_names/
                         features/limits/board)
@@ -143,7 +146,7 @@ async def amain() -> int:
             fleet, target, ROOT + "/sub2/inner/deep.txt", deep,
         )
 
-        flat = await fs_tool.fs_list(fleet, target, ROOT)
+        flat = (await fs_tool.fs_list(fleet, target, ROOT)).entries
         archive.log_call("fs.list", target, {"path": ROOT},
                          result=[e.model_dump() for e in flat])
         print(f"    flat: {len(flat)} entry/ies "
@@ -152,9 +155,9 @@ async def amain() -> int:
             print(f"    FAIL: expected 2 top-level entries, got {len(flat)}")
             failures += 1
 
-        deep_list = await fs_tool.fs_list(
+        deep_list = (await fs_tool.fs_list(
             fleet, target, ROOT, recursive=True, max_depth=8,
-        )
+        )).entries
         archive.log_call("fs.list", target,
                          {"path": ROOT, "recursive": True, "max_depth": 8},
                          result=[e.model_dump() for e in deep_list])
@@ -173,7 +176,7 @@ async def amain() -> int:
         # Recursive delete cleans the tree.
         await fs_tool.fs_delete(fleet, target, ROOT, recursive=True)
         try:
-            still = await fs_tool.fs_list(fleet, target, ROOT)
+            still = (await fs_tool.fs_list(fleet, target, ROOT)).entries
             print(f"    FAIL: tree still exists after recursive delete "
                   f"({len(still)} entries)")
             failures += 1

@@ -1,15 +1,21 @@
 """Install MCPd auto-start on a target via the running MCPd's fs.* methods.
 
-Drops the binary at SYS:System/MCPd/MCPd, makes a one-time backup of
-S:Network-Startup, and idempotently appends the launch line. No
-SerialShell needed - the running MCPd does the file ops on itself.
+Drops the binary at SYS:System/MCPd/MCPd (Protect +rwed), copies
+MCPd-Watchdog and the two input-gate scripts (MCPd-Enable-Input /
+MCPd-Disable-Input, copied but never run) next to it, makes a one-time
+backup of S:Network-Startup, and makes S:Network-Startup launch MCPd
+through the watchdog: an existing bare `Run >NIL: <NIL:
+SYS:System/MCPd/MCPd` line is replaced, otherwise the launch line is
+appended. Idempotent. No SerialShell needed - the running MCPd does
+the file ops on itself.
 
 Usage:
     python scripts/install_mcpd_autostart.py [host[:port]] [path_to_binary]
 
 Defaults:
-    host       $MCPD_ENDPOINT, or required if env unset
-    binary     ./mcpd/MCPd
+    host       $MCPD_ENDPOINT, or required if env unset; port 4322
+               if none is given
+    binary     mcpd/MCPd in this checkout
 """
 
 from __future__ import annotations
@@ -84,7 +90,7 @@ async def install(
     print(f"[install] target={target}  binary={binary_path}  "
           f"size={binary_path.stat().st_size}")
 
-    print("[1/5] MakeDir SYS:System/MCPd")
+    print("[1/6] MakeDir SYS:System/MCPd")
     try:
         await fs_tool.fs_makedir(fleet, target, "SYS:System/MCPd")
     except Exception as e:
@@ -96,7 +102,7 @@ async def install(
                 raise
         print(f"      (already exists or benign: {msg[:100]})")
 
-    print("[2/5] Upload binary -> SYS:System/MCPd/MCPd")
+    print("[2/6] Upload binary -> SYS:System/MCPd/MCPd")
     blob = binary_path.read_bytes()
     await fs_tool.fs_write(
         fleet, target, "SYS:System/MCPd/MCPd",

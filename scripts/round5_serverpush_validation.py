@@ -1,24 +1,20 @@
 """Validate server-push notifications via events.subscribe.
 
-  1. Confirm initial state (no subscription).
-  2. events.subscribe(["sys.lastalert", "debug.exception"]) - returns
-     subscription mask.
-  3. Read sys.lastalert baseline.
-  4. Trigger an alert by calling sys.alert_decode with a known code;
-     this doesn't actually post an alert (decode is read-only), so
-     instead we use exec.cmd to run a command that *might* set an
-     alert. Most reliable trigger: just wait and see if any kernel
-     activity bumps LastAlert.
-  5. Even without inducing an alert, verify the subscription state
-     is queryable (events.subscribe accepts the params and returns
-     the mask).
-  6. events.unsubscribe - confirms tear-down.
+Target: $MCPD_ENDPOINT (default 127.0.0.1:4322). Checks, in order:
 
-  Notification path validation: spawn a background coroutine that
-  registers a notification handler on the McpdTransport, then send
-  some idle round-trips and wait briefly. We verify the queue stays
-  empty under no-alert conditions (negative test - no spurious
-  notifications).
+  1. events.subscribe(["sys.lastalert", "debug.exception"]) returns
+     topics_mask 0x03 and both names in `subscribed`.
+  2. Negative test: with a notification handler registered on the
+     McpdTransport, three idle proto.version round-trips produce no
+     notifications (LastAlert is stable, nothing is induced).
+  3. events.subscribe with an empty topic list clears the mask to 0.
+  4. events.unsubscribe returns ok.
+  5. events.test_emit produces an events.notify frame that reaches the
+     handler with its topic and data intact.
+  6. 20 proto.version round-trips while subscribed (frame demuxing).
+
+No alert is induced; scripts/test_crashhook.py covers a real
+debug.exception.
 """
 
 from __future__ import annotations

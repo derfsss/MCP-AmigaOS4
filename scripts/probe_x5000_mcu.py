@@ -1,16 +1,25 @@
-"""Quick probe of the X5000 MCU UART over the FTDI 3.3V USB-TTL cable.
+"""Quick probe of the X5000 MCU over the FTDI 3.3V USB-TTL cable.
 
-Tier-A tests #1, #3, #4 from the MCU test list:
-  1. Listen 3s at 38400 8N1 for unsolicited output (boot/alert traffic)
-  3. Send `#t\r` and parse the temperature reply
-  4. Send `#f\r` and parse the fan reply
-Also probes `#v\r` (version) and `#?\r` (help) since they're free.
+  1. Listen --listen seconds (default 3) at 38400 8N1 for unsolicited
+     output (boot/alert traffic)
+  2. Send `#t`, `#f`, `#v` and `#?` (each followed by CR) and print
+     whatever comes back, raw (nothing is parsed)
 
 Run:
     python scripts/probe_x5000_mcu.py [--port COM5] [--baud 38400]
+                                      [--listen 3]
 
-If nothing replies, the FTDI cable is open on the host but not yet wired
-to the X5000 P18 internal header (phase-8 wiring gap).
+Note: the `#t` / `#v` / `#f` supervisor protocol is documented for the
+MCU's UART1, which the SoC reaches through serial.device; the supported
+way to use it is `sys.mcu_cmd` (through MCPd). The FTDI cable on the
+P18 header reaches the MCU's interactive debug shell, which the
+`power.*` tools drive.
+
+WARNING: only `p` (on) and `s` (off) are safe to send to the MCU while
+the board is powered off. Anything else can leave the MCU unresponsive
+until the PSU is switched off at the mains (see
+host/src/amiga_fleet_mcp/tools/power.py _refuse_if_board_cold). Run
+this only with the board powered on.
 """
 
 from __future__ import annotations

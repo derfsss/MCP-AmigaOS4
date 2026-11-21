@@ -1,7 +1,7 @@
 """Probe a target via SerialShell to learn what we're dealing with.
 
-Discovers: AmigaOS Version, writable volumes, current task list,
-free RAM. Used as a setup step before deploying MCPd - we want to
+Runs `Version FULL`, `Info` (mounted volumes) and `Avail FLUSH` (free
+RAM) through SerialShell on port 4321. Used as a setup step before deploying MCPd - we want to
 know whether the destination dir for MCPd is RAM: (lost on reboot,
 fine for the first run) or a writable disk volume (persists).
 

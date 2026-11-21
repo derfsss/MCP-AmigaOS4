@@ -1,8 +1,12 @@
 """Live patch on X5000 BootTest::
-  - Copy <dest>:DEVS/NetInterfaces/P50X0_ETH1.info -> P50X0_ETH.info
+  - Copy BootTest:DEVS/NetInterfaces/P50X0_ETH1.info -> P50X0_ETH.info
     (so port 0 NetInterface shows up in Prefs/Network GUI like port 1).
-  - Copy <ISO>:Installation-Files/Disk.info -> <dest>:Disk.info
-    if the volume root doesn't already have an icon.
+  - If BootTest:Disk.info is missing, copy the first Disk.info found
+    on AmigaOS:, AmigaOS4.1:, DH0:, DH1: or DH2: (the ISO's
+    Installation-Files/Disk.info is not used: it is unmounted by now).
+
+The paths are hardcoded to the BootTest: volume. Talks raw JSON-RPC
+(fs.stat, fs.copy) over one TCP connection per call.
 
 Configuration:
   --endpoint <host:port>   MCPd endpoint (default $MCPD_ENDPOINT;

@@ -1,16 +1,20 @@
 """Verify the auto-start installer on a QEMU pegasos2 guest.
 
 Procedure:
-  1. Launch QEMU pegasos2 (mcpd-peg2-upd3 image) with SerialShell + MCPd
-     + QMP hostfwds.
+  1. Launch QEMU pegasos2 from --peg2-config (an image that starts
+     SerialShell at boot) with SerialShell + MCPd + QMP hostfwds. The
+     SerialShell forward is added to the user-mode netdev whose
+     argument starts `user,` and contains `id=nic`.
   2. Wait for SerialShell at 127.0.0.1:4321.
-  3. One-shot bootstrap: SerialShell launches MCPd from SHARED:MCPd.
+  3. One-shot bootstrap: copy mcpd/MCPd into --shared-dir, then
+     SerialShell launches it from SHARED:MCPd.
   4. Wait for MCPd at 127.0.0.1:4422.
   5. Run scripts/install_mcpd_autostart.py against the running MCPd.
-  6. Reboot the QEMU guest (Reboot via SerialShell - same as the X5000
-     test).
+  6. Stop QEMU (QMP quit) and launch it again: a guest-side reboot or
+     QMP system_reset is unreliable on AmigaOS 4 guests.
   7. Wait for SerialShell to come back, then for MCPd to auto-launch
-     from SYS:System/MCPd/MCPd. Time the boot-to-bind interval.
+     (the watchdog line install_mcpd_autostart.py wrote). Time the
+     boot-to-bind interval.
   8. Run all four validation rounds (round1..round4) against the
      auto-launched MCPd.
   9. QMP-quit the QEMU process.
@@ -136,7 +140,7 @@ def quit_qemu_process(proc: subprocess.Popen[bytes]) -> None:
     """Stop QEMU cleanly via QMP `quit`, falling back to terminate +
     kill. Used because QMP system_reset and guest-issued `Reboot`
     leave AOS4 guests in a broken state - kill+relaunch is the only
-    reliable way to reboot. (See memory feedback_qemu_reset.md.)"""
+    reliable way to reboot."""
     try:
         with socket.create_connection(("127.0.0.1", QMP_PORT), timeout=5) as s:
             s.settimeout(5)
@@ -157,8 +161,8 @@ def quit_qemu_process(proc: subprocess.Popen[bytes]) -> None:
 
 
 def run_validation_round(name: str, endpoint: str) -> int:
-    """Run a roundN_validation.py script with the X5000 endpoint
-    monkey-patched to point at the QEMU's MCPd."""
+    """Run a roundN_validation.py script with $MCPD_ENDPOINT set to
+    the QEMU guest's MCPd."""
     script = HERE / f"{name}_validation.py"
     if not script.exists():
         print(f"  [skip] {name}_validation.py not found")
@@ -194,8 +198,8 @@ async def amain() -> int:
                     help="QEMU pegasos2 config.json path")
     ap.add_argument("--shared-dir", required=True,
                     help="Host directory exposed to the QEMU guest "
-                         "as SHARED: (must contain MCPd staged for "
-                         "first-boot bootstrap)")
+                         "as SHARED: (the script copies mcpd/MCPd "
+                         "into it for the first-boot bootstrap)")
     args = ap.parse_args()
     QEMU_BINARY = Path(args.qemu_binary)
     PEG2_CONFIG = Path(args.peg2_config).expanduser().resolve()

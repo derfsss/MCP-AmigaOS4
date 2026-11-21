@@ -2,10 +2,12 @@
 
 Walks the directory recursively via fs.list, downloads each file in
 16 MiB base64 chunks via fs.read(offset/length), preserves the
-directory hierarchy under <out_dir>/Kickstart/.
+directory hierarchy under <out_dir>/ (paths relative to --root).
 
-Usage:
-    python scripts/fetch_x5000_kickstart.py [--out s:/temp/x5000_kickstart]
+Usage (from the repository root; the script puts host/src on
+sys.path relative to the current directory):
+    python scripts/fetch_x5000_kickstart.py --endpoint <x5000-ip>:4322 \\
+        --out <local-dir> [--root SYS:Kickstart] [--target x5000]
 """
 from __future__ import annotations
 

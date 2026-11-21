@@ -1,6 +1,6 @@
 """Kill the running MCPd on the X5000 via SerialShell `Break N C`.
 
-Used when bootstrap_mcpd.py refuses to overwrite a still-running
+Used when x5000_bootstrap_mcpd.py refuses to overwrite a still-running
 instance and we need to re-deploy a new build.
 
 Configuration:
@@ -29,7 +29,7 @@ def _serial_client(host: str):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--host", default=os.environ.get("x5000_host"),
+        "--host", default=os.environ.get("X5000_HOST"),
         help="X5000 IP (default $X5000_HOST; required if env unset)",
     )
     args = ap.parse_args()

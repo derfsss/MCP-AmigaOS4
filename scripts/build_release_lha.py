@@ -22,7 +22,10 @@ trace.
 Usage:
     python scripts/build_release_lha.py --target qemu-pegasos2-sm501
     python scripts/build_release_lha.py --target qemu-pegasos2-sm501 \\
-        --version 1.4 --out dist/
+        --version 2.4 --out dist/
+
+`--target` names a target in the amiga-fleet-mcp config.toml (the
+file named by $AMIGA_FLEET_CONFIG, else the platform default).
 """
 
 from __future__ import annotations
@@ -92,7 +95,7 @@ async def main() -> int:
     ap.add_argument("--target", required=True,
                     help="a reachable AmigaOS target to build on")
     ap.add_argument("--version", help="override the version string "
-                                      "(default: read from rpc.h)")
+                                      "(default: the VERSION file)")
     ap.add_argument("--out", default="dist",
                     help="host directory for the finished archive")
     ap.add_argument("--readme",

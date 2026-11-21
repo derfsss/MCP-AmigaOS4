@@ -1,12 +1,17 @@
 """Direct-import wrapper around installer.run for X5000.
 
-Streams per-step status as the install runs.
+LIVE: calls installer.run with dry_run=False, confirm=True. Prints
+the per-step results once the run has finished. On failure it tries
+installer.unmount_iso on target "x5000", unit 50.
+
+Targets come from the amiga-fleet-mcp config.toml
+($AMIGA_FLEET_CONFIG, else the platform default).
 
 Configuration:
   --target         Fleet target name (default: x5000)
   --dest-volume    AmigaDOS volume to install to (default: BootTest:)
-  --sources-dir    Host directory containing the ISO + LHAs +
-                   MCPd / SerialShell / diskimage-bootstrap/
+  --sources-dir    Host directory containing the ISO + Update LHAs +
+                   Enhancer + MCPd (SerialShell optional)
                    (default: $AMIGA_INSTALL_SOURCES, or required)
   --machine        Machine ID (default: X5000)
 """

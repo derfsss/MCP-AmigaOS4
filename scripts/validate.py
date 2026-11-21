@@ -10,7 +10,7 @@ Defaults:
     --rounds    1,2,3,4,5
 
 Examples:
-    python scripts/validate.py --endpoint 192.168.0.10:4322
+    python scripts/validate.py --endpoint <x5000-ip>:4322
     python scripts/validate.py --endpoint 127.0.0.1:4422 --rounds 1,3
     python scripts/validate.py --rounds 1,2,3,4,5,1,2,3,4,5
 """

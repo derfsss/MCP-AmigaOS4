@@ -1,8 +1,13 @@
 """Events-subsystem soak test against a QEMU pegasos2 MCPd.
 
-Boot QEMU once, run N events.wait calls back-to-back with short
-timeouts, and record per-call latency + any errors. Validates that
-the events.* surface is stable under sustained load.
+Spawns the MCP server (`python -m amiga_fleet_mcp`, stdio, default
+config: $AMIGA_FLEET_CONFIG or the platform default) and drives it
+over MCP tools/call: qemu_start, poll fleet_target_status until MCPd
+answers, three sys_uptime warm-up calls, then N events_wait calls
+(topic sys.lastalert, timeout_ms 1000) back-to-back, recording
+per-call latency + any errors, and finally qemu_stop. Validates that
+the events.* surface is stable under sustained load. --target must be
+a qemu target in that config.
 
 Configuration:
   --target <name>    Fleet target name (default: qemu-pegasos2)

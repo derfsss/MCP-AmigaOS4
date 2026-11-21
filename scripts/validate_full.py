@@ -1,22 +1,34 @@
 """Comprehensive capability sweep against a single MCPd target.
 
-Goes wider than the per-round scripts: every advertised method is
-exercised at least once, edge cases are probed, the demuxer is stress-
-tested, and the host MCP protocol layer is sanity-checked.
+Goes wider than the per-round scripts: most advertised methods are
+exercised at least once (not input.*, which validate_input.py covers,
+nor the board-specific or rebooting ones: sys.cold_reboot,
+sys.read_ccsr, sys.read_pa, sys.tlb_dump, sys.mcu_cmd), edge cases are
+probed, the demuxer is stress-tested, and the host MCP protocol layer
+is sanity-checked. In section 10, methods newer than the daemon under
+test are skipped, decided from proto.capabilities method_names;
+sections 1-9 call everything unconditionally.
 
 Sections:
 
   1. Connectivity              proto.version + proto.capabilities envelope
   2. Filesystem                full fs.* round-trip incl. binary integrity
   3. Execution                 exec.cmd basic / args / cwd
-  4. System introspection      every sys.* method
-  5. Workbench                 every wb.* method
+  4. System introspection      sys.* introspection (no reboot / hardware access)
+  5. Workbench                 wb.* listings (wb.screenshot is in 10)
   6. Debug                     IDebug-driven helpers
   7. Events                    long-poll + server-push demux
   8. Application library       sys.applications + app.notify + self-registration
   9. Edge cases                error paths, boundary inputs
- 10. Stress                    rapid round-trips, large payload, concurrent subs
- 11. Host MCP layer            --list-tools, --list-resources
+ 10. MCPd 2.x                  exec jobs (status / output / list / kill),
+                               fs.sync, fs_upload / fs_download with
+                               transfer="chunked" and "stream" (CRC-32
+                               via fs.stream_status), the blanker hold,
+                               wb.screenshot (8-bit check when the
+                               frontmost screen is 8-bit), sys.modules,
+                               sys.crashhook_status
+ 11. Stress                    rapid round-trips, subscribed round-trips
+ 12. Host MCP layer            --list-tools, --list-resources
 
 Usage:
     python scripts/validate_full.py [--endpoint host:port]
@@ -37,6 +49,7 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 from contextlib import suppress
 from pathlib import Path
 
@@ -190,7 +203,7 @@ async def section_fs(r: Reporter, fleet: Fleet) -> None:
 
     # makedir + list
     await fs_tool.fs_makedir(fleet, "target", ROOT)
-    entries = await fs_tool.fs_list(fleet, "target", ROOT)
+    entries = (await fs_tool.fs_list(fleet, "target", ROOT)).entries
     r.assert_("fs.makedir + fs.list (empty)", len(entries) == 0)
 
     # write + read round-trip with NULs and 0xFF bytes
@@ -254,9 +267,9 @@ async def section_fs(r: Reporter, fleet: Fleet) -> None:
     await fs_tool.fs_write(
         fleet, "target", leaf, base64.b64encode(b"leaf!").decode(),
     )
-    deep = await fs_tool.fs_list(
+    deep = (await fs_tool.fs_list(
         fleet, "target", ROOT, recursive=True, max_depth=8,
-    )
+    )).entries
     names = sorted(e.name for e in deep)
     r.assert_("fs.list recursive finds nested file",
               "sub/inner/leaf.txt" in names,
@@ -312,10 +325,10 @@ async def section_sys(r: Reporter, fleet: Fleet) -> None:
     r.assert_("sys.memory.any.free > 0", m.any.free > 0,
               f"any.free={m.any.free}")
 
-    vols = await sys_tool.sys_volumes(fleet, "target")
+    vols = (await sys_tool.sys_volumes(fleet, "target")).volumes
     r.assert_("sys.volumes returns >= 1 mounted volume", len(vols) >= 1)
 
-    assigns = await sys_tool.sys_assigns(fleet, "target")
+    assigns = (await sys_tool.sys_assigns(fleet, "target")).assigns
     r.assert_("sys.assigns returns >= 5 assigns", len(assigns) >= 5,
               f"count={len(assigns)}")
 
@@ -324,13 +337,13 @@ async def section_sys(r: Reporter, fleet: Fleet) -> None:
               (len(tasks.ready) + len(tasks.waiting)) > 0,
               f"ready={len(tasks.ready)} wait={len(tasks.waiting)}")
 
-    libs = await sys_tool.sys_libraries(fleet, "target")
+    libs = (await sys_tool.sys_libraries(fleet, "target")).libraries
     r.assert_("sys.libraries returns >= 5 libs", len(libs) >= 5)
 
-    devs = await sys_tool.sys_devices(fleet, "target")
+    devs = (await sys_tool.sys_devices(fleet, "target")).devices
     r.assert_("sys.devices returns >= 1 device", len(devs) >= 1)
 
-    ports = await sys_tool.sys_ports(fleet, "target")
+    ports = (await sys_tool.sys_ports(fleet, "target")).ports
     r.assert_("sys.ports returns >= 1 port", len(ports) >= 1)
 
     al = await sys_tool.sys_lastalert(fleet, "target")
@@ -384,13 +397,13 @@ async def section_sys(r: Reporter, fleet: Fleet) -> None:
 async def section_wb(r: Reporter, fleet: Fleet) -> None:
     r.section("5. Workbench")
 
-    s = await wb_tool.wb_screens(fleet, "target")
+    s = (await wb_tool.wb_screens(fleet, "target")).screens
     r.assert_("wb.screens returns >= 1 screen", len(s) >= 1)
 
-    w = await wb_tool.wb_windows(fleet, "target")
+    w = (await wb_tool.wb_windows(fleet, "target")).windows
     r.ok("wb.windows reachable", f"count={len(w)}")
 
-    ps = await wb_tool.wb_publicscreens(fleet, "target")
+    ps = (await wb_tool.wb_publicscreens(fleet, "target")).public_screens
     r.assert_("wb.publicscreens returns >= 1 (Workbench)",
               len(ps) >= 1)
 
@@ -580,8 +593,204 @@ async def section_edge(r: Reporter, fleet: Fleet) -> None:
     await fs_tool.fs_delete(fleet, "target", pbig)
 
 
+def _png_pixels(png: bytes) -> tuple[int, int, bytes] | None:
+    """Width, height and the inflated scanlines of an 8-bit RGB PNG
+    as MCPd writes it (colour type 2, filter 0 on every row), or None
+    if it isn't one."""
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, w, h = 8, b"", 0, 0
+    while pos + 8 <= len(png):
+        n, kind = struct.unpack(">I4s", png[pos:pos + 8])
+        body = png[pos + 8:pos + 8 + n]
+        if kind == b"IHDR":
+            w, h, bit_depth, colour = struct.unpack(">IIBB", body[:10])
+            if bit_depth != 8 or colour != 2:
+                return None
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + n
+    try:
+        return w, h, zlib.decompress(idat)
+    except zlib.error:
+        return None
+
+
+async def section_v2(r: Reporter, fleet: Fleet) -> None:
+    """MCPd 2.x surface: exec jobs, both file-transfer paths (chunked
+    and raw stream, which also drive fs.write_chunk, fs.stream_put,
+    fs.stream_get, fs.stream_status and fs.sync), the blanker hold
+    during transfers, wb.screenshot, sys.modules and
+    sys.crashhook_status. Each check is skipped when the daemon does
+    not advertise the method."""
+    r.section("10. Jobs, transfers, screenshot (MCPd 2.x)")
+    t = fleet.mcpd("target")
+    caps = await t.request("proto.capabilities")
+    names = set(caps.get("method_names", []))
+    # "mcpd/2.4" -> (2, 4); (0, 0) if the string has another shape.
+    try:
+        ver = tuple(int(x) for x in
+                    str(caps.get("server", "")).split("/")[1].split(".")[:2])
+    except (IndexError, ValueError):
+        ver = (0, 0)
+
+    # ---- exec jobs: status / output / list / kill ------------------
+    if {"exec.status", "exec.output", "exec.list",
+            "exec.kill"} <= names:
+        run = await exec_tool.exec_cmd(
+            fleet, "target", "Wait 30", timeout_s=1.0,
+            return_running=True,
+        )
+        r.assert_("exec.cmd return_running leaves the job running",
+                  run.state == "running" and run.job_id is not None,
+                  f"state={run.state} job_id={run.job_id}")
+        if run.job_id is not None:
+            jid = run.job_id
+            st = await exec_tool.exec_status(fleet, "target", jid)
+            r.assert_("exec.status reports the running job",
+                      st.job_id == jid and st.state == "running",
+                      f"state={st.state}")
+            jl = await exec_tool.exec_list(fleet, "target")
+            r.assert_("exec.list includes the job",
+                      any(j.get("job_id") == jid for j in jl.jobs),
+                      f"jobs={len(jl.jobs)}")
+            k = await exec_tool.exec_kill(fleet, "target", jid,
+                                          signal="c", wait_s=5.0)
+            r.assert_("exec.kill CTRL-C stops Wait",
+                      k.sent and k.exited, f"state={k.state}")
+            out = await exec_tool.exec_output(fleet, "target", jid)
+            r.assert_("exec.output after exit",
+                      out.job_id == jid and out.state == "exited",
+                      f"state={out.state} bytes={out.bytes}")
+    else:
+        r.skip("exec.status / output / list / kill", "daemon before 2.0")
+
+    # ---- fs.sync ----------------------------------------------------
+    if "fs.sync" in names:
+        sy = await fs_tool.fs_sync(fleet, "target", "SYS:")
+        r.ok("fs.sync SYS:", f"flushed={sy.flushed}")
+    else:
+        r.skip("fs.sync", "daemon before 2.0")
+
+    # ---- fs_upload / fs_download, chunked and stream ---------------
+    tmp = HERE.parent / "tmp" / "validate-full-xfer"
+    tmp.mkdir(parents=True, exist_ok=True)
+    blob = os.urandom(1536 * 1024)          # 1.5 MiB, incompressible
+    src = tmp / "up.bin"
+    src.write_bytes(blob)
+    remote = "RAM:vfull_xfer.bin"
+    modes = ["chunked"]
+    if {"fs.stream_put", "fs.stream_get"} <= names:
+        modes.append("stream")
+    else:
+        r.skip("fs_upload / fs_download transfer=\"stream\"",
+               "daemon before 2.3")
+    try:
+        for mode in modes:
+            # 512 KiB chunks: three fs.write_chunk / fs.read calls, so
+            # the chunked path writes and reads at offsets above 0.
+            # chunk_size does not apply to a stream.
+            up = await fs_tool.fs_upload(
+                fleet, "target", local_path=str(src),
+                remote_path=remote, verify=True, transfer=mode,
+                chunk_size=512 * 1024,
+            )
+            r.assert_(f"fs_upload transfer={mode}",
+                      up.transfer == mode and up.sha256_verified
+                      and up.bytes_total == len(blob)
+                      and (mode == "stream" or up.chunks == 3),
+                      f"transfer={up.transfer} chunks={up.chunks} "
+                      f"{up.speed_mib_s} MiB/s")
+            dst = tmp / f"down-{mode}.bin"
+            dst.unlink(missing_ok=True)
+            dl = await fs_tool.fs_download(
+                fleet, "target", remote_path=remote,
+                local_path=str(dst), verify=True, transfer=mode,
+                chunk_size=512 * 1024,
+            )
+            r.assert_(f"fs_download transfer={mode}",
+                      dl.transfer == mode and dl.sha256_verified
+                      and dst.read_bytes() == blob,
+                      f"transfer={dl.transfer} {dl.speed_mib_s} MiB/s")
+            if mode == "stream" and "fs.stream_status" in names:
+                r.assert_("fs.stream_status CRC-32 checked both ways",
+                          up.crc32_verified and dl.crc32_verified,
+                          f"up={up.crc32_verified} "
+                          f"down={dl.crc32_verified}")
+    finally:
+        with suppress(Exception):
+            await fs_tool.fs_delete(fleet, "target", remote)
+
+    # ---- blanker hold ----------------------------------------------
+    # A transfer sets application.library's AllowsBlanker FALSE; a
+    # linger process named "MCPd blanker hold" sets it back 30 s after
+    # the last one (mcpd/src/methods/applib.c). Its presence right
+    # after the transfers shows the hold engaged; it says nothing
+    # about what a blanker would have done.
+    apps = await sys_tool.sys_applications(fleet, "target")
+    registered = apps.available and any(
+        a.url_identifier == "com.derfsss.mcpd" for a in apps.applications
+    )
+    if not registered:
+        r.skip("blanker hold during transfers",
+               "MCPd not registered with application.library")
+    else:
+        tasks = await sys_tool.sys_tasks(fleet, "target")
+        held = any(x.name == "MCPd blanker hold"
+                   for x in tasks.ready + tasks.waiting)
+        if held:
+            r.ok("blanker hold engaged after transfers")
+        elif ver >= (2, 4):
+            r.fail("blanker hold engaged after transfers",
+                   f"no 'MCPd blanker hold' task on {caps.get('server')}")
+        else:
+            # 2.4 added the hold, without a method of its own.
+            r.skip("blanker hold engaged after transfers",
+                   f"{caps.get('server')} predates the hold")
+
+    # ---- wb.screenshot ---------------------------------------------
+    if "wb.screenshot" in names:
+        shot = await wb_tool.wb_screenshot(fleet, "target")
+        png = base64.b64decode(shot.image_b64 or "")
+        px = _png_pixels(png)
+        r.assert_("wb.screenshot returns a PNG of the screen's size",
+                  px is not None and px[0] == shot.width
+                  and px[1] == shot.height,
+                  f"{shot.width}x{shot.height} depth={shot.depth} "
+                  f"size={shot.size}")
+        if shot.depth > 8:
+            r.skip("wb.screenshot of an 8-bit screen",
+                   f"frontmost screen is {shot.depth}-bit")
+        elif px is not None:
+            w, h, raw = px
+            rows = [raw[i * (1 + 3 * w) + 1:(i + 1) * (1 + 3 * w)]
+                    for i in range(h)]
+            colours = {row[j:j + 3] for row in rows[::8]
+                       for j in range(0, len(row), 3 * 8)}
+            # Before 2.4 a palette screen came back as the capture
+            # buffer's leftovers, often exec's 0xABADCAFE fill.
+            r.assert_("wb.screenshot of an 8-bit screen has real pixels",
+                      b"\xab\xad\xca\xfe" not in raw and len(colours) > 1,
+                      f"depth={shot.depth} colours>={len(colours)}")
+    else:
+        r.skip("wb.screenshot", "daemon lacks it")
+
+    # ---- sys.modules / sys.crashhook_status ------------------------
+    if "sys.modules" in names:
+        mods = await t.request("sys.modules")
+        r.assert_("sys.modules lists libraries/devices/resources",
+                  len(mods.get("modules", [])) > 0,
+                  f"count={len(mods.get('modules', []))}")
+    if "sys.crashhook_status" in names:
+        ch = await t.request("sys.crashhook_status")
+        r.assert_("sys.crashhook_status reports the IDebug hook",
+                  isinstance(ch.get("registered"), bool),
+                  f"registered={ch.get('registered')} "
+                  f"fire_count={ch.get('fire_count')}")
+
+
 async def section_stress(r: Reporter, fleet: Fleet) -> None:
-    r.section("10. Stress")
+    r.section("11. Stress")
     t = fleet.mcpd("target")
 
     # 100 rapid round-trips
@@ -608,7 +817,7 @@ async def section_stress(r: Reporter, fleet: Fleet) -> None:
 
 
 async def section_mcp_protocol(r: Reporter) -> None:
-    r.section("11. Host MCP protocol layer")
+    r.section("12. Host MCP protocol layer")
 
     # The CLI flags --list-tools / --list-resources need a loadable
     # config so the server can register its tool surface. Build a
@@ -677,15 +886,16 @@ async def amain(args: argparse.Namespace) -> int:
         await section_events(r, fleet)
         await section_applib(r, fleet)
         await section_edge(r, fleet)
+        await section_v2(r, fleet)
         if not args.skip_stress:
             await section_stress(r, fleet)
         else:
-            r.section("10. Stress (skipped)")
+            r.section("11. Stress (skipped)")
             r.skip("stress section", "--skip-stress")
         if not args.skip_mcp:
             await section_mcp_protocol(r)
         else:
-            r.section("11. Host MCP protocol layer (skipped)")
+            r.section("12. Host MCP protocol layer (skipped)")
             r.skip("mcp section", "--skip-mcp")
     finally:
         await fleet.close_all()

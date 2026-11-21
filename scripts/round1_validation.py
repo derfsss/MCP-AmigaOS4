@@ -1,4 +1,7 @@
-"""Validate round-1 §7-gap additions on the live X5000:
+"""Validate the round-1 additions on the live X5000.
+
+Target: $MCPD_ENDPOINT (default 127.0.0.1:4322, a QEMU guest's
+forwarded port); scripts/validate.py sets it. Checks:
 
   sys.uptime / sys.memory / sys.volumes / sys.assigns
   wb.publicscreens / wb.frontmost
@@ -90,7 +93,7 @@ async def amain() -> int:
 
     print("[v] sys.volumes")
     try:
-        vols = await sys_tool.sys_volumes(fleet, target)
+        vols = (await sys_tool.sys_volumes(fleet, target)).volumes
         archive.log_call("sys.volumes", target, {},
                          result=[v.model_dump() for v in vols])
         print(f"    {len(vols)} volume(s)")
@@ -105,7 +108,7 @@ async def amain() -> int:
 
     print("[v] sys.assigns")
     try:
-        assigns = await sys_tool.sys_assigns(fleet, target)
+        assigns = (await sys_tool.sys_assigns(fleet, target)).assigns
         archive.log_call("sys.assigns", target, {},
                          result=[a.model_dump() for a in assigns])
         print(f"    {len(assigns)} assign(s)")
@@ -120,7 +123,7 @@ async def amain() -> int:
 
     print("[v] wb.publicscreens")
     try:
-        ps = await wb_tool.wb_publicscreens(fleet, target)
+        ps = (await wb_tool.wb_publicscreens(fleet, target)).public_screens
         archive.log_call("wb.publicscreens", target, {},
                          result=[p.model_dump() for p in ps])
         print(f"    {len(ps)} public screen(s)")
