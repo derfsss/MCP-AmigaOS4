@@ -20,7 +20,7 @@
  * their own bsdsocket interface and stash it in tc_UserData via a
  * conn_ctx struct - bsdsocket maintains task-local state, so the
  * parent's interface pointer can't be reused from a child task.
- * mcpd_isocket() returns the per-task interface when set, else this
+ * _isk() returns the per-task interface when set, else this
  * global (which the parent's accept loop uses for the listen
  * socket). */
 extern struct SocketIFace *ISocket;
@@ -37,15 +37,15 @@ static struct SocketIFace *_isk(void) {
 }
 
 /* The frame body can be up to MCPD_FRAME_MAX_PAYLOAD (32 MiB). Routing
- * that allocation through clib4's malloc fragments the C heap under
+ * that allocation through newlib's malloc fragments the C heap under
  * repeated multi-MiB churn (chunked-upload tests reproduce this on the
  * 3rd consecutive 4-10 MiB chunk). IExec->AllocVecTags hits the OS
  * allocator instead - much better at handling large blocks and
  * doesn't share heap state with the small-allocation traffic that
- * clib4 does well. */
+ * newlib does well. */
 
 /* bsdsocket.library's errno numbers are 4.4BSD's (netinclude
- * sys/errno.h), not clib4's: EAGAIN / EWOULDBLOCK is 35. */
+ * sys/errno.h), not newlib's: EAGAIN / EWOULDBLOCK is 35. */
 #define BSD_EAGAIN 35
 
 /* Wait until `sock` can be read (for_write 0) or written (1), for at

@@ -1,8 +1,9 @@
 /* rpc.c - cJSON-backed JSON-RPC 2.0 dispatch.
  *
- * Replaces the phase-0 hand-rolled scanner. Each method module in
- * methods/ exports its method_entry array via the static
- * mcpd_methods table at the bottom of this file.
+ * Each method module in methods/ exports its handler functions
+ * (prototypes in methods/methods.h); the mcpd_methods table at the
+ * bottom of this file maps method names to them, and its description
+ * strings are what proto.capabilities returns.
  */
 
 #include "rpc.h"
@@ -137,7 +138,7 @@ const method_entry mcpd_methods[] = {
     { "sys.crashhook_status", sys_crashhook_status, "IDebug crash-hook diagnostics: registered, fire_count, exception_count" },
     { "sys.ports",          sys_ports,          "List public message ports" },
     { "sys.lastalert",      sys_lastalert,      "ExecBase->LastAlert (most recent system alert code)" },
-    { "sys.uptime",         sys_uptime,         "Monotonic uptime via IExec->ReadEClock" },
+    { "sys.uptime",         sys_uptime,         "Monotonic uptime via timer.device ITimer->ReadEClock" },
     { "sys.memory",         sys_memory,         "Free / largest / total memory across MEMF_ANY / SHARED / VIRTUAL" },
     { "sys.volumes",        sys_volumes,        "Mounted volumes from DOS list (LDF_VOLUMES)" },
     { "sys.assigns",        sys_assigns,        "Active AmigaDOS assigns (LDF_ASSIGNS)" },
@@ -147,20 +148,20 @@ const method_entry mcpd_methods[] = {
       "Live CPU perf counters via performancemonitor.resource" },
     { "sys.executable.symbols", sys_executable_symbols,
       "Read ELF symbol table from a binary on the target via elf.library" },
-    { "sys.applications",   sys_applications,   "Registered applications via application.library GetApplicationList" },
+    { "sys.applications",   sys_applications,   "Registered applications via application.library GetApplicationList: appID, name, url_identifier, filename, description, hidden, allows_blanker (MCPd's own is false during file transfers and for 30 s after)" },
     { "sys.alert_decode",   sys_alert_decode,   "Decode an arbitrary alert code (subsystem/general/specific)" },
-    { "sys.cold_reboot",    sys_cold_reboot,    "Software cold reboot via IExec->ColdReboot (requires confirm:true; spawns delayed-reboot task so the RPC response flushes first)" },
+    { "sys.cold_reboot",    sys_cold_reboot,    "Software cold reboot via IExec->ColdReboot (requires confirm:true; delay_ms default 500, 100..5000; spawns delayed-reboot task so the RPC response flushes first). Filesystems are not flushed: call fs.sync first." },
     { "sys.read_ccsr",      sys_read_ccsr,      "Read 32-bit register(s) from Freescale QorIQ CCSR (CPU PA 0xFE000000+offset). Supervisor-mode read; serialised via Forbid/Permit. Used for SoC introspection (PCIe outbound windows, LAW registers, etc) for QEMU machine bring-up." },
     { "sys.tlb_dump",       sys_tlb_dump,       "Dump all 64 TLB1 entries (kernel-managed variable-size pages) via tlbre/MAS regs. Returns valid + TID + TS + TSIZE + EPN + RPN (36-bit) + WIMG + perms per entry. Used to verify VA->PA mappings (CCSR, PCI mem/IO windows) for QEMU machine bring-up. Read-only; safe at runtime." },
-    { "sys.read_pa",        sys_read_pa,        "DANGEROUS: supervisor-mode read at any 36-bit PA. params: pa (REQUIRED), count (default 1), width (1/2/4, default 4). Returns values, values_hex, bytes_b64. *** Wrong pa -> DSI in supervisor mode -> connection-handler TASK CRASHES *** (daemon main + other connections survive by design; reconnect to recover). The 'safe' regions (verified): CCSR aperture (0xFE000000..0xFF000000) and explicit-IPROT'd kernel DMA at 0x01000000..0x02470000. TLB1 entries 62/63 nominally cover 0..2GiB but kernel traps protect chunks of it (0x00000000, 0x00001000, 0x40000000 all DSI in tests). Run sys.tlb_dump first. Cap: count*width <= 4096." },
-    { "sys.mcu_cmd",        sys_mcu_cmd,        "X5000 Cyrus MCU serial supervisor protocol (TRM 8.1). params: cmd (e.g. 't', 'v', 'f', 's'), unit (default 1). Opens serial.device unit at 38400 8N1, sends '#cmd\\n', reads '$reply\\n' with 5s timeout. The canonical sensor path on X5000." },
-    { "app.notify",         app_notify,         "Post a Ringhio notification via application.library" },
-    { "fs.list",            fs_list,            "List a directory (returns name+type per entry)" },
+    { "sys.read_pa",        sys_read_pa,        "DANGEROUS: supervisor-mode read at any address, with no range check. pa is used as a 32-bit address (higher bits are dropped) and read through the kernel's current TLB mapping, so only identity-mapped regions read as physical. params: pa (REQUIRED, aligned to width), count (default 1), width (1/2/4, default 4). Returns values, values_hex, bytes_b64. *** Wrong pa -> DSI in supervisor mode -> connection-handler TASK CRASHES *** (daemon main + other connections survive by design; reconnect to recover). The 'safe' regions (verified): CCSR aperture (0xFE000000..0xFF000000) and explicit-IPROT'd kernel DMA at 0x01000000..0x02470000. TLB1 entries 62/63 nominally cover 0..2GiB but kernel traps protect chunks of it (0x00000000, 0x00001000, 0x40000000 all DSI in tests). Run sys.tlb_dump first. Cap: count*width <= 4096." },
+    { "sys.mcu_cmd",        sys_mcu_cmd,        "X5000 Cyrus MCU serial supervisor protocol (TRM 8.1). params: cmd (1..16 chars, e.g. 't', 'v', 'f', 's'), unit (0..7, default 1), confirm:true (REQUIRED for cmd 's', which powers the board off). Opens serial.device unit at 38400 8N1, sends '#cmd\\n', reads '$reply\\n' with 5s timeout. The canonical sensor path on X5000." },
+    { "app.notify",         app_notify,         "Post a Ringhio notification via application.library. params: title, text, priority (default 0; >8 flashes the screen, 10 stays until closed). Returns result_code, queued. Fails after 10 s if application.library does not answer" },
+    { "fs.list",            fs_list,            "List a directory (returns name+type per entry, size for files). params: path, recursive (default false), max_depth (1..16, default 8)" },
     { "fs.stat",            fs_stat,            "Stat one file or directory" },
-    { "fs.read",            fs_read,            "Read a file (returns base64 + size)" },
+    { "fs.read",            fs_read,            "Read a file or a slice of it. params: path, offset (default 0), length (default to the end). Returns path, size (bytes read), offset, total_size, content_b64. A slice is at most 25116672 bytes (its base64 answer must fit the 32 MiB frame); a larger one is refused. Use fs.stream_get for more." },
     { "fs.write",           fs_write,           "Write a file (base64 input; optional compression='zlib' + raw_size hint)" },
-    { "fs.write_chunk",     fs_write_chunk,     "Chunked / resumable write at offset (option B); supports compression='zlib'" },
-    { "fs.delete",          fs_delete,          "Delete a file or directory" },
+    { "fs.write_chunk",     fs_write_chunk,     "Chunked / resumable write at offset. params: path, offset (REQUIRED), content_b64, compression ('none' | 'zlib'), raw_size, truncate (default true at offset 0: replace the file; false patches it in place). Returns path, offset, written, total_so_far." },
+    { "fs.delete",          fs_delete,          "Delete a file or directory. recursive:true deletes a directory and everything in it (AmigaDOS Delete ALL)" },
     { "fs.makedir",         fs_makedir,         "Create a directory" },
     { "fs.rename",          fs_rename,          "Rename / move a file or directory" },
     { "fs.protect",         fs_protect,         "Set protection bits on a path" },
@@ -170,12 +171,12 @@ const method_entry mcpd_methods[] = {
     { "fs.stream_status",   fs_stream_status,   "The last raw stream on this connection: {dir (get|put), offset, bytes, complete, crc32}. crc32 is zlib's CRC-32 of the bytes moved; compare it with your own to check the stream end to end." },
     { "fs.sync",            fs_sync,            "Flush a filesystem's cached writes to disk and wait for it (ACTION_FLUSH). params: path (default \"SYS:\"). AmigaOS buffers writes and flushes on its own schedule, so a guest killed or a machine powered off shortly after a write can lose it; call this when the write has to be durable before something abrupt happens. Returns path + flushed." },
     { "fs.hash",            fs_hash,            "Streaming SHA-256 of a file (algo=sha256 only for now)" },
-    { "exec.cmd",           exec_cmd,           "Run an AmigaDOS command as a tracked job and wait up to timeout_ms for it. params: command, args[], cwd, timeout_ms, priority (default -2, capped below the daemon's workers), sandboxed (the command runs a program under SandboxVM; lets exec.kill force it), return_running (on timeout return {state:running, job_id} instead of an error), stream. Returns output, exit_code, result2, job_id, state, truncated." },
+    { "exec.cmd",           exec_cmd,           "Run an AmigaDOS command as a tracked job and wait up to timeout_ms for it. params: command, args[], cwd, timeout_ms (default 30000; timeout_s also accepted), priority (default -2, capped below the daemon's workers), sandboxed (the command runs a program under SandboxVM; lets exec.kill force it), return_running (on timeout return {state:running, job_id} instead of an error), stream (send new output as proc.stdout notifications while waiting). Returns output (the first 1 MiB at most; when truncated, exec.output reads the rest), output_bytes, truncated, exit_code, result2, job_id, state, streamed." },
     { "exec.status",        exec_status,        "State of a job started by exec.cmd: running/exited, exit_code, pid, priority, elapsed_ms, free memory before/after. params: job_id." },
     { "exec.output",        exec_output,        "Read a job's output, running or finished. params: job_id, offset, max_bytes (default 64 KiB). Returns output, bytes, total_bytes, eof." },
     { "exec.kill",          exec_kill,          "Send a running job a break signal and wait for it to exit. params: job_id, signal (c|d|e|f, default c), wait_ms (default 2000), force (sandboxed jobs only: sends SandboxVM its abort signal, CTRL-F). A program that ignores breaks keeps running; reported as exited=false." },
     { "exec.list",          exec_list,          "Every job record MCPd holds, newest first, plus the worker and job priority limits." },
-    { "wb.screens",         wb_screens,         "List public screens (LockIBase walk)" },
+    { "wb.screens",         wb_screens,         "List every open screen, front to back, with geometry and window count (LockIBase walk; public screens by name: wb.publicscreens)" },
     { "wb.windows",         wb_windows,         "List windows across all screens" },
     { "wb.publicscreens",   wb_publicscreens,   "Public screens registry (LockPubScreenList)" },
     { "wb.frontmost",       wb_frontmost,       "Frontmost screen + active screen + active window" },
@@ -193,7 +194,7 @@ const method_entry mcpd_methods[] = {
     { "input.drag",         input_drag,
       "DISABLED BY DEFAULT (see input.state). Press at from_x/from_y, move to to_x/to_y, release. params: from_x, from_y, to_x, to_y (all REQUIRED), button, steps (1..64), delay_ms, confirm:true (REQUIRED). The button is always released, even if the call aborts on a budget overrun." },
     { "input.scroll",       input_scroll,
-      "DISABLED BY DEFAULT (see input.state). Mouse wheel via NewMouse codes. params: clicks (1..32), direction (\"up\"|\"down\"|\"left\"|\"right\"), delay_ms. No confirm -- scrolling commits nothing." },
+      "DISABLED BY DEFAULT (see input.state). Mouse wheel. params: clicks (1..32), direction (\"up\"|\"down\"|\"left\"|\"right\", default \"down\"), style (\"native\" default: IECLASS_MOUSEWHEEL events | \"newmouse\": legacy NewMouse rawmouse codes), delay_ms. No confirm -- scrolling commits nothing." },
     { "debug.task_snapshot", debug_task_snapshot,
       "Snapshot a named task: registers + backtrace via IDebug->ReadTaskContext" },
     { "debug.symbol",       debug_symbol,
@@ -205,9 +206,9 @@ const method_entry mcpd_methods[] = {
     { "debug.write_register", debug_write_register,
       "Modify one register in a task's saved ExceptionContext (requires confirm: true)" },
     { "events.wait",        events_wait,
-      "Long-poll for events on subscribed topics; returns first deltas or [] on timeout" },
+      "Long-poll for events. params: topics (any of sys.lastalert, sys.task, debug.exception; default all), timeout_ms (default 5000, max 60000). Returns {events, elapsed_ms}: the first changes seen, or events:[] on timeout. debug.exception covers dead-end alerts (data.source lastalert) and crashes the IDebug hook catches (crash_hook). Independent of events.subscribe" },
     { "events.subscribe",   events_subscribe,
-      "Server-push: register topics; daemon emits JSON-RPC notifications on change" },
+      "Server-push: set this connection's topics (sys.lastalert, debug.exception; sys.task is events.wait only); daemon emits events.notify JSON-RPC notifications on change; debug.exception includes every crash the IDebug hook catches after this connection opened (data.source crash_hook, with registers). Replaces any earlier list" },
     { "events.unsubscribe", events_unsubscribe,
       "Server-push: clear subscription; stop receiving notifications" },
     { "events.test_emit",   events_test_emit,

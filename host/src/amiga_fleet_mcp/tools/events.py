@@ -9,9 +9,12 @@ Topics:
 - `sys.task`         - task added or removed (by name).
 - `debug.exception`  - new dead-end / crash alert (decoded).
 
-A proper server-push notification channel - with TC_TrapCode-driven
-debug.exception events delivered without polling - is a follow-up;
-that needs MCPd's connection handler to grow async write paths first.
+MCPd also has a server-push mode (`events.subscribe` /
+`events.unsubscribe`, sys.lastalert and debug.exception only): the
+daemon sends JSON-RPC notifications on that connection's idle-poll
+path. McpdTransport passes such frames to `subscribe_notifications()`
+handlers, but no MCP tool exposes the subscription; this module is
+long-poll only.
 """
 
 from __future__ import annotations

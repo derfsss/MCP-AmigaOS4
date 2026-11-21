@@ -478,15 +478,17 @@ async def installer_mount_iso(
     """Mount an ISO file as a virtual CD on the target.
 
     Standard mount sequence:
+      0. `C:MountDiskImage U=<unit> EJECT` — start from an empty unit
       1. `C:MountDiskImage U=<unit> INSERT="<iso_path>"` — inserts media
       2. (best-effort) Mount the DOS device if not already live
       3. Poll for the expected volume to appear (up to timeout_s)
       4. Settle pause (lets CDFS finish initialising)
 
     The diskimage.device + MountDiskImage + CDFileSystem must already
-    be present on the target (staged via the bootstrap-files step).
-    Per-machine sequences are responsible for staging those before
-    calling this primitive. Reversible via unmount_iso.
+    be present on the running system. AmigaOS 4.1 ships them; nothing
+    stages them from the host, and the install sequences'
+    stage_diskimage_tools step checks they are there (and writes the
+    COMBI: mountfile). Reversible via unmount_iso.
     """
     import time
     t0 = time.monotonic()

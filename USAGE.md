@@ -20,6 +20,13 @@ Most users interact with the system through their MCP client. The
 host server is invoked as a stdio command by the client and the user
 never types its commands directly except for diagnostic purposes.
 
+MCPd gives every accepted connection its own worker Process (up to 16
+at once), so a request that crashes its handler costs that connection
+only; the listener and the other connections carry on. Sockets are
+non-blocking: a connection that stops making progress in the middle
+of a request or a reply for 120 s is dropped, so a stalled peer cannot
+hold a worker for good. An idle connection between requests is kept.
+
 ## Configuring the fleet
 
 Copy `host/config.example.toml` to a permanent location (for example
@@ -81,7 +88,9 @@ Run it directly for diagnostics:
 amiga-fleet-mcp --config /path/to/config.toml
 amiga-fleet-mcp --list-tools
 amiga-fleet-mcp --list-resources
+amiga-fleet-mcp --list-prompts
 amiga-fleet-mcp --health-check
+amiga-fleet-mcp --doctor
 ```
 
 ## Per-tool defaults
@@ -186,19 +195,54 @@ breakdown.
 | `proto.*` | Capability and version reporting. |
 | `fs.*` | Filesystem operations: list (recursive optional), stat, read (offset / length), write, delete (recursive optional), makedir, rename, protect, copy, hash (SHA-256), sync (flush cached writes to disk). Plus `upload` / `download` whole-file wrappers that hide chunking + base64 + zlib for any-size, any-byte transfers in either direction (optional resume + sha256 verify). |
 | `exec.*` | Run AmigaDOS commands as tracked jobs: `cmd` (optional `args[]`, `cwd`, timeout, priority, sandbox), then `status`, `output`, `kill` and `list` for a job that is still running. See [Running commands](#running-commands-exec). |
-| `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, loaded modules, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
+| `sys.*` | System introspection: version, uptime, memory, volumes, assigns, tasks, libraries, devices, ports, last alert (decoded), hardware (CPU + AttnFlags + resource probes), I²C bus enumeration, performance counters, ELF symbol query, application registry, alert decoder, kernel debug ring, software cold reboot. On Freescale QorIQ boards, also CCSR register reads, TLB1 dump, physical-address reads, and the X5000 Cyrus MCU supervisor protocol. |
 | `wb.*` | Workbench: screens, windows, public-screen registry, frontmost screen and window, plus `wb.screenshot` — capture a screen to PNG on the target and bring it back to the host. Works on real hardware as well as QEMU. |
 | `debug.*` | Per-task and whole-system debug: task snapshot, symbolicated stack trace, address-to-symbol resolution, register and memory read / write, breakpoints, single step, continue, detach. |
 | `qemu.*` | QEMU lifecycle: start, stop, reset, status, screenshot, serial-log resource, snapshots (savevm / loadvm / list / delete). |
-| `fleet.*` | Multi-target operations: list targets, target status, run-on-all, barrier, quorum run, relay (cross-target file copy), discover. |
+| `fleet.*` | Multi-target operations: list targets, target status, fleet snapshot (one-call health summary), run-on-all, barrier, quorum run, relay (cross-target file copy), discover. |
 | `tests.*` | Wraps the AmigaQemuTests harness as MCP methods. |
-| `events.*` | Event channel: long-poll wait, server-push subscribe / unsubscribe, test emission. |
+| `events.*` | Event channel: `events.wait` long-poll. The daemon also has server-push `events.subscribe` / `events.unsubscribe` / `events.test_emit`, reached through the transport rather than as MCP tools (see [Server-pushed events](#server-pushed-events)). |
 | `app.notify`, `notify.fleet`, `notify.on_alert` | Ringhio popup notifications: per-target, broadcast, and event-driven. |
 | `installer.*` | Native AmigaOS 4.1 FE installer pipeline: list machines, scan host sources, preflight, mount / unmount ISO, recursive copy, LHA extraction, Kicklayout read / write / patch, staged upload, per-machine install (`installer.run` / `installer.install_x5000`), and post-install verification. |
 | `serial.*` | Host-side serial-capture lifecycle: start, stop, status, read, tail, clear. Captures a target's debug UART (e.g. X5000 rear-panel DB9) into a host-side log so kernel-debug output during boot or crash recovery can be read without a terminal program tying up the cable. |
 | `power.*` | Host-side X5000 / A1222 MCU debug-shell driver over the FTDI USB-TTL header (X5000 P18, A1222 P15). `power.on` boots a powered-off box; `power.off` shuts it down; `power.toggle_stream(watch_s)` captures continuous sensor blocks; plus `help`, `identify`, `identify_dates`, `sensors`, `shell`. The only software power-on path on real X5000 — bypasses MCPd entirely so it works when AOS is off or wedged. |
 | `input.*` | Keyboard and mouse injection: pointer state, type, key chords, move, click, drag, scroll. **Disabled by default at the daemon** — see [Driving the target's UI](#driving-the-targets-ui-input). |
 | `sandbox.*` | Run programs and drivers inside SandboxVM so a guest crash doesn't take the machine down: probe, deploy, run one guest, run a resident driver, run a batch, read the last trap. See [Driver / program iteration](#driver--program-iteration-via-sandboxvm-sandbox). |
+
+Every tool exists in two forms: a fine-grained tool per method
+(`fs_list`, `sys_version`, ...) and one dispatcher per namespace
+(`fs`, `sys`, `exec`, `wb`, `input`, `debug`, `events`, `qemu`,
+`fleet`, `tests`, `app`, `installer`, `serial`, `power`, `sandbox`)
+that takes the method name and a `params` object. These two calls do
+the same thing:
+
+```python
+fs_list(target="x5000-real", path="SYS:C")
+fs(method="list", params={"target": "x5000-real", "path": "SYS:C"})
+```
+
+The dispatchers keep the tool list short for clients that load every
+tool description up front. [COMMANDS.md](COMMANDS.md) has the full
+list of tools, parameters and dispatcher method names.
+
+## Ready-made workflows (prompts)
+
+The server also offers eight MCP prompts: step-by-step workflows that
+the AI follows using the tools above. In Claude Code they appear as
+slash commands, e.g. `/mcp__amiga-fleet__getting_started`; other
+clients list them in their prompt picker. `amiga-fleet-mcp
+--list-prompts` prints them with their arguments.
+
+| Prompt | Arguments | What it does |
+|---|---|---|
+| `getting_started` | `target?` | A read-only tour of one Amiga: version, volumes, memory, tasks and a screenshot. |
+| `investigate_crash` | `target?`, `what_happened?` | Collects alert, debug-ring, crash-hook and screen evidence after a crash or hang, then explains the likely cause. |
+| `deploy_and_run` | `local_path`, `target?`, `remote_dir?`, `args?` | Uploads a program, fixes its protection bits and runs it, sandboxed when SandboxVM is there. |
+| `check_fleet` | `tags?` | Probes every target and summarises which are up, their memory, and any recent alerts. |
+| `safe_reboot` | `target?` | Cold-boots a target without losing writes: checks jobs, flushes, starts a fresh serial log, power-cycles or restarts QEMU, waits for MCPd. |
+| `deploy_library` | `local_path`, `remote_path`, `target?` | Backs up and replaces a library, device or driver, cold-boots, and confirms the new version is the one loaded. |
+| `run_test_batch` | `local_script`, `target?`, `remote_dir?`, `results?` | Uploads an AmigaDOS script, runs it as a tracked job, follows it without re-running it, and collects the results. |
+| `ab_test_fix` | `repro`, `local_path`, `remote_path`, `target?` | Runs a reproduction, deploys the fix with a cold boot, runs it again, and compares the two. |
 
 ## MCP resources
 
@@ -228,6 +272,8 @@ fleet.run_on_all(method="sys.version", tags=["qemu"])
 fail individually rather than blocking the whole fan-out.
 `fleet.relay` copies a file between two targets via the host.
 `fleet.quorum_run` requires at least *N* of *M* targets to succeed.
+`fleet.snapshot` gives a one-call health summary of every target, and
+`fleet.target_status` probes one.
 
 ## Server-pushed events
 
@@ -241,8 +287,37 @@ notifications from request responses transparently. Register a
 callback with `subscribe_notifications(handler)` on the transport, or
 poll the queue with `get_notification(timeout_s)`.
 
+`events.subscribe` accepts the topics `sys.lastalert` and
+`debug.exception`. It is a daemon method, not an MCP tool. A
+`debug.exception` event says where it came from in `data.source`:
+`"crash_hook"` for a crash the IDebug hook caught (task name and
+registers; every task exception, even one whose alert code matches an
+earlier one) or `"lastalert"` for a new dead-end alert. One crash can
+produce both. `events.wait` reports both kinds too (MCPd 2.5).
+
 `events.wait` is the long-poll alternative for clients that prefer not
-to maintain a persistent connection.
+to maintain a persistent connection, and the one exposed as an MCP
+tool. The daemon snapshots state, polls every 200 ms, and returns the
+first changes it sees, or an empty list when `timeout_ms` runs out
+(the daemon caps it at 60 s; call again to keep waiting):
+
+```python
+events_wait(target="x5000-real",
+            topics=["sys.lastalert", "debug.exception"],  # or "sys.task"; default all
+            timeout_ms=30000)
+```
+
+## Notifications (`app.notify`, `notify.*`)
+
+Pop up a Ringhio notification on the Amiga's screen, on one target or
+all of them, or wait for a crash and announce it:
+
+```python
+app_notify(target="x5000-real", title="Build", text="Upload finished")
+notify_fleet(title="Fleet", text="Tests starting", tags=["real"])
+notify_on_alert(target="x5000-real", timeout_ms=60000)
+# waits on events.wait for a debug.exception, then posts a popup
+```
 
 ## QEMU lifecycle
 
@@ -250,6 +325,29 @@ to maintain a persistent connection.
 serial output to the archive. `qemu.savevm` and `qemu.loadvm`
 checkpoint and restore guest state. `qemu.screenshot` returns a PNG
 image of the framebuffer.
+
+```python
+qemu_start(target="qemu-pegasos2")          # returns the PID
+qemu_status(target="qemu-pegasos2")         # process / QMP reachability
+qemu_savevm(target="qemu-pegasos2", name="clean-boot")
+qemu_loadvm(target="qemu-pegasos2", name="clean-boot")
+qemu_screenshot(target="qemu-pegasos2", save_path="peg2.png")
+qemu_stop(target="qemu-pegasos2")           # fs.sync first, then QMP quit
+```
+
+`qemu.reset` stops the QEMU process and starts a fresh one, which is
+the safe way to restart a guest.
+
+## Files (`fs.*`)
+
+```python
+fs_list(target="x5000-real", path="Work:", recursive=True, max_depth=2)
+fs_stat(target="x5000-real", path="S:Startup-Sequence")
+fs_copy(target="x5000-real", src="S:Startup-Sequence", dst="RAM:ss.bak")
+fs_protect(target="x5000-real", path="RAM:my_test", bits=0)  # raw mask; 0 = rwed allowed
+fs_hash(target="x5000-real", path="RAM:my_test")      # SHA-256
+fs_delete(target="x5000-real", path="RAM:old", recursive=True)
+```
 
 ## Whole-file transfers (`fs.upload` / `fs.download`)
 
@@ -276,7 +374,23 @@ await fs.download(
 )
 ```
 
-What happens transparently:
+`transfer` picks how the bytes travel:
+
+- **`"auto"` (default)** — on MCPd 2.3 and later, uploads of 1 MiB or
+  more and downloads of any size go as a **raw byte stream**
+  (`fs.stream_put` / `fs.stream_get`): no base64, no round trip per
+  chunk, 64-bit offsets. If the connection breaks mid-stream, the
+  wrapper reconnects and continues from the bytes already moved. At
+  the end it compares a CRC-32 of the bytes with the daemon's
+  (`fs.stream_status`); the result reports `crc32_verified: true`
+  when one stream carried the whole file and the two matched.
+  Smaller uploads, and every transfer to an older daemon, use the
+  chunked path below.
+- **`"stream"`** — always stream; refused with `NotCapable` on a
+  daemon older than 2.3.
+- **`"chunked"`** — never stream.
+
+The result's `transfer` field says which path ran. The chunked path:
 
 - **Auto-chunking** — files larger than `chunk_size` (24 MiB raw
   by default) split into multiple `fs.write_chunk` calls (or
@@ -291,10 +405,22 @@ What happens transparently:
   the result is at least 5% smaller, each chunk ships
   pre-compressed. Skips already-compressed payloads (.lha /
   .zip / .iso).
+
+`chunk_size` and `compression` apply to the chunked path only. On
+either path:
+
 - **Optional resume** — `resume=True` probes the remote /
   local file size and continues from the partial state.
 - **Optional verify** — `verify=True` adds an `fs.hash`
   round-trip + a local hashlib walk and raises on mismatch.
+
+While any transfer method runs (`fs.read`, `fs.write`,
+`fs.write_chunk`, `fs.stream_get`, `fs.stream_put`), MCPd keeps the
+screen blanker from starting, and allows it again 30 s after the last
+transfer ends. A blanker starting mid-transfer could slow an upload
+to a stall. The user's blanker settings are not changed. On MCPd 2.5
+`sys_applications` shows it: MCPd's entry has `allows_blanker: false`
+while the hold is on.
 
 For library callers, the same surface is reachable via
 `amiga_fleet_mcp.tools.fs.fs_upload` / `fs_download`.
@@ -307,8 +433,25 @@ DSISR, and a frame-chain backtrace. `debug.stacktrace` adds
 symbolication via `IDebug->StackTrace`. `debug.symbol` resolves an
 arbitrary address to module / function / source.
 
+```python
+debug_task_snapshot(target="x5000-real", name="Workbench")
+debug_stacktrace(target="x5000-real", name="MyProgram", max_frames=32)
+debug_symbol(target="x5000-real", address=0x7F3A1C40)
+```
+
 For QEMU targets, the `gdb` channel exposes whole-system register and
-memory access through QEMU's GDB stub.
+memory access through QEMU's GDB stub. Add a
+`[targets.<name>.channels.gdb]` block (endpoint default
+`127.0.0.1:1234`) and `qemu.start` adds `-gdb tcp::<port>` to the
+QEMU command line:
+
+```python
+debug_read_registers(target="qemu-pegasos2")
+debug_set_breakpoint(target="qemu-pegasos2", addr=0x01234560)
+debug_continue(target="qemu-pegasos2", timeout_s=10)
+debug_backtrace(target="qemu-pegasos2")
+debug_detach(target="qemu-pegasos2")            # let the guest run on
+```
 
 ## Running commands (`exec.*`)
 
@@ -411,6 +554,27 @@ so when it returns the data is down. `qemu.stop` calls it for you
 whenever the guest's MCPd answers; reach for it directly
 before anything else abrupt, such as `sys.cold_reboot` or cutting
 power with `power.off`.
+
+## System information (`sys.*`)
+
+Read-only questions about a running machine are one call each:
+
+```python
+sys_version(target="x5000-real")      # Kickstart / Workbench versions
+sys_memory(target="x5000-real")       # free / largest / total
+sys_volumes(target="x5000-real")      # mounted volumes
+sys_tasks(target="x5000-real")        # ready + waiting tasks
+sys_hardware(target="x5000-real")     # CPU, caches, board probes
+sys_lastalert(target="x5000-real")    # last alert, decoded
+sys_alert_decode(code=0x8000000B)     # decode any alert code
+sys_debug_ring(target="x5000-real", since_s=60)   # kernel debug ring
+```
+
+On real X5000 / A1222 boards there are also SoC and MCU readers:
+`sys.mcu_cmd` (X5000 Cyrus MCU, e.g. `cmd="t"` for temperatures),
+`sys.read_ccsr`, `sys.tlb_dump` and the dangerous `sys.read_pa`.
+`sys.cold_reboot(confirm=true)` reboots the target. Flush first with
+`fs.sync`. [COMMANDS.md](COMMANDS.md) lists every `sys.*` tool.
 
 ## Seeing the screen (`wb.screenshot`)
 
@@ -527,6 +691,13 @@ returns `truncated: true`. The daemon always releases held modifiers
 and mouse buttons before returning, including on the abort path, so a
 truncated `input.drag` cannot leave the machine with a stuck button.
 
+The host refuses earlier than that by default: `input.type` takes at
+most 128 characters (`[targets.<n>.input] max_text_len`; typing costs
+about two events per character, so the 256-event cap binds before the
+daemon's 512), and a call that needs more than `max_events` (256)
+events is refused before anything is sent. Text must be Latin-1;
+other characters are refused by name.
+
 `[targets.<n>.input] allow_drag = false` disables `input.drag` alone
 while leaving the rest of the surface available.
 
@@ -572,6 +743,12 @@ require `confirm: true` on every call — same accidental-fire guard
 as `sys.cold_reboot`. If the cable is captured by `serial.*`, the
 power tools return `NotCapable` until the capture stops; the two
 surfaces share the underlying serial-port file handle.
+
+While a board is powered off, only `power.on` and `power.off` are
+safe: any other MCU command can wedge a cold MCU until mains power is
+cut. So `power.help`, `identify`, `identify_dates`, `sensors`,
+`toggle_stream` and `shell` refuse when the target's MCPd does not
+answer. Pass `force=True` only when you know the board is on.
 
 A typical recovery flow when the X5000 is wedged on the network:
 
@@ -724,6 +901,71 @@ by target name.
   [Sandboxed commands](#sandboxed-commands).
 - `tests.run_suite` is the right tool for JSON-config-driven
   multi-step test bundles **without** the SandboxVM harness.
+
+## Serial capture (`serial.*`)
+
+`serial.*` records a target's debug UART into a host-side log in the
+background, so boot and crash output is kept even when the machine
+(or MCPd) is down. Configure the port once per target; the default
+channel `uboot` is the X5000's rear-panel DB9 (U-Boot console and
+kernel debug), and `mcu` is the internal MCU header:
+
+```toml
+[targets.x5000-real.channels.uboot]
+port = "COM7"            # or /dev/ttyUSB0
+baud = 115200
+```
+
+```python
+serial_start(target="x5000-real", truncate=True)   # fresh log
+# ... reboot, reproduce the crash ...
+serial_tail(target="x5000-real", max_bytes=8192)   # last 8 KiB
+serial_read(target="x5000-real", offset=0)         # page through it
+serial_stop(target="x5000-real")
+```
+
+Start the capture before a risky reboot: the kernel debug output it
+records does not depend on the debug ring, which can be full (see
+[Reading on-target debug output](#reading-on-target-debug-output)).
+The `mcu` channel shares its cable with `power.*`, which returns
+`NotCapable` while a capture holds it.
+
+## Installing AmigaOS 4.1 FE (`installer.*`)
+
+`installer.*` installs AmigaOS 4.1 Final Edition onto a blank volume
+of a running target, from install ISOs and update LHAs in a host
+directory. Set the usual values once in [`[defaults]`](#per-tool-defaults),
+then check, stage, run and verify:
+
+```python
+installer_list_machines()                # supported machines
+installer_scan_sources()                 # what sources_dir holds
+installer_preflight(target="x5000-real") # safety check, read-only
+installer_stage(target="x5000-real", confirm=True)   # upload to <dest>:tmp/
+installer_run(target="x5000-real")                    # dry run: the plan only
+installer_run(target="x5000-real", dry_run=False, confirm=True)
+installer_verify(target="x5000-real")    # check the installed files
+```
+
+`installer.run` supports X5000, A1222, AmigaOne, Pegasos II and
+Sam460. The building blocks (`mount_iso`, `copy_tree`, `apply_lha`,
+`read_kicklayout` / `write_kicklayout` / `patch_kicklayout`) are
+tools of their own; mutating ones need `confirm=True`.
+
+## Test suites (`tests.*`)
+
+`tests.*` runs suites from an AmigaQemuTests checkout, set as
+`[paths] amiga_qemu_tests` (see [Helper paths](#helper-paths-paths)):
+
+```python
+tests_list_suites()                                   # config/projects/*.json
+tests_run_suite(target="qemu-pegasos2", suite="<suite>")
+tests_run_standard_dos_tests(target="qemu-pegasos2")  # the dos_basic suite
+tests_parse_output(output_b64="...")                  # [PASS]/[FAIL] lines
+```
+
+Suite commands run as tracked jobs at `[defaults] exec_priority`
+(or `priority=`).
 
 ## Validation
 

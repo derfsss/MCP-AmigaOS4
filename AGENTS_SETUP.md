@@ -34,9 +34,7 @@ amiga-fleet-mcp --version    # → "amiga-fleet-mcp <version>"
 
 If `pip install -e .` fails, capture the full error and stop.
 Common causes: no internet, corporate proxy, `git` not on PATH
-(the `qemu-runner` dependency is fetched from GitHub with it), missing C toolchain
-for `pyserial` (rare on Windows; install Build Tools for Visual
-Studio if so).
+(the `qemu-runner` dependency is fetched from GitHub with it).
 
 ## Config generation: pick exactly one path
 
@@ -184,10 +182,12 @@ stopped QEMU guest shows as `WARN`, not `FAIL`.
 claude mcp add amiga-fleet -- amiga-fleet-mcp --config <absolute-path-to-config.toml>
 ```
 
-Verify with `claude mcp list` then issue a tool call from
-within Claude Code: `proto.capabilities` (no target arg if
-`default_target` is set, otherwise pass `target=<name>`). A
-successful response with `methods: [...]` confirms end-to-end
+Verify with `claude mcp list` then issue two tool calls from
+within Claude Code. `proto_capabilities` (no arguments) answers from
+the host alone; a response with `methods: [...]` confirms the client
+reaches the server. `sys_version` (no target arg if `default_target`
+is set, otherwise pass `target=<name>`) goes through to MCPd; a
+response with the Kickstart / Workbench versions confirms end-to-end
 wiring.
 
 ## Common errors and what they mean
@@ -199,7 +199,7 @@ wiring.
 | `target.qemu_config is required for qemu.start`   | Target's `qemu_config` path missing from `[targets.<name>]`. Set it. |
 | `no enabled MCU serial channel`                   | `power.*` invoked but `[targets.<name>.channels.mcu]` not configured. Wire the FTDI cable, set the block. |
 | `NotCapable: input injection is not enabled`      | `input.*` invoked without both gates open. Host side: `[targets.<name>.input] enabled = true`. Daemon side (the real control): run `MCPd-Enable-Input` on the target and restart MCPd. Do not open either without the user asking. |
-| `FileNotFoundError: config not found`             | `--config` points at a path that doesn't exist, or no config at the platform default. Run `--init`. |
+| `config not found: <path>`                        | `--config` points at a path that doesn't exist, or no config at the platform default. Run `--init`. |
 | `bad config: ...`                                 | TOML doesn't validate against the schema. Re-run `--init`; the wizard pre-validates. |
 | `exec_cmd` result `state: "running"`              | Not an error: the command outlived `timeout_s` and is still running as job `job_id`. Never re-run it; follow it with `exec_status` / `exec_output`, or stop it with `exec_kill`. |
 | `exec.kill force=True needs a SandboxVM that aborts a guest` | The target's SandboxVM is older than 1.1. Ask the user before deploying a newer one; `force=False` still sends a break. |

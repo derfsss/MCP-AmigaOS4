@@ -1,8 +1,9 @@
 """GDB Remote Serial Protocol client.
 
 Talks to QEMU's `-gdb tcp::PORT` stub for whole-system debugging.
-Used to read memory + CPU registers; can be extended with
-breakpoint / step support.
+Used to read memory + CPU registers, set / clear breakpoints
+(`Z0`/`Z1`, `z0`/`z1`), single-step (`s`), continue (`c`, with a
+Ctrl-C interrupt on timeout) and detach (`D`).
 
 Wire format (subset we implement):
 

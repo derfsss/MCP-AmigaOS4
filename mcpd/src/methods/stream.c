@@ -1,7 +1,7 @@
 /* fs.stream_get / fs.stream_put - raw bulk transfer on the connection.
  *
  * fs.read / fs.write_chunk carry a file in base64 inside JSON frames,
- * one round trip per chunk (at most 24-32 MiB each). For files of
+ * one round trip per chunk (just under 24 MiB each). For files of
  * hundreds of GiB that costs a third more bytes on the wire, an
  * encode and a decode pass, and an idle round trip per chunk. These
  * two methods answer with an ordinary JSON-RPC response and then move

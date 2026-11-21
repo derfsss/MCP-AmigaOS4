@@ -8,9 +8,9 @@
 CC      ?= ppc-amigaos-gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 \
            -I../third-party/cjson
-# zlib comes from z.library at runtime (option 2 in the size-cap
-# planning report), opened in main.c. Static -lz is gone - smaller
-# binary + zlib's internal allocator no longer goes through clib4.
+# zlib comes from z.library at runtime, opened in main.c. Static -lz
+# is gone - smaller binary + zlib's internal allocator no longer goes
+# through newlib.
 LDFLAGS ?= -lauto
 
 # Build date stamped into the $VER cookie (DD.MM.YYYY, Amiga Version format).
@@ -79,8 +79,9 @@ SRCS = \
   ../third-party/cjson/cJSON.c
 
 # Every source is compiled in one command, so the binary depends on the
-# headers directly. Without this, changing rpc.h (the version string,
-# the method table) left a stale MCPd until `make clean`.
+# headers directly (and on ../VERSION). Without this, changing a header
+# (rpc.h's limits, methods.h's prototypes) left a stale MCPd until
+# `make clean`.
 HDRS = $(wildcard $(SRC_DIR)/*.h $(METHODS_DIR)/*.h) ../third-party/cjson/cJSON.h
 
 # Docker Desktop image used for cross-compilation.

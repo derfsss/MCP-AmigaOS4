@@ -77,7 +77,8 @@ Kyvos doesn't offer.
 
    ```
    LhA x MCPd-<version>.lha
-   Execute MCPd/MCPd-Install
+   CD MCPd
+   Execute MCPd-Install
    ```
 
    This installs MCPd and starts it at every boot. Other ways to get
@@ -146,7 +147,7 @@ A ready-to-edit template is in
 Kyvos users can skip this section.
 
 1. Copy `host/qemu-config.example.json` into the folder that holds the
-   machine's disk image, for example `E:/QEMU/Machines/peg2/config.json`.
+   machine's disk image, for example `C:/QEMU/peg2/config.json`.
 2. Replace every `<MACHINE_DIR>` with that folder's absolute path.
    Forward slashes work on Windows too and need no escaping.
 3. Make sure the files it names exist: `bboot`, `kickstart.zip` and
@@ -205,7 +206,7 @@ The server builds `qemu-system-ppc <values of args...>`:
 
 | Key | What happens |
 |---|---|
-| `network` | The server appends its port forwards to this value (see below). It must contain a `-netdev user,...` option, and that option must be the **last** thing in the value, because the forwards are added to the end of the string. Without a `network` key nothing is forwarded and the server can't reach MCPd. |
+| `network` | The server adds its port forwards to this value (see below). It must contain a user-mode network option (`-netdev user,...` or `-nic user,...`); the forwards go on the **first** one, wherever it sits in the value. Other netdevs (`tap`, `socket`, ...) are left alone. Without a `network` key, or with no user-mode netdev in it, nothing is forwarded and the server can't reach MCPd. |
 | `display` | Replaced by `-display none` when the target has `headless = true` in `config.toml`. Keep the display option in this key so headless mode can find it. |
 | `pidfile` | Always dropped. Kyvos uses it to track its own processes; the server tracks the process itself. |
 
@@ -216,8 +217,8 @@ These come from the target's channels in `config.toml`, so leave them
 
 | Added | From | Notes |
 |---|---|---|
-| `hostfwd=tcp::<port>-:4322` on the `-netdev user` | `channels.mcpd.endpoint` | MCPd always listens on 4322 inside the guest. |
-| `hostfwd=udp::<port>-:4323` on the `-netdev user` | `channels.mcpd.discovery_port`, or the mcpd port if unset | LAN discovery for `fleet.discover`. |
+| `hostfwd=tcp::<port>-:4322` on the first user-mode netdev | `channels.mcpd.endpoint` | MCPd always listens on 4322 inside the guest. |
+| `hostfwd=udp::<port>-:4323` on the first user-mode netdev | `channels.mcpd.discovery_port`, or the mcpd port if unset | LAN discovery for `fleet.discover`. |
 | `-qmp tcp:<host>:<port>,server=on,wait=off` | `channels.qmp.endpoint` | Used by `qemu.stop`, snapshots and screenshots. |
 | `-gdb tcp::<port>` | `channels.gdb.endpoint` | Only when a `gdb` channel is enabled. |
 
@@ -225,9 +226,13 @@ Each guest that runs at the same time needs its own host ports. Two
 guests that forward the same host port can't both start: the second
 QEMU exits.
 
-Your own extra forwards on the `-netdev user` (for a web server in the
-guest, say) are kept. Don't add your own forward for guest port 4322 or
-4323 on a host port the server also uses.
+Your own extra forwards on a user-mode netdev (for a web server in the
+guest, say) are kept. If any user-mode netdev in `network` already
+forwards the same protocol and host port as one of the server's
+forwards, the server leaves its own out, because QEMU refuses a
+duplicate rule. Your forward is then the one that runs, so if it
+points that host port anywhere other than guest port 4322 (TCP) or
+4323 (UDP), the server can't reach MCPd.
 
 ### Serial output
 
@@ -275,7 +280,7 @@ finds its devices at the same place every boot.
 To insert an install ISO, give the CD drive a file:
 
 ```json
-"cd0": "-drive if=none,id=cd,file=\"E:/ISOs/AmigaOS-4.1FE-Pegasos2.iso\",format=raw,media=cdrom -device ide-cd,unit=1,drive=cd,bus=ide.1"
+"cd0": "-drive if=none,id=cd,file=\"C:/QEMU/ISOs/AmigaOS-4.1FE-Pegasos2.iso\",format=raw,media=cdrom -device ide-cd,unit=1,drive=cd,bus=ide.1"
 ```
 
 `-display sdl` is what the Windows QEMU builds offer. On Linux,
@@ -358,13 +363,15 @@ things:
 
 - **Remove old port forwards.** Older machines may carry
   `hostfwd=tcp::4321-:4321` (a SerialShell forward) or forwards you
-  added in Kyvos for MCPd. The server adds the ones it needs; a stale
+  added in Kyvos for MCPd. The server adds the ones it needs (and
+  skips any whose host port the file already forwards); a stale
   one on a port another guest uses stops QEMU starting.
 - **Look at `args`, not `params`.** If they disagree, `args` is what
   runs. `params.customargs` in particular can point at a different
   machine's disk after a machine was copied.
-- **Keep `-netdev user` last in `network`.** Kyvos writes it that way;
-  keep it that way if you edit by hand.
+- **Keep a `-netdev user` in `network`.** Kyvos writes one there. The
+  forwards go on the first user-mode netdev in that key; a netdev in
+  `customargs` gets none.
 
 Kyvos and the server can share one file, but don't run the same
 machine from both at once: both would write to the disk image.
@@ -405,5 +412,5 @@ from a failed `qemu.start` also holds QEMU's own error message.
 | `kyvos config not found` | The `qemu_config` path is wrong. |
 | QEMU exits at once, "could not set up host forwarding rule" | Another guest or program holds that host port. Give each target its own ports. |
 | QEMU exits with a bus-not-found error for `ide.0` (sam460ex) | `hd0` comes before the `-device sii3112` that creates the bus. |
-| Guest boots but `mcpd_reachable` stays false | MCPd not installed or not started in the guest, guest networking not up, or no `network` key / `-netdev user` not last. |
+| Guest boots but `mcpd_reachable` stays false | MCPd not installed or not started in the guest, guest networking not up, no `network` key or no `-netdev user` in it, or a forward of your own on the same host port pointing elsewhere. |
 | Black window, nothing on serial | Wrong `loader` for the board, or a `kickstart.zip` that doesn't match the installed system. |

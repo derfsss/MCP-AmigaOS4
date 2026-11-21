@@ -4,7 +4,7 @@
 # For each `third-party/<name>-patches/` directory containing
 # `*.patch` files, run `git apply` against the matching
 # `third-party/<name>/` submodule. No-op when no patches exist
-# (which is the phase-0 state).
+# (the current state: no `-patches` directory exists yet).
 #
 # Idempotent in the sense that re-running on an already-patched tree
 # fails noisily — the build system should clean the submodule

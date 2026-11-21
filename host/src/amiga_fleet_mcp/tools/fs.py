@@ -100,8 +100,9 @@ async def fs_write(
     Set compression='zlib' if `content_b64` is base64 of zlib-compressed
     bytes; pass `raw_size` (decompressed length) so the daemon
     pre-allocates exactly. Effective single-frame size limit stays at
-    32 MiB *post-base64* - so for files >24 MiB raw use fs.write_chunk
-    instead.
+    32 MiB *post-base64* - so for files of ~24 MiB raw or more (24 MiB
+    is exactly 32 MiB of base64, with no room for the envelope) use
+    fs.write_chunk instead.
     """
     t = fleet.mcpd(target)
     params: dict[str, object] = {"path": path, "content_b64": content_b64}
@@ -382,8 +383,8 @@ async def fs_upload(
        the bytes on the target.
     3. **Auto-zlib-compresses** each chunk when
        `compression="auto"` (default) and the result is at least
-       5% smaller. Skips pre-compressed payloads (.lha / .zip /
-       .iso) because their compressed form is no smaller.
+       5% smaller, so pre-compressed payloads (.lha / .zip) go
+       uncompressed: zlib cannot shrink them.
 
     `resume=True` probes the remote with `fs.stat` and continues
     upload from the existing on-target size. Useful after a

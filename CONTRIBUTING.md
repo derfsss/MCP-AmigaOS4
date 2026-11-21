@@ -9,8 +9,9 @@ tracker](https://github.com/derfsss/MCP-AmigaOS4/issues). For bug
 reports please include:
 
 - Target type (QEMU machine model + image, or real-hardware board).
-- AmigaOS version on the target (`MCPd --version` output, or
-  `Version` from a Shell on the target).
+- AmigaOS version on the target (`Version` from a Shell on the
+  target, or the `sys.version` tool) and the MCPd version
+  (`MCPd --version`).
 - Host OS + Python version + `amiga-fleet-mcp --version`.
 - Concise reproduction steps and the actual vs expected output.
 
@@ -27,7 +28,8 @@ file it as a regular issue.
 # Host (Python) side
 cd host
 uv sync                   # installs from the committed uv.lock
-                          # (or: pip install -e .[dev])
+                          # (or: pip install -e . --group dev,
+                          #  pip 25.1+)
 uv run pytest -q
 uv run ruff check src tests
 uv run mypy src
@@ -58,6 +60,8 @@ The full build / install procedure for both pieces lives in
   target doesn't have by default, add it to [INSTALL.md § Per-feature
   prerequisites](INSTALL.md#per-feature-prerequisites) — that table is
   how users find out why a call returns `NotCapable`.
+- Leave the version alone. It is declared once, in the root
+  `VERSION` file, and changed only at release time.
 - Sign your commits if you can (`git commit -S`); not mandatory.
 
 ## Adding a new MCP tool
@@ -89,8 +93,10 @@ The full build / install procedure for both pieces lives in
 See `host/src/amiga_fleet_mcp/installer/machines.py` and the
 per-machine sequence files under
 `host/src/amiga_fleet_mcp/installer/sequences/`. The pattern is one
-small `<machine>.py` that imports a `MachineConfig` and shared
-build steps from `_steps.py`.
+small `<machine>.py` that imports its `*_CONFIG` (a `MachineConfig`)
+from `_machine_config.py` and builds its sequence with
+`build_sequence` from `_generic.py`, which assembles the shared steps
+in `_steps.py`.
 
 ## Licence
 

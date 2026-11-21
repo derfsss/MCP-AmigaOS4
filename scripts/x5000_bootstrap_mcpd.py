@@ -3,8 +3,14 @@
 The X5000 is a real network host - no QEMU hostfwd in the way -
 so MCPd listens on the X5000's own IP at port 4322 directly.
 
+Needs SerialShell running on the X5000 (port 4321). Uploads
+mcpd/MCPd to RAM:MCPd and runs it from there, so it is gone after a
+reboot: follow up with scripts/install_mcpd_autostart.py to install it
+for good.
+
 Idempotent: if a stale MCPd from a previous run is still bound on
-4322, we abort with a clear message rather than try to kill it.
+4322, we abort with a clear message rather than try to kill it
+(scripts/x5000_kill_mcpd.py does that).
 
 Configuration:
   --host <ip>            X5000 IP (default $X5000_HOST or required)

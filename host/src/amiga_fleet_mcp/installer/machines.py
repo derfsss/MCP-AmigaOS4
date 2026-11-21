@@ -94,8 +94,10 @@ UPDATE_LHA_NAME: dict[int, str] = {
 MACHINES_NO_BOOTLOADER_FILE: tuple[str, ...] = ("X5000", "A1222")
 
 
-# A1222 sources its Enhancer-equivalent files from the user's RescueV2
-# USB drive rather than from a packed LHA. Two volume names are common.
+# The A1222's RescueV2 USB drive (two volume names are common). The
+# install pipeline no longer reads it -- the A1222 uses the standard
+# Enhancer LHA like every other machine -- but installer.required_files
+# still reports these for an A1222.
 A1222_BACKUP_VOLS: tuple[str, ...] = ("RESCUEV2:", "AAATECH0:")
 A1222_BACKUP_SIGNATURE: str = "Devs/Networks/A1222eth.device"
 

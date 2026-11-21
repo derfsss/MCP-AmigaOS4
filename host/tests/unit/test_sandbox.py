@@ -1,8 +1,9 @@
 """sandbox.* unit tests via fake transport.
 
-Covers Phase A surface: probe (hit / miss / broken / Pegasos2),
-deploy (cache invalidation), run_guest (happy path / trap exit /
-config-driven defaults / per-target deny merge / per-target lock).
+Covers probe (hit / miss / broken / Pegasos2), deploy (cache
+invalidation), run_guest (happy path / trap exit / config-driven
+defaults / per-target deny merge / per-target lock), run_driver,
+last_trap and run_batch.
 """
 
 from __future__ import annotations
@@ -1221,3 +1222,48 @@ def test_derive_guest_name_strips_path_and_extension():
     # Empty after stripping defaults to "guest" so we never produce
     # an empty -n flag.
     assert sb._derive_guest_name(":") == "guest"
+
+
+def test_align_guest_exits_newest_lost():
+    """A debug buffer that fills mid-batch stops taking lines: the
+    NEWEST guests' lines are the ones missing, and the ones present
+    belong to the first guests."""
+    got = sb._align_guest_exits(
+        ["Tools:a", "Tools:b", "Tools:c"],
+        [("Tools:a", 0), ("Tools:b", 5)],
+    )
+    assert got == [0, 5, None]
+
+
+def test_align_guest_exits_oldest_lost_and_unrelated():
+    got = sb._align_guest_exits(
+        ["Tools:a", "Tools:b", "Tools:c"],
+        [("Tools:b", 0), ("Tools:c", 5)],
+    )
+    assert got == [None, 0, 5]
+    # Lines from some other program only: nothing is attributed.
+    assert sb._align_guest_exits(
+        ["Tools:a"], [("Tools:zzz", 3)],
+    ) == [None]
+
+
+@pytest.mark.asyncio
+async def test_run_batch_newest_lines_lost():
+    fleet, fake = _make_available_fleet()
+    fake.queue_exec(
+        lambda p: p["command"] == '"SYS:Tools/sandboxvm"',
+        {"output": "banner", "exit_code": 5},
+    )
+    fake.queue_exec(
+        lambda p: "Tools:" in p["command"],
+        {"output": "", "exit_code": 5},
+    )
+    ring = _ring_for_batch([("Tools:first", 5), ("Tools:second", 0)])
+    with _stub_debug_ring(ring):
+        res = await sb.sandbox_run_batch(
+            fleet, "tgt",
+            guests=[{"guest": "Tools:first"}, {"guest": "Tools:second"},
+                    {"guest": "Tools:third"}],
+        )
+    assert [e.exit_code for e in res.entries] == [5, 0, 0]
+    assert [e.exit_code_known for e in res.entries] == [True, True, False]

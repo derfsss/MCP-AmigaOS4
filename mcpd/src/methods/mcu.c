@@ -4,7 +4,7 @@
  * second UART at 38400 8N1, using a documented '#cmd\n / $reply\n'
  * ASCII protocol (TRM Cyrus 1.1.1 sec 8.1). MCU commands include:
  *   #t  -> 3 temperatures (PCB, CPU, PCIe-switch)
- *   #v  -> 13 voltage rails
+ *   #v  -> 12 voltage rails (the TRM lists 13)
  *   #f  -> fan PWM + RPM
  *   #s  -> power off
  *

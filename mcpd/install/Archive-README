@@ -1,4 +1,4 @@
-MCPd 1.3 - the AmigaOS 4 daemon for MCP-AmigaOS4
+MCPd 2.4 - the AmigaOS 4 daemon for MCP-AmigaOS4
 ================================================
 
 MCPd lets an MCP-aware client on another machine drive this Amiga:
@@ -10,25 +10,37 @@ This archive was assembled on AmigaOS, so every file already carries
 the right protection bits. Unpack it with LhA and the binary is
 runnable as-is - no Protect needed:
 
-    LhA x MCPd-1.3.lha
+    LhA x MCPd-2.4.lha
 
 
 Installing
 ----------
 
-From a Shell, in the directory this archive unpacked into:
+From a Shell, in the directory this archive unpacked into (the
+script looks for MCPd in the current directory, so CD into the
+drawer first):
 
-    Execute MCPd/MCPd-Install
+    CD MCPd
+    Execute MCPd-Install
 
-That copies MCPd to SYS:System/MCPd/, installs the watchdog wrapper,
+That copies MCPd and the two input-gate scripts to SYS:System/MCPd/,
 backs up S:Network-Startup, and adds a launch line so the daemon
 starts on boot. Reboot, or start it straight away with:
 
     Run >NIL: <NIL: SYS:System/MCPd/MCPd
 
-To remove it again:
+MCPd-Install does not set up MCPd-Watchdog: the launch line starts
+the daemon directly. To have it relaunched whenever it exits, change
+that line in S:Network-Startup to
 
-    Execute SYS:System/MCPd/MCPd-Uninstall
+    Run >NIL: <NIL: Execute SYS:System/MCPd/MCPd-Watchdog
+
+after copying MCPd-Watchdog to SYS:System/MCPd/ (the PC-side
+installer, scripts/install_mcpd_autostart.py, does both).
+
+To remove it again, from the same MCPd drawer:
+
+    Execute MCPd-Uninstall
 
 
 What is in here
@@ -37,7 +49,7 @@ What is in here
     MCPd                  the daemon (PowerPC ELF)
     MCPd-Install          install + register for auto-start
     MCPd-Uninstall        undo the above
-    MCPd-Watchdog         relaunch wrapper, used by the auto-start
+    MCPd-Watchdog         relaunch wrapper (optional, see above)
     MCPd-Enable-Input     allow keyboard / mouse injection
     MCPd-Disable-Input    disallow it again
 

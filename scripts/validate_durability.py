@@ -20,7 +20,8 @@ Sections
   F. Filesystem corner cases         empty / large dirs / weird names
   G. exec.cmd corner cases           empty / failing / large output
   H. Subscription state transitions  no leakage across resubscribe
-  I. Concurrency                     two-conn behaviour, discovery
+  I. Concurrency                     two-conn behaviour (discovery
+                                     under load is skipped)
   J. Numeric boundaries              limits and overflows
   K. Cross-method workflows          realistic agent-style sequences
   L. MCP resources                   read every advertised resource
@@ -229,10 +230,11 @@ def section_a_frames(r: Reporter, endpoint: str) -> None:
     finally:
         s.close()
 
-    # 4) Frame larger than the 16 MiB cap: daemon refuses, closes.
+    # 4) Frame larger than the 32 MiB cap (MCPD_FRAME_MAX_PAYLOAD,
+    #    mcpd/src/frame.h): daemon refuses, closes.
     s = socket.create_connection((host, port), timeout=5)
     try:
-        s.sendall(struct.pack(">I", 17 * 1024 * 1024))   # 17 MiB
+        s.sendall(struct.pack(">I", 33 * 1024 * 1024))   # 33 MiB
         s.settimeout(3.0)
         try:
             _ = s.recv(64)
@@ -587,7 +589,7 @@ async def section_f_fs(r: Reporter, fleet: Fleet) -> None:
             fleet, "target", f"{big_dir}/f{i:03d}.txt",
             base64.b64encode(f"content {i}".encode()).decode(),
         )
-    listing = await fs_tool.fs_list(fleet, "target", big_dir)
+    listing = (await fs_tool.fs_list(fleet, "target", big_dir)).entries
     r.assert_("fs: directory with 50 entries listable",
               len(listing) == 50)
 
@@ -615,7 +617,7 @@ async def section_f_fs(r: Reporter, fleet: Fleet) -> None:
 
     # 7) fs.list on the boot-volume root (real filesystem, not RAM:)
     try:
-        sys_root = await fs_tool.fs_list(fleet, "target", "SYS:")
+        sys_root = (await fs_tool.fs_list(fleet, "target", "SYS:")).entries
         r.assert_(
             "fs: list of SYS: returns >= 5 entries",
             len(sys_root) >= 5,
@@ -649,9 +651,9 @@ async def section_f_fs(r: Reporter, fleet: Fleet) -> None:
     for i in range(8):           # 8 levels deep is plenty
         cur = cur + f"/L{i}"
         await fs_tool.fs_makedir(fleet, "target", cur)
-    listing = await fs_tool.fs_list(
+    listing = (await fs_tool.fs_list(
         fleet, "target", deep, recursive=True, max_depth=16,
-    )
+    )).entries
     deepest = max(e.name.count("/") for e in listing) if listing else 0
     r.assert_("fs: recursive list at depth 8",
               deepest >= 7, f"max_depth_observed={deepest}")
@@ -821,10 +823,9 @@ def section_i_concurrency(r: Reporter, endpoint: str) -> None:
     r.section("I. Concurrency")
     host, port = split_endpoint(endpoint)
 
-    # Two simultaneous TCP connections - the daemon is single-conn,
-    # so the second should either queue (accept-after-handle_connection)
-    # or be rejected. Either is acceptable - we just need both to
-    # eventually succeed without crashing the daemon.
+    # Two simultaneous TCP connections. MCPd serves each connection
+    # on its own worker (up to MCPD_MAX_CLIENTS = 16, mcpd/src/rpc.h),
+    # so both should be served without crashing the daemon.
     s1 = socket.create_connection((host, port), timeout=3)
     s2 = socket.create_connection((host, port), timeout=3)
     try:
@@ -834,8 +835,8 @@ def section_i_concurrency(r: Reporter, endpoint: str) -> None:
         ok1 = r1 and json.loads(r1).get("id") == 1
         r.assert_("concurrency: first conn served", bool(ok1))
 
-        # Second conn: send same request, wait longer (it queues
-        # behind first conn's close).
+        # Second conn: send same request (the first is closed first;
+        # the generous timeout covers a slow target).
         s1.close()
         _send_frame(s2, body)
         r2 = _read_frame(s2, timeout=10.0)
@@ -949,7 +950,7 @@ async def section_k_workflows(r: Reporter, fleet: Fleet) -> None:
         r.ok("workflow: write+hash round-trip on 3 files")
 
     # Workflow 2: list, read each, verify content.
-    listing = await fs_tool.fs_list(fleet, "target", ROOT)
+    listing = (await fs_tool.fs_list(fleet, "target", ROOT)).entries
     for entry in listing:
         rd = await fs_tool.fs_read(
             fleet, "target", f"{ROOT}/{entry.name}",
@@ -966,7 +967,7 @@ async def section_k_workflows(r: Reporter, fleet: Fleet) -> None:
     await fs_tool.fs_rename(
         fleet, "target", f"{ROOT}/a.txt", f"{ROOT}/{new_name}",
     )
-    listing2 = await fs_tool.fs_list(fleet, "target", ROOT)
+    listing2 = (await fs_tool.fs_list(fleet, "target", ROOT)).entries
     names = {e.name for e in listing2}
     r.assert_("workflow: rename visible in subsequent list",
               "a.txt" not in names and new_name in names)
@@ -1176,11 +1177,10 @@ async def amain(args: argparse.Namespace) -> int:
     r = Reporter()
     fleet = make_fleet(args.endpoint)
 
-    # The daemon serves one TCP client at a time. Sections that use
-    # raw sockets must run with no Fleet transport connected, otherwise
-    # their connections queue behind the Fleet's open socket and time
-    # out. fleet.close_all() releases the persistent transport; the
-    # next fleet method call lazily reconnects.
+    # The raw-socket sections run first, with no Fleet transport
+    # connected, so their connections are the only ones on the daemon.
+    # fleet.close_all() releases the persistent transport; the next
+    # fleet method call lazily reconnects.
     try:
         # Raw-socket sections (no Fleet open).
         section_a_frames(r, args.endpoint)
@@ -1199,8 +1199,7 @@ async def amain(args: argparse.Namespace) -> int:
         await section_l_resources(r, fleet)
         await section_m_fleet(r, fleet)
         # CLI section runs subprocesses that open their own short-
-        # lived connections; close fleet first to free the daemon's
-        # single-conn slot.
+        # lived connections; close the fleet's connection first.
         await fleet.close_all()
         section_n_cli(r, args.endpoint)
     finally:

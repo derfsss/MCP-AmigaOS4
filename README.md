@@ -16,8 +16,9 @@ Brings AmigaOS 4.1 inside your AI client. From a single MCP session you
 can:
 
 - **Browse and edit files** on the target Amiga, **run AmigaDOS
-  commands** with captured stdout, **upload large binaries** with zlib
-  compression and resumable chunks.
+  commands** with captured stdout, **move large files** either way as
+  a raw byte stream (MCPd 2.3+) that resumes after a dropped link,
+  with a chunked, zlib-compressed fallback for older daemons.
 - **Follow long-running commands** — every command is a tracked job
   with an id, exit code and IoErr. One that outlives its timeout keeps
   running and can be checked, read or stopped later. The daemon's
@@ -137,8 +138,8 @@ volumes on my Amiga."* Or pick a ready-made workflow: type
 `/mcp__amiga-fleet__investigate_crash` after a crash.
 
 > **"It just hangs"**: if you run plain `uv run amiga-fleet-mcp` in a
-> terminal, it prints the log folder and your targets, then sits
-> there silently. That is normal. It is waiting for an AI app to talk
+> terminal, it prints a line saying it is waiting for an MCP client,
+> then sits there. That is normal. It is waiting for an AI app to talk
 > to it, and only an AI app can. Press Ctrl-C and use step 5 instead.
 
 Using Claude Desktop, VS Code or another app, or installed with pip
@@ -155,8 +156,12 @@ then in a Shell, from the folder you saved it in:
 
 ```
 LhA x MCPd-<version>.lha
-Execute MCPd/MCPd-Install
+CD MCPd
+Execute MCPd-Install
 ```
+
+(`MCPd-Install` looks for the `MCPd` binary in the current
+directory, so run it from inside the unpacked drawer.)
 
 The archive is assembled on AmigaOS, so the protection bits are
 already correct — extract and the daemon runs. (A raw ELF copied over
@@ -164,10 +169,13 @@ SMB or a USB stick arrives with the executable bit protected and has
 to be `Protect +rwed`-ed by hand.)
 
 Once MCPd is running on a target, you can also update it from the
-PC with `python scripts/install_mcpd_autostart.py <target-ip>:4322`.
+PC with `python scripts/install_mcpd_autostart.py <target-ip>:4322`
+(run it with the Python in `host/.venv`).
 
-Either way MCPd lands in `SYS:System/MCPd/`, gains a watchdog, and
-auto-starts on boot. MCPd has no password: keep the Amigas on a
+Either way MCPd lands in `SYS:System/MCPd/` and auto-starts on boot.
+The PC-side script also installs `MCPd-Watchdog`, which relaunches
+the daemon if it exits; `MCPd-Install` adds a plain launch line
+without the watchdog. MCPd has no password: keep the Amigas on a
 private network ([SECURITY.md](SECURITY.md)).
 
 Full detail in [INSTALL.md](INSTALL.md); configuration options in
@@ -224,6 +232,10 @@ context in [USAGE.md](USAGE.md).
   (`events.subscribe`, `events.unsubscribe`, and `events.test_emit`
   are exposed only as daemon RPC methods, not MCP tools — clients
   call them directly through the transport.)
+- Eight ready-made workflows as MCP prompts (`getting_started`,
+  `investigate_crash`, `deploy_and_run`, `check_fleet`,
+  `safe_reboot`, `deploy_library`, `run_test_batch`, `ab_test_fix`);
+  see [USAGE.md § Ready-made workflows](USAGE.md#ready-made-workflows-prompts).
 - Eight live MCP resources for fleet status, per-target system
   snapshots, capability reports, and serial logs.
 - Parallel multi-target operations (`fleet.run_on_all`,

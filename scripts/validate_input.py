@@ -45,7 +45,7 @@ doesn't come back; `--restart-mode manual` prompts instead.
 
 Usage:
     python scripts/validate_input.py --target qemu-pegasos2-sm501 \\
-        --shared-dir S:/temp
+        --shared-dir <host-dir-shared-as-SHARED:>
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Smoke tests.
 
-Verifies the package imports, the version is exposed, and a FastMCP
+Verifies the package imports, the version is exposed, and an MCPServer
 instance can be constructed against a minimal config (no real targets).
 """
 

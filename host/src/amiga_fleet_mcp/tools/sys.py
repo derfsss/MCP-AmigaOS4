@@ -400,6 +400,9 @@ class AppEntry(BaseModel):
     filename: str | None = None
     description: str | None = None
     hidden: bool = False
+    # MCPd 2.5+: False while the app keeps the screen blanker away
+    # (MCPd's own entry: during file transfers and 30 s after).
+    allows_blanker: bool | None = None
 
 
 class ApplicationsResult(BaseModel):
@@ -652,7 +655,10 @@ async def sys_read_pa(
     fleet: Fleet, target: str, *,
     pa: int, count: int = 1, width: int = 4,
 ) -> ReadPaResult:
-    """DANGEROUS: supervisor-mode read at any 36-bit physical address.
+    """DANGEROUS: supervisor-mode read at a physical address.
+
+    The daemon uses `pa` as a 32-bit address (higher bits dropped) and
+    reads through the kernel\'s current mapping.
 
     *** A WRONG `pa` CRASHES THE CONNECTION-HANDLER TASK on the
     target. *** The daemon main listener stays alive (MCPd is spawn-
@@ -790,13 +796,16 @@ async def sys_mcu_cmd(
 
     Documented commands:
       cmd='t'  -> 3 temperatures (PCB, CPU, PCIe-switch) as $t+HH+HH+HH
-      cmd='v'  -> 13 voltage rails as $vXXYY repeating 13 times
+      cmd='v'  -> 12 voltage rails as $vXXYY repeating 12 times
+                  (the TRM says 13; see _VOLT_RAILS)
       cmd='f'  -> fan PWM + RPM as $fPPRRRR
       cmd='s'  -> POWER OFF (board powers down). Use with care.
 
     The canonical sensor path on X5000: talks the documented MCU
     protocol directly via AOS's serial.device. Returns the raw reply
-    string; callers parse the format documented in the TRM.
+    string plus `parsed`, the t / v / f replies decoded by
+    _parse_mcu_reply (None for other commands, a malformed reply or a
+    timeout).
 
     cmd='s' (POWER OFF) requires confirm=True; otherwise the daemon
     rejects with InvalidParams. Mirrors the sys.cold_reboot guard.
@@ -874,7 +883,7 @@ def host_capabilities(
 
     `methods` is the list of advertised JSON-RPC method names (dotted
     form, e.g. "fs.write_chunk"). The caller passes the live list -
-    typically derived from FastMCP's tool registry by walking
+    typically derived from MCPServer's tool registry by walking
     `mcp.list_tools()` and pulling each tool's `title` - so the
     advertisement stays in sync with what's actually registered. No
     more hand-maintained PHASE_X constants drifting out of date.

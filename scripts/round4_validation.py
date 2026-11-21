@@ -1,4 +1,7 @@
-"""Validate round-4 software-only batch on the live X5000:
+"""Validate the round-4 software-only batch on the live X5000.
+
+Target: $MCPD_ENDPOINT (default 127.0.0.1:4322, a QEMU guest's
+forwarded port); scripts/validate.py sets it. Checks:
 
   sys.lastalert         (now includes decoded fields)
   sys.alert_decode      decode an arbitrary alert code
@@ -9,9 +12,9 @@
   app.notify            Ringhio popup
   debug.symbol          address -> module/function/source
   debug.stacktrace      symbolicated backtrace
-  debug.write_register  modify a saved register (then read back)
-  debug.write_memory    poke bytes (round-trip via fs.read on a file
-                        we wrote, since arbitrary VRAM is unsafe)
+  debug.write_register  write input.device's saved XER back unchanged
+  debug.write_memory    boundary checks only: a 0-byte write returns 0,
+                        NULL + data is rejected (nothing is written)
   events.wait + debug.exception topic (timeout path - no live crash)
 """
 

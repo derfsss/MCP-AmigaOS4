@@ -5,7 +5,8 @@ What MCP gives us for crash forensics:
   - sys.lastalert            most-recent alert code + 4-word payload,
                               with subsystem / general / specific
                               decomposition.
-  - wb.screens / wb.windows  identify Grim Reaper / orphan screens.
+  - wb.screens / wb.frontmost
+                              identify Grim Reaper / orphan screens.
   - sys.tasks                find a zombie task suspended pending
                               the user dismissing the GrimReaper.
   - debug.task_snapshot      register dump (PC, SP, LR, MSR, DAR,
@@ -22,7 +23,6 @@ What MCP gives us for crash forensics:
                               includes pre-fault diagnostic messages.
   - sys.libraries / devices  see what the program had opened at
                               the time of the fault.
-  - sys.memory               quantify what the crash leaked.
 
 Usage:
     python scripts/investigate_crash.py [--endpoint host:port]
@@ -101,9 +101,10 @@ async def phase_alert(t) -> dict:
     for i, v in enumerate(la.get("values", [])):
         annot = ""
         if i == 1 and (code & 0x80000000):
-            # For 68k-style CPU alerts the payload[1] is typically
-            # the faulting effective address.
-            annot = "  <- likely faulting address"
+            # On AmigaOS 4 payload[1] is the crashed process's Task
+            # pointer, not the fault address (that is DAR, shown in
+            # the register snapshot below).
+            annot = "  <- usually the crashed Task pointer"
         print(f"    [{i}] = 0x{v:08x}  ({v}){annot}")
     return la
 
@@ -111,7 +112,7 @@ async def phase_alert(t) -> dict:
 async def phase_screens(fleet: Fleet) -> None:
     """Look for Grim Reaper or stranded screens."""
     banner("2. Public screens and active windows")
-    screens = await wb_tool.wb_screens(fleet, "target")
+    screens = (await wb_tool.wb_screens(fleet, "target")).screens
     print(f"  {len(screens)} screen(s):")
     for s in screens:
         title = s.title or "<no title>"
@@ -269,8 +270,8 @@ async def phase_libs(fleet: Fleet) -> None:
     seeing high-version libs (gl4es, opengl, MiniGL, AHI etc.) hints
     at what subsystem the fault may have come from."""
     banner("8. Notable libraries / devices currently open")
-    libs = await sys_tool.sys_libraries(fleet, "target")
-    devs = await sys_tool.sys_devices(fleet, "target")
+    libs = (await sys_tool.sys_libraries(fleet, "target")).libraries
+    devs = (await sys_tool.sys_devices(fleet, "target")).devices
     interesting_libs = [
         l for l in libs
         if any(k in l.name.lower() for k in [
@@ -388,7 +389,10 @@ async def amain(args: argparse.Namespace) -> int:
 
         # Addresses to resolve through IDebug symbol lookup.
         addrs: list[int] = []
-        # Faulting address from the alert payload (typically [1]).
+        # Alert payload[1]. On AmigaOS 4 this is usually the crashed
+        # Task pointer rather than a fault address, so it normally
+        # comes back unresolved; the snapshot's pc / dar below are the
+        # addresses that matter.
         if "values" in la and len(la["values"]) > 1:
             addrs.append(int(la["values"][1]) & 0xFFFFFFFF)
         # Saved registers from the task snapshot.
@@ -408,6 +412,9 @@ async def amain(args: argparse.Namespace) -> int:
         await phase_libs(fleet)
 
         if args.binary:
+            # Known limitation: this treats payload[1] as the faulting
+            # PC, but it is usually the crashed Task pointer (see
+            # phase_alert); the snapshot's pc would be the better input.
             faulting = (
                 int(la["values"][1]) & 0xFFFFFFFF
                 if "values" in la and len(la["values"]) > 1 else 0

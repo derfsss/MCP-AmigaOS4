@@ -1,12 +1,16 @@
-"""High-level chunked-upload helper that drives fs.write_chunk.
+"""High-level whole-file transfer helpers behind fs.upload / fs.download.
 
-Hides the chunking + zlib + retry-on-fail mechanics so callers can
-say `upload(target, local_path, remote_path)` for any file size.
+`chunked_upload` drives fs.write_chunk and `chunked_download` drives
+fs.read; `stream_upload` / `stream_download` move the file as raw
+bytes over fs.stream_put / fs.stream_get (see the section near the
+end of this file). Callers can say
+`chunked_upload(fleet, target, local_path, remote_path)` for any file
+size.
 
-Strategy:
-  1. Slice local file into chunks of `chunk_size` (default ~24 MiB
-     of *raw* bytes - leaves margin under the 32 MiB JSON-RPC cap
-     after base64 expansion).
+Chunked upload strategy:
+  1. Slice local file into chunks of `chunk_size` *raw* bytes
+     (default 24 MiB), clamped to MAX_CHUNK_RAW so the base64 plus
+     the JSON envelope fits the 32 MiB JSON-RPC frame cap.
   2. zlib-compress each chunk if compression='zlib'/'auto'. 'auto'
      compresses only if the result is at least 5% smaller (skips
      pre-compressed payloads like .lha / .zip).
@@ -69,7 +73,7 @@ class UploadStats:
 
 def _zlib_chunk(raw: bytes) -> bytes:
     """Compress with default level. Streaming would save peak RAM
-    but for a single chunk (<=24 MiB) the one-shot is simpler."""
+    but for a single chunk (<= MAX_CHUNK_RAW) the one-shot is simpler."""
     return zlib.compress(raw, 6)
 
 
@@ -214,11 +218,12 @@ async def chunked_download(
     """Pull a file from the target by repeated `fs.read(offset,
     length)` calls; reassembles into a single local file.
 
-    Resumable: pass `resume_from = N` (or use `verify=True` flag in
-    the wrapper tool) to start from byte N. Caller is responsible
-    for opening the local file in append-binary mode if resuming.
+    Resumable: pass `resume_from = N` (the fs.download tool's
+    `resume=True` passes the local file's size) to start from byte N.
+    The local file is then opened in append mode, so its first N
+    bytes must already be the remote file's first N.
 
-    The remote file is read in size order via consecutive offsets;
+    The remote file is read in order via consecutive offsets;
     no out-of-order assembly is needed -- bytes land at the same
     offset they came from.
     """
@@ -281,8 +286,8 @@ async def chunked_download(
 #: Bytes per write/read on a stream: matches the daemon's 1 MiB buffer.
 STREAM_BLOCK = 1024 * 1024
 #: How long one block may take before the stream counts as broken. The
-#: daemon's own limits are SO_RCVTIMEO / SO_SNDTIMEO, 120 s
-#: (mcpd/src/main.c).
+#: daemon's own limits are SO_RCVTIMEO / SO_SNDTIMEO (mcpd/src/main.c),
+#: MCPD_IO_TIMEOUT_S = 120 s (mcpd/src/frame.h).
 STREAM_BLOCK_TIMEOUT_S = 130.0
 #: Before resuming a broken upload: how long to wait for the target's
 #: file to stop growing. The daemon may still be writing what was in
@@ -301,9 +306,10 @@ class StreamCorrupt(Exception):
 async def _caps(t: object) -> list[str]:
     """proto.capabilities' method names, cached on the transport for
     as long as its connection lasts (McpdTransport clears the cache on
-    connect and close, so a restarted daemon is asked again). Any
-    failure counts as none (older daemons keep the chunked path) and
-    is not cached."""
+    connect and close, and a connection that already looks stale is
+    asked again, so a restarted daemon is re-asked). Any failure
+    counts as none (older daemons keep the chunked path) and is not
+    cached."""
     stale = getattr(t, "_is_stale", None)
     cached = getattr(t, "_method_names", None)
     if isinstance(cached, list) and not (callable(stale) and stale()):

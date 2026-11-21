@@ -26,10 +26,15 @@ operator. In particular:
   `exec.output`, `exec.kill`, `exec.list`) are new methods on the
   same unauthenticated TCP listener, so anyone who can reach it can
   also read the output of, or send break signals to, any job another
-  client started. The listener itself was hardened: it accepts
-  nothing until every subsystem is up, a frame header no longer
-  reserves memory before its body arrives, a connection silent for
-  120 s is dropped, and connection workers are capped at 16. The
+  client started. The raw file streams added in 2.3
+  (`fs.stream_get`, `fs.stream_put`, `fs.stream_status`) are
+  likewise methods on the same listener, with the same reach as
+  `fs.read` / `fs.write`. The listener itself was hardened: it
+  accepts nothing until every subsystem is up, a frame header no
+  longer reserves memory before its body arrives, sockets are
+  non-blocking and a connection that makes no progress for 120 s in
+  the middle of a request or a reply is dropped (an idle connection
+  between requests is kept), and connection workers are capped at 16. The
   discovery responder ignores probes under 64 bytes or without the
   `v` field and rate-limits its replies (globally and per source), so
   it can no longer serve as a UDP amplifier.
@@ -37,8 +42,8 @@ operator. In particular:
   client read `SYS:` (and any other mounted volume), overwrite
   files, run `exec.cmd` against the AmigaDOS shell, modify task
   state via `debug.write_register` / `debug.write_memory`, and
-  trigger a soft power-off (`sys.cold_reboot`, `sys.mcu_cmd
-  cmd="s"`). Treat a target running `MCPd` as fully owned by
+  trigger a reboot or a soft power-off (`sys.cold_reboot`,
+  `sys.mcu_cmd cmd="s"`). Treat a target running `MCPd` as fully owned by
   whoever holds the network path to it.
 - **Out-of-band power control**: when the operator has wired the
   FTDI USB-TTL cable to the target's internal MCU header (X5000
@@ -72,14 +77,17 @@ operator. In particular:
   whose keyboard and mouse are on the network. Do not enable it on a
   target reachable from an untrusted network.
 - **Confirm-gated destructive operations**: `sys.cold_reboot`,
-  `sys.mcu_cmd cmd="s"`, the mutating `installer.*` /
-  `debug.write_*` tools, the destructive `power.*` tools
-  (`power.on` / `power.off` / `power.toggle_stream` /
-  `power.shell`), and the committing `input.*` tools
-  (`input.type` / `input.key` / `input.click` / `input.drag`) all
-  require an explicit `confirm: true` parameter. This is a guardrail against accidental fire, **not**
-  an authentication mechanism. A connected client can always pass
-  `confirm: true`.
+  `sys.mcu_cmd cmd="s"`, the mutating `installer.*` tools, the
+  destructive `power.*` tools (`power.on` / `power.off` /
+  `power.toggle_stream` / `power.shell`), and the committing
+  `input.*` tools (`input.type` / `input.key` / `input.click` /
+  `input.drag`) all require an explicit `confirm: true` parameter.
+  The daemon's `debug.write_memory` and `debug.write_register` also
+  refuse a request without `confirm: true`, but the host's
+  `debug_write_*` tools have no `confirm` parameter and always send
+  it, so for an MCP client those two are not guarded. This is a
+  guardrail against accidental fire, **not** an authentication
+  mechanism. A connected client can always pass `confirm: true`.
 - **Stopping jobs**: `exec.kill` only sends AmigaDOS break signals
   (CTRL-C / D / E / F) to a job's own process, after checking that the
   process is still alive; a program that ignores them keeps running.
@@ -116,15 +124,17 @@ operator. In particular:
 These are documented behaviours, not vulnerabilities:
 
 - `sys.read_pa` performs an unchecked supervisor-mode read at any
-  36-bit physical address. A bad address takes a DSI exception
+  address (taken as 32 bits wide). A bad address takes a DSI exception
   that crashes the connection-handler task. The daemon's main
   listener stays up by design.
 - The `exec.cmd` argument quoting is best-effort. Pass user-
   supplied strings through your own shell quoting before handing
   them to the tool.
-- The MCP framing layer caps individual frames at 32 MiB. Larger
-  payloads must use `fs.write_chunk` (resumable, optionally
-  zlib-compressed).
+- The MCPd framing layer caps individual frames at 32 MiB. Larger
+  payloads go as raw byte streams (`fs.stream_put` /
+  `fs.stream_get`, MCPd 2.3+) or through `fs.write_chunk`
+  (resumable, optionally zlib-compressed); `fs.upload` /
+  `fs.download` pick the path for you.
 - `input.type` maps characters through the target's own
   `keymap.library`, so it is layout-correct. If `keymap.library`
   cannot be opened it silently falls back to a built-in US table;

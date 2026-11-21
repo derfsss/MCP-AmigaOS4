@@ -287,12 +287,13 @@ async def qemu_stop(
     restart sequences silently operate on a machine they believed they
     had replaced.
 
-    If anything has been written to this target through MCPd, the
-    guest is given `settle_s` seconds (default 10) to write its
-    filesystem cache back first, because stopping QEMU is abrupt and
-    an unflushed write is simply lost. Targets that have only been
-    read from wait not at all. Pass `settle_s=0` to skip it when you
-    know nothing is pending and want the stop immediately.
+    Stopping QEMU is abrupt and an unflushed write is simply lost, so
+    first `_settle_before_stop` flushes SYS: with `fs.sync` whenever
+    MCPd answers. Only if that fails (a daemon without fs.sync) does
+    it fall back to waiting: until `settle_s` seconds (default 10)
+    have passed since the last write made through this transport,
+    and not at all if there was none. Pass `settle_s=0` to skip that
+    wait when you know nothing is pending.
     """
     settled = await _settle_before_stop(
         fleet, target,

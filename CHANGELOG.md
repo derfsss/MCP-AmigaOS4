@@ -1,5 +1,63 @@
 # Change log
 
+## 2.5 — Notifications that return (not released yet)
+
+### Fixed
+
+- **`app.notify` never returned, and on 2.4 it then stopped every
+  file transfer.** application.library's `Notify()` blocks for good
+  when it is called from a task other than the one that registered
+  the application, and MCPd registered from its main task but posted
+  from its connection workers. On 2.4, every transfer then waited
+  behind the stuck call too, because the screen-blanker hold sets an
+  application attribute; so did `sys.applications`. MCPd now has one
+  process, "MCPd applib", that registers it and makes every such
+  call; workers queue requests to it and never wait on the library
+  for a transfer. `app.notify` gives up with an error after 10 s if
+  the library does not answer. Seen on QEMU AmigaOne guests; the
+  same code ran on every target.
+- **Crash-hook reports went to the wrong connection.** A crash the
+  IDebug hook caught was sent, as a `debug.exception` notification,
+  to whichever connection looked first, subscribed or not, and to no
+  other. It now goes to every connection subscribed to
+  `debug.exception`, and to none that is not; a connection is never
+  sent crashes from before it opened. `events.wait` with the
+  `debug.exception` topic now also returns for these crashes. Each
+  `debug.exception` event carries `data.source`: `"crash_hook"` or
+  `"lastalert"`.
+- **`fs.read` of 24 to 32 MiB dropped the connection.** The slice
+  passed the daemon's 32 MiB check, but its base64 answer did not fit
+  a frame. Slices are now capped at 25116672 bytes, the size the host
+  already used, and a larger one is refused with an error.
+- **`exec.cmd` output past 1 MiB was lost** once the command had
+  finished: the capture file was deleted as soon as the first 1 MiB
+  was returned. A truncated answer now keeps the file, so
+  `exec.output` can read the rest from that offset; it goes when the
+  job's slot is reused or MCPd stops.
+- **A worker slot leaked** when a connection's worker failed to open
+  its own socket library or claim its socket, counting towards the
+  16-connection limit until MCPd restarted.
+- **A failed `qemu_loadvm` froze the guest.** QEMU stops the VM to
+  load a snapshot and, when the load fails (for example, no snapshot
+  of that name), leaves it stopped in "restore-vm": the guest and
+  MCPd then answer nothing until QEMU is restarted. `qemu_loadvm` now
+  refuses a name that `info snapshots` does not list without touching
+  the VM, and `qemu_savevm` / `qemu_loadvm` resume a VM that a failure
+  left stopped (`vm_resumed` in the error's data).
+- **`fleet_target_status` and `fleet_snapshot` called a running guest
+  stopped** when this server had not started it, and called its QMP
+  port unreachable while this server held the port's one connection.
+  Both now count a guest whose ports answer as running, as
+  `qemu_status` already did.
+- **`sandbox_run_batch` could give guests each other's exit codes**
+  when the kernel debug buffer filled during the batch. Exit codes are
+  now matched to guests by path.
+
+### Added
+
+- `sys.applications` reports `allows_blanker` per application;
+  MCPd's own entry is false while the blanker hold is on.
+
 ## 2.4 — Raw file streams and 8-bit screenshots
 
 2.4 is the first release with the 2.3 work below (raw file streams,

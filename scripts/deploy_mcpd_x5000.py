@@ -73,7 +73,6 @@ async def main() -> int:
     print(f"\n  verified: {res}")
 
     print("\n*** REBOOT X5000 to load the new MCPd ***")
-    print("    After reboot, sys.read_ccsr will be available.")
     return 0
 
 

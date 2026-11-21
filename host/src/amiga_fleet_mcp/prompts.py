@@ -223,8 +223,8 @@ that silently runs the old code.
 1. `fs_stat` the destination. If a file is there, `fs_rename` it to a
    dated backup next to it (`<name>.bak-<YYYYMMDD>`) instead of
    overwriting it, so it can be put back.
-2. `fs_upload` the new file with `verify=true`. For a file over 24 MB,
-   pass a smaller `chunk_size`, such as 8388608.
+2. `fs_upload` the new file with `verify=true`. Files of 1 MiB and more stream
+   by themselves on MCPd 2.3+; no chunk size is needed.
 {_cold_boot_steps(3)}
 9. Confirm the new copy is the one in memory, not just the one on disk:
    `sys_libraries` (or `sys_devices`) should show the new version, or

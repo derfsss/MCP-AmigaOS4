@@ -95,7 +95,7 @@ async def fleet_target_status(fleet: Fleet, target: str) -> TargetStatus:
 
     cfg = fleet.target_config(target)
     proc = fleet.qemu_process(target)
-    running = proc is not None and proc.poll() is None
+    owned = proc is not None and proc.poll() is None
 
     def _probe(host: str, port: int) -> bool:
         try:
@@ -113,6 +113,15 @@ async def fleet_target_status(fleet: Fleet, target: str) -> TargetStatus:
     if cfg.channels.qmp and cfg.channels.qmp.enabled:
         qm = cfg.channels.qmp
         qmp_ok = await asyncio.to_thread(_probe, qm.host, qm.port)
+        # QMP takes one client: our own open connection makes a fresh
+        # connect fail, yet the port is up.
+        held = fleet.qmp_if_open(target)
+        if held is not None and held.connected:
+            qmp_ok = True
+
+    # Running means running, whoever started it (as qemu.status): a
+    # guest launched by another process answers on its ports.
+    running = owned or bool(qmp_ok) or bool(mcpd_ok)
 
     return TargetStatus(
         name=target,

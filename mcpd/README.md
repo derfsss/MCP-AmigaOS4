@@ -8,13 +8,13 @@ responder on port 4323).
 
 See the top-level documentation set:
 
-- [USAGE.md](../USAGE.md) — overview.
-- [INSTALL.md](../INSTALL.md) — runtime requirements and install
+- [USAGE.md](../USAGE.md) -- overview.
+- [INSTALL.md](../INSTALL.md) -- runtime requirements and install
   procedure (including the auto-start integration that deploys MCPd
   to `SYS:System/MCPd/`).
-- [BUILD.md](../BUILD.md) — build requirements and cross-compile
+- [BUILD.md](../BUILD.md) -- build requirements and cross-compile
   instructions.
-- [COMMANDS.md](../COMMANDS.md) — full RPC method reference.
+- [COMMANDS.md](../COMMANDS.md) -- full RPC method reference.
 
 ## Quick build
 
@@ -43,15 +43,20 @@ src/
   rpc.c, rpc.h         JSON-RPC dispatch and method registry
   b64.c, b64.h         base64 codec
   sha256.c, sha256.h   SHA-256 reference implementation
+  crc32.c, crc32.h     CRC-32 for checking raw streams end to end
   discovery.c/h        UDP discovery responder peer task
   jobs.c, jobs.h       job table for exec.* (last 32 jobs) and the
                        job / worker priorities
   crashhook.c          IDebug crash hook
   methods/
     proto.c            proto.* (capability advertisement, version)
-    sys.c              sys.* introspection (23 methods)
+    sys.c              sys.* introspection (18 of the 23 sys.*
+                       methods; the rest are in hwres.c, elfm.c,
+                       applib.c and mcu.c)
     fs.c               fs.* filesystem operations (12 methods,
                        including fs.sync -- ACTION_FLUSH)
+    stream.c           fs.stream_get / fs.stream_put /
+                       fs.stream_status (raw byte streams)
     exec.c             exec.* (cmd, status, output, kill, list)
     wb.c               wb.* Workbench / Intuition queries
     screen.c           wb.screenshot (ReadPixelArray + PNG encode
@@ -62,7 +67,8 @@ src/
     events.c           events.* long-poll and server-push
     hwres.c            sys.hardware.{i2c,perfcounters}
     elfm.c             sys.executable.symbols
-    applib.c           application.library integration
+    applib.c           application.library integration (also holds
+                       off the screen blanker during file transfers)
     mcu.c              sys.mcu_cmd (X5000 Cyrus MCU UART supervisor)
     amigautil.c        AmigaDOS shell-out helper
     helpers.c          shared parameter-parsing helpers
@@ -74,7 +80,22 @@ install/
   MCPd-Disable-Input   close it again
 ```
 
-64 JSON-RPC methods in total. `COMMANDS.md` documents every one.
+67 JSON-RPC methods in total. `COMMANDS.md` documents every one.
+
+## Connections
+
+Each accepted connection gets its own worker Process (`MCPd Client`),
+at most 16 at once; a 17th is refused and closed. A request that
+crashes its handler takes down that connection only. Sockets are
+non-blocking, and a connection that makes no progress for 120 s in
+the middle of a request or a reply is dropped, so a stalled peer
+cannot hold a worker. An idle connection between requests is kept.
+
+While a file transfer runs (`fs.read`, `fs.write`, `fs.write_chunk`,
+`fs.stream_get`, `fs.stream_put`), MCPd sets application.library's
+`APPATTR_AllowsBlanker` to FALSE so the screen blanker cannot start,
+and sets it back 30 s after the last transfer ends. The user's
+blanker settings are not changed.
 
 ## Direct command-line invocation
 
@@ -86,8 +107,10 @@ MCPd --enable-input   ; allow input.* -- off by default, and NOT
 MCPd --version
 ```
 
-In production deployments the daemon is launched by the watchdog
-script (`MCPd-Watchdog`) from `S:Network-Startup`. See
+In production deployments the daemon is launched from
+`S:Network-Startup`: through the watchdog script (`MCPd-Watchdog`)
+when installed with `scripts/install_mcpd_autostart.py`, or directly
+when installed with `MCPd-Install`. See
 [INSTALL.md](../INSTALL.md) for the auto-start install procedure.
 
 ## Startup beacon
@@ -96,7 +119,7 @@ On a successful start MCPd writes one line to the kernel debug ring
 via `IExec->DebugPrintF`:
 
 ```
-[MCPd] ready name=MCPd version=2.0 build_date=02.08.2026 build_time=18:18:04 port=4322 input=off worker_pri=1
+[MCPd] ready name=MCPd version=2.4 build_date=20.11.2026 build_time=15:03:12 port=4322 input=off worker_pri=1
 ```
 
 `input=on|off` reports the keyboard / mouse injection gate, which is
@@ -106,20 +129,21 @@ is the priority the per-connection workers run at (see [Process
 priorities](#process-priorities)).
 
 The line is emitted **after** `bind` + `listen` succeed, so its
-presence means the port is accepting connections — not merely that
-the binary loaded. Two companion lines cover the other outcomes:
+presence means the port is accepting connections -- not merely that
+the binary loaded. Companion lines cover the other outcomes:
 
 ```
-[MCPd] startup_failed version=2.0 reason=bsdsocket
-[MCPd] startup_failed version=2.0 reason=listen port=4322
-[MCPd] shutdown version=2.0
+[MCPd] startup_failed version=2.4 reason=bsdsocket
+[MCPd] startup_failed version=2.4 reason=bind port=4322
+[MCPd] startup_failed version=2.4 reason=listen port=4322
+[MCPd] shutdown version=2.4
 ```
 
 `shutdown` marks a clean exit, so a reader can distinguish a normal
 stop from a crash (which produces no line at all).
 
 The `[MCPd] ` prefix and the `key=value` shape are a parsed
-interface — keep them stable.
+interface -- keep them stable.
 
 The daemon also prints a banner to stdout, but on the auto-start
 path stdout is `NIL:` (`Run >NIL: <NIL: Execute MCPd-Watchdog`), so
@@ -129,7 +153,7 @@ Read the beacon with any of:
 
 - `C:DumpDebugBuffer` on the target (or the `sys.debug_ring` MCP
   tool, which wraps it)
-- a serial capture of the debug UART — `serial.*` on real hardware,
+- a serial capture of the debug UART -- `serial.*` on real hardware,
   or QEMU's `-serial stdio` log with `debuglevel=1`
 
 Two limits are worth knowing:
@@ -139,7 +163,7 @@ Two limits are worth knowing:
   capture, which does not depend on the daemon.
 - **The AmigaOS debug buffer does not wrap.** Once full it stops
   accepting entries, so on a machine whose buffer is exhausted before
-  MCPd starts — a verbose graphics driver can fill it during boot —
+  MCPd starts -- a verbose graphics driver can fill it during boot --
   no beacon appears there at all. Compare `raw_size` across two
   `sys.debug_ring` calls: no growth on an active machine means the
   buffer is full, not that the system is quiet. Serial capture is
@@ -155,7 +179,7 @@ available from `MCPd --version`, `proto.version`, and
 
 | Process | Priority |
 |---|---|
-| Listener (`main`) | **1** — above ordinary programs |
+| Listener (`main`) | **1** -- above ordinary programs |
 | `MCPd Client` (one per connection) | **1** |
 | `MCPd Discovery` | 0 |
 | Jobs started by `exec.cmd` | **-2** by default; per call or `[defaults] exec_priority`, capped at 0 |
@@ -165,7 +189,7 @@ ordinary programs keeps the daemon responsive to new connections on a
 loaded machine. The per-connection workers run at +1 too: at -1, a
 program spinning at 100% at the normal priority 0 starved MCPd on an
 X5000 for its whole run, while at +1 it answered every call. The work
-that can actually take a long time — commands run by `exec.cmd` —
+that can actually take a long time -- commands run by `exec.cmd` --
 runs as separate jobs below the workers, so it yields to the user and
 never stops the daemon answering. Programs a job starts with `Run`
 begin at 0 whatever the job's priority.

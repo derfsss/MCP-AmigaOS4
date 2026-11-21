@@ -1,4 +1,4 @@
-/* wb.* method handlers - public screens + their windows.
+/* wb.* method handlers - screens, public screens and windows.
  *
  * Walks IntuitionBase->FirstScreen / Screen->NextScreen and
  * Screen->FirstWindow / Window->NextWindow under

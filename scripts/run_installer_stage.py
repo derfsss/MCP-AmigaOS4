@@ -1,10 +1,16 @@
-"""Direct-import wrapper around installer.stage.
+"""Direct-import wrapper around installer.stage (confirm=True).
+
+Uploads into <dest-volume>tmp/ on the target, then prints the per-file
+transfer stats.
+
+Targets come from the amiga-fleet-mcp config.toml
+($AMIGA_FLEET_CONFIG, else the platform default).
 
 Configuration:
   --target         Fleet target name (default: x5000)
   --dest-volume    AmigaDOS volume to stage into (default: BootTest:)
-  --sources-dir    Host directory containing the ISO + LHAs +
-                   MCPd / SerialShell / diskimage-bootstrap/
+  --sources-dir    Host directory containing the ISO + Update LHAs +
+                   Enhancer + MCPd (SerialShell optional)
                    (default: $AMIGA_INSTALL_SOURCES, or required)
   --machine        Machine ID (default: X5000)
 """

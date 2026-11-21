@@ -12,8 +12,13 @@
  *
  * Topics:
  *   sys.lastalert    - ExecBase->LastAlert[0] changed (raw)
- *   sys.task         - task added or removed (by name)
+ *   sys.task         - task added or removed (by name; events.wait only)
  *   debug.exception  - new dead-end / crash alert (decoded)
+ *
+ * debug.exception has two sources: a dead-end LastAlert (data.source
+ * "lastalert") and the IDebug crash hook (crashhook.c, data.source
+ * "crash_hook", with register state), which catches every task
+ * exception. Both reach events.wait and debug.exception subscribers.
  *
  * Every connection has its own worker Process and its own ev_state,
  * so one client's subscriptions never see another's.
@@ -121,6 +126,9 @@ int events_wait(cJSON *params, cJSON **out_result, cJSON **out_err) {
     /* Baseline snapshot. */
     struct ExecBase *eb = (struct ExecBase *)SysBase;
     uint32_t prev_alert = (uint32_t)eb->LastAlert[0];
+    extern uint32_t crashhook_seq(void);
+    extern uint32_t crashhook_fill(cJSON *data);
+    uint32_t prev_crash = crashhook_seq();
 
     char (*prev_tasks)[TASK_NAME_LEN] = NULL;
     int prev_count = 0;
@@ -177,6 +185,7 @@ int events_wait(cJSON *params, cJSON **out_result, cJSON **out_err) {
                     cJSON *ev = cJSON_CreateObject();
                     cJSON_AddStringToObject(ev, "topic", "debug.exception");
                     cJSON *data = cJSON_AddObjectToObject(ev, "data");
+                    cJSON_AddStringToObject(data, "source", "lastalert");
                     cJSON_AddNumberToObject(data, "alert_code",
                                             (double)cur_alert);
                     /* Re-use the alert decoder from sys.c. */
@@ -196,6 +205,19 @@ int events_wait(cJSON *params, cJSON **out_result, cJSON **out_err) {
                 prev_alert = cur_alert;
                 got_change = 1;
             }
+        }
+
+        /* A crash the IDebug hook caught (crashhook.c). It sees every
+         * task exception, including ones whose alert code matches the
+         * LastAlert already recorded, which the check above misses. */
+        if (want_excpt && crashhook_seq() != prev_crash) {
+            prev_crash = crashhook_seq();
+            cJSON *ev = cJSON_CreateObject();
+            cJSON_AddStringToObject(ev, "topic", "debug.exception");
+            cJSON *data = cJSON_AddObjectToObject(ev, "data");
+            (void)crashhook_fill(data);
+            cJSON_AddItemToArray(events, ev);
+            got_change = 1;
         }
 
         if (want_task) {
@@ -277,6 +299,11 @@ static struct ev_state *ev_state(void) {
 
 /* Forward declaration; definition lives further down in this file. */
 int events_drain_synthetic(int sock);
+
+/* For crashhook.c: is this connection subscribed to debug.exception? */
+int events_wants_debug_exception(void) {
+    return (ev_state()->topics_mask & EV_TOPIC_DEBUG_EXC) != 0;
+}
 
 
 /* Public: called by the connection idle loop in main.c. Returns 1
@@ -404,11 +431,10 @@ int events_unsubscribe(cJSON *params, cJSON **out_result, cJSON **out_err) {
 }
 
 
-/* Public: called by main.c handle_connection() on disconnect. Single-
- * client model means subscription state is global; if a client closes
- * its connection without an explicit events.unsubscribe, the next
- * client must not inherit the previous client's topics or pending
- * synthetic notification. */
+/* Clear this connection's subscription and any pending synthetic
+ * notification. Nothing calls it today (main.c only declares it):
+ * each connection's ev_state lives in its own conn_ctx and ends with
+ * its worker, so a new client never inherits an old one's topics. */
 void events_client_reset(void) {
     ev_state()->topics_mask = 0;
     ev_state()->baseline_initialized = 0;
@@ -421,7 +447,8 @@ void events_client_reset(void) {
 
 
 /* Drain the synthetic-notification slot if populated. Called from
- * events_emit_pending() on every idle/response-edge tick. */
+ * events_emit_pending(), which handle_connection runs on every idle
+ * tick and just before each response frame. */
 int events_drain_synthetic(int sock) {
     if (!ev_state()->pending_synthetic) return 0;
     char *json = cJSON_PrintUnformatted((cJSON *)ev_state()->pending_synthetic);
@@ -438,8 +465,9 @@ int events_drain_synthetic(int sock) {
 /* events.test_emit { topic: string, data?: object }
  *
  * Synthesize a JSON-RPC notification for the test harness to verify
- * the server-push path works end-to-end. The notification is
- * delivered by the next idle-poll tick (within ~200ms). */
+ * the server-push path works end-to-end. handle_connection drains it
+ * before writing this call's own response, so the notification
+ * arrives just ahead of that response. */
 int events_test_emit(cJSON *params, cJSON **out_result, cJSON **out_err) {
     const char *topic = p_str(params, "topic", out_err);
     if (!topic) return 0;

@@ -102,6 +102,7 @@ mcpd/
     rpc.c, rpc.h        JSON-RPC dispatch + method registry
     b64.c, b64.h        base64 codec
     sha256.c, sha256.h  public-domain SHA-256 reference impl
+    crc32.c, crc32.h    CRC-32 for checking raw streams end to end
     discovery.c/h       UDP discovery responder peer task
     jobs.c, jobs.h      job table for exec.* (32 records), job and
                         worker priorities
@@ -109,8 +110,13 @@ mcpd/
                         state on user-task DSI / ISI faults)
     methods/
       proto.c           proto.capabilities, proto.version
-      sys.c             sys.* introspection (23 methods)
+      methods.h         handler prototypes for every method
+      sys.c             sys.* introspection (18 of the 23 sys.*
+                        methods; the rest are in hwres.c, elfm.c,
+                        applib.c and mcu.c)
       fs.c              fs.* (12 methods, incl. fs.sync)
+      stream.c          fs.stream_get / fs.stream_put /
+                        fs.stream_status (raw byte streams)
       exec.c            exec.* (cmd, status, output, kill, list)
       wb.c              wb.* (4 introspection methods)
       screen.c          wb.screenshot (ReadPixelArray + PNG encode
@@ -121,7 +127,8 @@ mcpd/
       events.c          events.{wait,subscribe,unsubscribe,test_emit}
       hwres.c           sys.hardware.{i2c,perfcounters}
       elfm.c            sys.executable.symbols (ELF reader)
-      applib.c          sys.applications, app.notify, app-register glue
+      applib.c          sys.applications, app.notify, app-register glue,
+                        screen-blanker hold during file transfers
       mcu.c             sys.mcu_cmd (X5000 Cyrus MCU UART supervisor)
       amigautil.c       SystemTagList wrapper
       helpers.c         param parsing helpers
@@ -131,22 +138,34 @@ mcpd/
     MCPd-Watchdog       relaunch wrapper
     MCPd-Enable-Input   opens the input.* gate (operator action)
     MCPd-Disable-Input  closes it again
-  third-party/cjson     cJSON 1.7.18 (submodule)
+third-party/cjson       cJSON 1.7.18 (submodule, at the repository root)
+VERSION                 the version, read by the Makefile
 ```
+
+### Version number
+
+The version is declared once, in the `VERSION` file at the repository
+root. `mcpd/Makefile` reads it and passes it to the compiler as
+`MCPD_VERSION_STR`; a build that bypasses the Makefile stops with an
+error in `rpc.h`. The host package takes the same file through
+hatchling's dynamic version (`[tool.hatch.version]` in
+`host/pyproject.toml`), and `scripts/build_release_lha.py` names the
+archive from it. To change the version, edit `VERSION` and nothing
+else.
 
 ### Adding a new RPC method
 
 1. Implement the handler in an existing or new
    `mcpd/src/methods/*.c` file. The signature is
    `int my_method(cJSON *params, cJSON **out_result, cJSON **out_err)`.
-2. Add an `extern` declaration plus a registry entry to
-   `mcpd/src/rpc.c`.
+2. Add the handler prototype to `mcpd/src/methods/methods.h` and a
+   registry entry to the `mcpd_methods[]` table in `mcpd/src/rpc.c`.
 3. If the file is new, list it in `mcpd/Makefile` under `SRCS`.
 4. Rebuild and redeploy via `scripts/install_mcpd_autostart.py`.
 5. Add a host-side wrapper in `host/src/amiga_fleet_mcp/tools/` and
    register it as an MCP tool in `host/src/amiga_fleet_mcp/server.py`.
-6. Add coverage to one of the round validation scripts under
-   `scripts/`.
+6. Add coverage to `scripts/validate_full.py` (each check skips when
+   the daemon does not list the method).
 
 ## Building the host server
 
@@ -182,7 +201,8 @@ lifting a bound is a porting change, not a version bump.
 cd host
 python -m venv .venv
 . .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e .[dev]
+pip install -e . --group dev  # pip 25.1+; the dev tools are a
+                              # dependency group, not an extra
 amiga-fleet-mcp --version
 ```
 
@@ -200,7 +220,7 @@ matching sdist.
 
 ```sh
 cd host
-uv run pytest tests/unit -q                  # unit tests (≈380)
+uv run pytest tests/unit -q                  # unit tests (≈420)
 uv run mypy src                              # type-check
 uv run ruff check src tests                  # lint
 ```
@@ -212,14 +232,17 @@ by the scripts described in [USAGE.md](USAGE.md).
 
 `.github/workflows/ci.yml` exercises:
 
-- **Host job**: `uv sync --frozen` against Python 3.11 / 3.12 / 3.13, then
-  `ruff check src tests`, `mypy src`, and `pytest -q`.
-- **MCPd job**: pulls `walkero/amigagccondocker:os4-gcc11` and runs
-  `make all` from the project root mounted at `/src`. The
-  cross-compile must succeed cleanly (zero warnings beyond known
-  cJSON `override-init` notes).
+- **Host job**: `uv sync --dev --frozen` against Python 3.11 / 3.12 /
+  3.13, then `ruff check src tests`, `mypy src`, `pytest -q`, and an
+  `amiga-fleet-mcp --version` smoke test.
+- **MCPd job**: checks out the submodules, pulls
+  `walkero/amigagccondocker:os4-gcc11` and runs `make all` in `mcpd/`
+  with the project root mounted at `/src`, then checks that
+  `mcpd/MCPd` was produced. Keep the build free of new warnings; CI
+  does not fail on them.
 
-Per-PR runs cover both jobs. End-to-end QEMU validation runs locally
+Both jobs run on every push and pull request to `main` and
+`develop`. End-to-end QEMU validation runs locally
 on demand and is not part of CI.
 
 ## Third-party dependencies

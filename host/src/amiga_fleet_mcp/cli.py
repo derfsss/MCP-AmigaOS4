@@ -191,8 +191,9 @@ async def cmd_events_soak(args: argparse.Namespace) -> int:
     from .tools import events as etool
     from .tools import sys as stool
 
-    # Warmup is now in the transport (#4) but a few visible iters are
-    # still useful for the operator to see the daemon come up cleanly.
+    # The transport warms a cold daemon up only before a resend after
+    # a reconnect (#4), so a few visible iters are still useful for
+    # the operator to see the daemon come up cleanly.
     for i in range(3):
         try:
             await stool.sys_uptime(fleet, target)

@@ -1,11 +1,20 @@
 /* fs.* method handlers.
  *
- * fs.list      - dos.library ExamineDir loop (AOS4 v50+ helper).
- * fs.stat      - ExamineObjectTags on Lock.
- * fs.read      - Open + Read, base64-encoded result.
- * fs.write     - Decode base64, Open MODE_NEWFILE + Write.
- * fs.delete    - DeleteFile.
- * fs.makedir   - CreateDir.
+ * fs.list        - dos.library ExamineDir loop (AOS4 v50+ helper).
+ * fs.stat        - ExamineObjectTags on the path name.
+ * fs.read        - Open + Read of a slice, base64-encoded result.
+ * fs.write       - Decode base64 (optionally zlib), Open MODE_NEWFILE
+ *                  + Write.
+ * fs.write_chunk - The same, one chunk at an offset.
+ * fs.delete      - IDOS->Delete, or `Delete ALL` when recursive.
+ * fs.hash        - Streaming SHA-256.
+ * fs.makedir     - CreateDir.
+ * fs.rename      - Rename.
+ * fs.protect     - SetProtection.
+ * fs.copy        - `Copy ... CLONE`.
+ * fs.sync        - ACTION_FLUSH to the path's handler.
+ *
+ * fs.stream_get / fs.stream_put / fs.stream_status are in stream.c.
  */
 
 #include "../b64.h"
@@ -28,15 +37,18 @@
 #include <libraries/z.h>
 
 /* z.library interface - opened in main.c. Routing zlib through the
- * shared OS library avoids fragmenting clib4's heap with the multi-MiB
+ * shared OS library avoids fragmenting newlib's heap with the multi-MiB
  * inflate buffers. NULL if the library wasn't available at startup;
  * compression="zlib" requests then return -32602. */
 extern struct ZIFace *IZ;
 
-/* Per-call ceiling on a single fs.read slice. Tracks the framing
- * cap in frame.h - the response envelope wrapping this payload must
- * fit in MCPD_FRAME_MAX_PAYLOAD. */
-#define FS_READ_MAX_BYTES (32u * 1024u * 1024u)
+/* Per-call ceiling on a single fs.read slice: the largest slice whose
+ * base64 answer (a third larger) still fits MCPD_FRAME_MAX_PAYLOAD
+ * with 64 KiB left for the JSON around it. The same number as the
+ * host's MAX_CHUNK_RAW (upload.py), 25116672 bytes. A larger slice is
+ * refused with an error; it used to pass a 32 MiB check, then
+ * frame_write refused the answer and the connection was dropped. */
+#define FS_READ_MAX_BYTES ((32u * 1024u * 1024u - 65536u) / 4u * 3u)
 
 /* Per-call ceiling on a decompressed fs.write/write_chunk payload.
  * Higher than FS_READ_MAX_BYTES because zlib compression can multiply
@@ -44,9 +56,10 @@ extern struct ZIFace *IZ;
  * spikes when a client sends a maliciously crafted high-ratio blob. */
 #define FS_WRITE_DECOMPRESSED_MAX (128u * 1024u * 1024u)
 
-/* Decode a zlib-compressed base64 string into raw bytes. Returns
- * malloc'd buffer + size on success; NULL on failure with err_msg
- * pointing to a static string. Caller must free the return.
+/* Inflate zlib-compressed bytes (already base64-decoded). Returns an
+ * AllocVecTags buffer + size on success; NULL on failure with err_msg
+ * pointing to a static string. Caller releases it with b64_free (or
+ * FreeVec).
  * `expected_size` may be 0 - if non-zero, the result must match
  * exactly (otherwise -> "size mismatch"). */
 static unsigned char *_decompress_zlib(
@@ -107,8 +120,8 @@ static unsigned char *_decompress_zlib(
 
     /* No expected_size: stream-inflate into a growing buffer. Start
      * at 4x the compressed size; double when it fills. AllocVecTags
-     * MEMF_SHARED throughout (NOT clib4 malloc) to keep the multi-MiB
-     * transient out of clib4's fragmenting heap. */
+     * throughout (NOT newlib malloc) to keep the multi-MiB transient
+     * out of newlib's fragmenting heap. */
     z_stream zs;
     memset(&zs, 0, sizeof(zs));
     if (IZ->InflateInit(&zs) != Z_OK) {
@@ -170,8 +183,8 @@ static unsigned char *_decompress_zlib(
 
 /* Decode a write payload from params. Honours `compression` ("none"
  * or "zlib") and `raw_size` (optional hint for zlib path). Returns
- * malloc'd raw bytes + size on success; NULL with *out_err set on
- * failure. */
+ * raw bytes in an AllocVecTags buffer (release with b64_free) + size
+ * on success; NULL with *out_err set on failure. */
 static unsigned char *_decode_write_payload(
     cJSON *params, size_t *out_n, cJSON **out_err)
 {
@@ -405,7 +418,7 @@ int fs_read(cJSON *params, cJSON **out_result, cJSON **out_err) {
     const char *path = p_str(params, "path", out_err);
     if (!path) return 0;
 
-    /* Optional partial-read params (sec 7.2):
+    /* Optional partial-read params:
      *   offset - byte offset to start at (default 0)
      *   length - max bytes to read (default = full file - offset)
      * If specified, the result.size is the bytes actually read,
@@ -451,7 +464,7 @@ int fs_read(cJSON *params, cJSON **out_result, cJSON **out_err) {
             cJSON_AddNumberToObject(data, "max", (double)FS_READ_MAX_BYTES);
         }
         *out_err = rpc_make_error(MCPD_ERR_TARGET,
-                                  "fs.read slice exceeds 32 MiB cap", data);
+                                  "fs.read slice too large for one frame (max 25116672 bytes; read it in slices)", data);
         return 0;
     }
 
@@ -540,12 +553,12 @@ int fs_write(cJSON *params, cJSON **out_result, cJSON **out_err) {
 
 /* ---- fs.write_chunk -------------------------------------------- */
 /*
- * Chunked / resumable upload primitive (option B in the planning
- * report). The host slices a large local file into <=24 MiB pieces
- * (so each chunk's base64 fits the 32 MiB JSON-RPC frame) and calls
+ * Chunked / resumable upload primitive. The host slices a large
+ * local file into pieces just under 24 MiB (so each chunk's base64
+ * plus the JSON envelope fits the 32 MiB JSON-RPC frame) and calls
  * fs.write_chunk repeatedly with monotonically increasing offsets.
  * Compression is per-chunk - the host can zlib each chunk before
- * base64 to push more bytes through each frame (option F).
+ * base64 to push more bytes through each frame.
  *
  * Params:
  *   path:        REQUIRED string. Destination file.
@@ -556,18 +569,16 @@ int fs_write(cJSON *params, cJSON **out_result, cJSON **out_err) {
  *   raw_size:    optional int. Decompressed size hint when
  *                compression="zlib"; lets the daemon allocate
  *                exactly + verify size match.
- *   truncate:    optional bool. If true, truncate the file to
- *                exactly (offset + chunk_len) after writing this
- *                chunk. Default: true when offset==0, false otherwise
- *                - i.e. the first chunk acts like fs.write
- *                (truncating any pre-existing file), subsequent
- *                chunks just seek+write. Pass truncate=false on
- *                the first chunk to opt into "patch existing file
- *                in place".
- *   total_size:  optional int. Hint that lets the daemon pre-extend
- *                the destination (single SetFileSize) so that many
- *                small chunks don't repeatedly grow metadata. Pure
- *                hint - safe to omit.
+ *   truncate:    optional bool, only acted on when offset == 0.
+ *                Default true there: the chunk is written to a file
+ *                opened MODE_NEWFILE, so it acts like fs.write
+ *                (replacing any pre-existing file). Pass
+ *                truncate=false on the first chunk to open it
+ *                MODE_READWRITE instead and "patch existing file in
+ *                place". Chunks at offset > 0 always seek+write; the
+ *                file is never cut short.
+ *   total_size:  optional int. Accepted and ignored: pre-extending
+ *                the destination is disabled (see below).
  *
  * Returns: { path, offset, written, total_so_far }
  *   - written = bytes actually written for THIS chunk
@@ -670,7 +681,7 @@ int fs_delete(cJSON *params, cJSON **out_result, cJSON **out_err) {
     const char *path = p_str(params, "path", out_err);
     if (!path) return 0;
 
-    /* Optional `recursive` flag (sec 7.2). When set, shell out to
+    /* Optional `recursive` flag. When set, shell out to
      * AmigaDOS `Delete <path> ALL` so we don't need to write our
      * own dir-tree walker (which would have to handle MultiAssign,
      * symlinks, etc.). Slightly slower but matches user
@@ -873,8 +884,9 @@ int fs_protect(cJSON *params, cJSON **out_result, cJSON **out_err) {
 /* AmigaDOS doesn't have a single dos.library Copy() that we can call
  * directly with the right semantics (CLONE preserves protection +
  * date), so we shell out to `Copy <src> TO <dst> CLONE` via
- * SystemTagList - same pattern as exec.cmd / sys.version. The capture
- * is mostly empty on success; non-empty stdout indicates an error.
+ * amiga_run_command (synchronous SystemTags) - the same helper
+ * sys.version and fs.delete recursive use. A non-zero return code
+ * is the failure signal; the captured output is returned either way.
  */
 int fs_copy(cJSON *params, cJSON **out_result, cJSON **out_err) {
     const char *src = p_str(params, "src", out_err);

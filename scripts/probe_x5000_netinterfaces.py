@@ -1,4 +1,8 @@
-"""Direct JSON-RPC probe of a target's BootTest: NetInterfaces.
+"""Direct JSON-RPC probe of a target's network configuration.
+
+Lists DEVS:NetInterfaces, DEVS:NetInterfaces/Plugins, DEVS:Internet and
+ENV:Sys/Net, then prints every DEVS:NetInterfaces file (except .info
+icons). Raw fs.list / fs.read calls, one TCP connection per call.
 
 Configuration:
   --endpoint <host:port>   MCPd endpoint (default $MCPD_ENDPOINT;

@@ -4,12 +4,11 @@ Each `<machine>.py` defines a `build()` function that returns a
 `Sequence` (list of named `Step`s). A SequenceRunner executes those
 steps in order with halt-on-failure and per-step timing.
 
-Currently implemented:
-    x5000  — full bootable install for AmigaOne X5000
-
-Deferred to follow-up sessions:
-    a1222     — needs RescueV2 USB on the target
-    pegasos2  — needs Pegasos2 install ISO + QEMU validation
+Implemented, each a thin wrapper over `_generic.build_sequence` with
+its config from `_machine_config.py`:
+    x5000     — AmigaOne X5000
+    a1222     — A1222 (Tabor); standard Enhancer LHA flow, no RescueV2
+    pegasos2  — Pegasos II
     amigaone  — original A1XE/A1-SE
     sam460    — Sam460ex
 """

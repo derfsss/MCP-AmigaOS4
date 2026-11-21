@@ -347,8 +347,9 @@ int debug_write_memory(cJSON *params, cJSON **out_result, cJSON **out_err) {
         return 0;
     }
 
-    /* Refuse 0-byte writes (no point) and writes to NULL (PowerPC
-     * NULL deref crashes the daemon). */
+    /* A 0-byte write does nothing and reports bytes_written 0; a
+     * write to NULL is refused (PowerPC NULL deref crashes the
+     * daemon). */
     if (n == 0) {
         b64_free(data);
         cJSON *r = cJSON_CreateObject();

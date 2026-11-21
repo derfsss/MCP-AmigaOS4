@@ -143,9 +143,9 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
 
         Set compression='zlib' to send zlib-compressed bytes
         (pair with raw_size, the decompressed length, so the daemon
-        pre-allocates exactly). For files larger than ~24 MiB raw
-        use fs_write_chunk instead - the JSON-RPC frame cap is 32 MiB
-        post-base64."""
+        pre-allocates exactly). For files of ~24 MiB raw or more
+        use fs_write_chunk (or fs_upload) instead - the JSON-RPC frame
+        cap is 32 MiB post-base64."""
         return await fs_tool.fs_write(
             fleet, fleet.resolve_target(target), path, content_b64,
             compression="zlib" if compression == "zlib" else "none",
@@ -281,8 +281,8 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
             UTF-8 / arbitrary bytes round-trip exactly
           - **auto-zlib-compresses** each chunk when
             `compression="auto"` (default) and the result is at
-            least 5% smaller; skips pre-compressed .lha / .zip /
-            .iso payloads automatically
+            least 5% smaller, so pre-compressed .lha / .zip
+            payloads go uncompressed
 
         `resume=True`: probe the remote with `fs.stat` and
         continue upload from the existing on-target size. Useful
@@ -677,7 +677,10 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         *, target: str | None = None,
         pa: int, count: int = 1, width: int = 4,
     ) -> sys_tool.ReadPaResult:
-        """DANGEROUS supervisor-mode read at any 36-bit PA.
+        """DANGEROUS supervisor-mode read at a physical address.
+
+        The daemon uses pa as a 32-bit address (higher bits are
+        dropped) and reads through the kernel's current mapping.
 
         *** WRONG pa CRASHES THE CONNECTION-HANDLER TASK *** (DSI in
         supervisor mode). The daemon's main listener and other
@@ -901,7 +904,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     @mcp.tool(name="wb_screens", title="wb.screens")
     @archived("wb.screens", archive)
     async def wb_screens(*, target: str | None = None) -> wb_tool.ScreensResult:
-        """List public screens with title / dimensions / window count."""
+        """List every open screen with title / dimensions / window count."""
         return await wb_tool.wb_screens(fleet, fleet.resolve_target(target))
 
     @mcp.tool(name="wb_windows", title="wb.windows")
@@ -1258,10 +1261,12 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         topics: list[str] | None = None,
         timeout_ms: int = 5000,
     ) -> events_tool.EventsWaitResult:
-        """Long-poll for events on subscribed topics. The daemon
+        """Long-poll for events on the given topics (no events.subscribe
+        needed). The daemon
         snapshots state at call start, polls every 200 ms, and
         returns the first list of deltas it sees (or [] on timeout).
-        Topics: 'sys.lastalert', 'sys.task'."""
+        Topics: 'sys.lastalert', 'sys.task', 'debug.exception'
+        (default: all)."""
         return await events_tool.events_wait(
             fleet, fleet.resolve_target(target),
             topics=topics,  # type: ignore[arg-type]
@@ -1506,12 +1511,13 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         settle_s: float | None = None,
     ) -> qemu_tool.QemuStopResult:
         """Stop QEMU. Tries QMP `quit`, falls back to terminate / kill,
-        and works on a guest this process did not start. If anything
-        has been written to the target, the guest first gets settle_s
-        seconds (default 10) to write its filesystem cache back --
-        stopping QEMU is abrupt and an unflushed write is lost. A
-        target that was only read from waits not at all; pass
-        settle_s=0 to skip the wait entirely."""
+        and works on a guest this process did not start. Stopping QEMU
+        is abrupt and an unflushed write is lost, so first, whenever
+        MCPd answers, the guest's SYS: is flushed with fs.sync. Only
+        if that fails (a daemon without fs.sync) does it wait instead:
+        up to settle_s seconds (default 10) after the last write made
+        through this server, and not at all if there was none. Pass
+        settle_s=0 to skip that wait."""
         return await qemu_tool.qemu_stop(
             fleet, fleet.resolve_target(target),
             qmp_timeout_s=qmp_timeout_s, settle_s=settle_s,
@@ -1535,7 +1541,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     @mcp.tool(name="qemu_status", title="qemu.status")
     @archived("qemu.status", archive)
     async def qemu_status(*, target: str | None = None) -> qemu_tool.QemuStatusResult:
-        """Process / QMP / SerialShell reachability summary."""
+        """Process / QMP / MCPd reachability summary."""
         return await qemu_tool.qemu_status(fleet, fleet.resolve_target(target))
 
     @mcp.tool(name="qemu_screenshot", title="qemu.screenshot")
@@ -1623,18 +1629,19 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     # ============================================================
     # NAMESPACE DISPATCHERS (#6 from the API tidy pass)
     # ============================================================
-    # 9 thin wrappers that fold the 73 fine-grained tools into 9
-    # namespaced dispatchers. Each takes a `method` arg (the dotted-
-    # form suffix, e.g. "list" / "write_chunk") plus the underlying
-    # method's kwargs. Lets MCP clients scan 9 docstrings to find
-    # what's available rather than 73 individual tools. Fine-grained
+    # One thin wrapper per namespace (15 of them) that folds that
+    # namespace's fine-grained tools into a single dispatcher. Each
+    # takes a `method` arg (the dotted-form suffix, e.g. "list" /
+    # "write_chunk") plus the underlying method's kwargs. Lets MCP
+    # clients scan 15 docstrings to find what's available rather
+    # than every individual tool. Fine-grained
     # tools above are kept registered for backward-compat with
     # existing scripts; clients that prefer the consolidated surface
     # can use these.
 
     def _ns(handlers: dict[str, Any], method: str, kwargs: dict) -> Any:
         """Common dispatch helper: resolve target, look up handler,
-        invoke. Raises InvalidParams on unknown method."""
+        invoke. Raises MethodNotFound on unknown method."""
         target = fleet.resolve_target(kwargs.pop("target", None))
         fn = handlers.get(method)
         if fn is None:
@@ -1673,10 +1680,12 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
           protect(target, path, bits)
           copy(target, src, dst)
           hash(target, path, algo="sha256")
+          sync(target, path="SYS:")
           upload(target, local_path, remote_path, chunk_size=24M,
-                 compression="auto", verify=False, resume=False)
+                 compression="auto", verify=False, resume=False,
+                 transfer="auto")
           download(target, remote_path, local_path, chunk_size=24M,
-                   verify=False, resume=False)
+                   verify=False, resume=False, transfer="auto")
 
         target=None falls back to server.default_target.
         """
@@ -1707,7 +1716,8 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
           system resources   : memory, volumes, assigns
           hardware probing   : hardware, hardware_i2c, hardware_perfcounters
           executable / debug : executable_symbols
-          alerts / power     : lastalert, alert_decode, cold_reboot
+          alerts / power     : lastalert, alert_decode, cold_reboot,
+                               debug_ring
           memory introspection (PA / TLB / CCSR, P5020/P1022 only):
                                read_ccsr, read_pa, tlb_dump
           board supervisor   : mcu_cmd
@@ -1809,7 +1819,8 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
 
           cmd(target, command, args=None, cwd=None, timeout_s=30,
               priority=None, sandbox=False, sandbox_extmem_mb=None,
-              sandbox_window_mb=None, sandbox_deny_libs=None)
+              sandbox_window_mb=None, sandbox_deny_libs=None,
+              sandbox_time_limit_s=None)
           status(target, job_id)
           output(target, job_id, offset=0, max_bytes=65536)
           kill(target, job_id, signal="c", wait_s=2, force=False)
@@ -1907,7 +1918,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
           run_on_all(method, params, targets, tags),
           barrier(method, params, targets, per_target_timeout_s, tags),
           quorum_run(method, quorum, params, targets, overall_timeout_s, tags),
-          discover(timeout_s)
+          discover(timeout_ms=1500)
 
         target_status takes a target arg (default from config).
         Other methods don't take a target.
@@ -1934,7 +1945,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
 
           list_suites(), parse_output(output_b64),
           run_standard_dos_tests(target),
-          run_suite(target, suite, skip_uploads=False)
+          run_suite(target, suite, skip_uploads=False, priority=None)
         """
         if method in ("list_suites", "parse_output"):
             handlers = {
@@ -2048,9 +2059,9 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
     ) -> installer_tool.MountIsoResult:
         """Mount an ISO via diskimage.device + MountDiskImage and
         wait for the volume to appear. Reversible via unmount_iso.
-        Requires the diskimage bootstrap files to be present on
-        the target (per-machine install sequences stage them before
-        calling)."""
+        Requires MountDiskImage / diskimage.device / CDFileSystem on
+        the running system (AmigaOS 4.1 ships them; nothing stages
+        them, the install sequences only check for them first)."""
         return await installer_tool.installer_mount_iso(
             fleet, fleet.resolve_target(target),
             iso_path=iso_path, dos_device=dos_device, unit=unit,
@@ -2210,9 +2221,9 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         dry_run: bool = True,
         confirm: bool = False,
     ) -> Any:
-        """Dispatcher to per-machine install sequences. Currently
-        implemented: X5000. Other machines raise InvalidParams.
-        Default dry_run=True; pass dry_run=False, confirm=True to
+        """Dispatcher to per-machine install sequences: X5000, A1222,
+        AmigaOne, PegasosII and Sam460 (aliases accepted). An unknown
+        machine raises InvalidParams. Default dry_run=True; pass dry_run=False, confirm=True to
         execute. dest_volume / machine / sources_dir / iso_filename
         fall back to `[defaults]`."""
         dest_volume = _default(dest_volume, "dest_volume", "dest_volume")
@@ -2252,8 +2263,8 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
 
         If `iso_lha_path` is provided (or `<iso>.lha` exists next to
         the iso in sources_dir), the LHA-of-ISO form is uploaded
-        instead of the raw ISO -- saves ~60% bandwidth on incompressible
-        ISO data. The install sequence's `extract_iso_lha` step
+        instead of the raw ISO -- saves ~60% bandwidth, since ISOs
+        compress well. The install sequence's `extract_iso_lha` step
         recovers the .iso file on the target before mount.
         dest_volume / sources_dir / machine / iso_filename fall back
         to `[defaults]`."""
@@ -2312,16 +2323,30 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         Step primitives (confirm=True for mutating):
           mount_iso(target, iso_path, dos_device="...", unit=50,
                     expected_volume=..., timeout_s=30, settle_s=3)
-          unmount_iso(target, unit=50)
+          unmount_iso(target, unit=50, timeout_s=15)
           copy_tree(target, src, dst, all_=True, clone=True,
-                    quiet=True, confirm)
-          apply_lha(target, archive, dest, confirm)
+                    quiet=True, confirm, timeout_s=600)
+          apply_lha(target, archive, dest, confirm, timeout_s=600)
           read_kicklayout(target, dest_volume)
           write_kicklayout(target, dest_volume, content, confirm,
                            backup_suffix=".bak")
           patch_kicklayout(target, dest_volume, add_modules,
                            replace_text, confirm,
                            backup_suffix=".bak")
+
+        Install pipeline (stage needs confirm=True; run and
+        install_x5000 only plan unless dry_run=False, confirm=True):
+          stage(target, dest_volume, sources_dir, machine,
+                iso_filename=None, iso_lha_path=None, confirm)
+          run(target, dest_volume, machine, iso_filename=None,
+              sources_dir=None, dry_run=True, confirm=False)
+          install_x5000(target, dest_volume, iso_filename=None,
+                        sources_dir=None, dry_run=True, confirm=False)
+          verify(target, dest_volume, machine, extra_paths=None,
+                 check_sha256=False)
+
+        Unlike the fine-grained installer_* tools, this dispatcher
+        does not fill in `[defaults]`: pass every argument.
         """
         p = dict(params or {})
         if method == "list_machines":
@@ -2585,6 +2610,8 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
         guest exit, positive for the guest's own rc, negative for
         traps (-768 == DSI, -1024 == ISI, ...). When the exit code
         matches a known trap shape, ``trap_kind`` is populated.
+        SandboxVM 1.1+ exits 50 for any trap instead; ``trap_kind``
+        then comes from its trap report in the kernel debug ring.
 
         For arbitrary AmigaDOS commands without the SandboxVM
         harness, use ``exec.cmd``. For JSON-config-driven multi-step
@@ -2701,7 +2728,7 @@ def register_tools(mcp: MCPServer, fleet: Fleet, archive: Archive) -> None:
                      name=None, timeout_s=120.0)
           run_batch(target=None, guests=[{guest, name?}, ...],
                     extmem_mb=None, window_mb=None, deny_libs=None,
-                    name=None, timeout_s=600.0)
+                    name=None, timeout_s=600.0, priority=None)
           last_trap(target=None, since_s=60.0, max_lines=500,
                     retry_count=3, retry_delay_s=0.2)
 
