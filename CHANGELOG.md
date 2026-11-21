@@ -1,6 +1,6 @@
 # Change log
 
-## 2.5 — Notifications that return (not released yet)
+## 2.5 — Notifications that return
 
 ### Fixed
 
