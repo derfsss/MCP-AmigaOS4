@@ -31,13 +31,12 @@ Compiled into MCPd, used at run time, or relied upon by the host:
 - **cJSON** ([`DaveGamble/cJSON`](https://github.com/DaveGamble/cJSON))
   — MIT-licensed compact JSON parser. Vendored as a submodule at
   `third-party/cjson` (pinned at `v1.7.18`).
-- **clib4** ([`AmigaLabs/clib4`](https://github.com/AmigaLabs/clib4))
-  — modern POSIX-shaped C library for AmigaOS 4. Linked into MCPd
-  by the cross-compile toolchain.
+- **newlib** — the C runtime MCPd is built against (the AmigaOS 4
+  toolchain's default), provided on the target by `newlib.library`.
 - **Public-domain SHA-256 reference implementation** — used by
   `fs.hash`. Inline in `mcpd/src/sha256.c`.
 - **z.library** — the AmigaOS 4 shared port of zlib, used for
-  compressed uploads and for encoding PNGs in `wb.screenshot`.
+  compressed chunked uploads and for encoding PNGs in `wb.screenshot`.
 - **SandboxVM** ([`derfsss/SandboxVM`](https://github.com/derfsss/SandboxVM))
   — the in-process sandbox host the `sandbox.*` tools drive, which is
   what lets a guest crash without taking the machine with it, and

@@ -26,7 +26,8 @@ in the table below:
   Used when patches are substantial.
 - **(b) Patches** — submodule points at an upstream pinned commit;
   patches live in `third-party/<name>-patches/*.patch` and are applied
-  at build time. Used when patches are small.
+  with `scripts/apply-patches.sh` after `git submodule update` (no
+  submodule uses this today). Used when patches are small.
 - **(c) Clean** — submodule points at an upstream commit; no patches
   needed. The library compiles for AmigaOS 4 unmodified.
 
@@ -42,10 +43,9 @@ in the table below:
    patch files in deterministic order (`0001-*.patch`, etc.).
 6. For strategy (a), fork on the project organisation, push the
    patched branch, point the submodule at the fork.
-7. Place the licence's full text (verbatim) in `LICENSES/<SPDX>.txt`
-   if it isn't already there.
-8. Single commit: submodule add + this file's row + the licence text
-   if new.
+7. Check that the submodule carries the upstream licence file; it is
+   referenced from the table, not copied (see the policy above).
+8. Single commit: submodule add + this file's row.
 
 ## Vendored libraries (submodules)
 
@@ -66,6 +66,10 @@ no source is vendored into this repository.
 | `pyserial` | 3.5 | BSD-3-Clause | Serial-console bootstrap and the `serial.*` / `power.*` host channels. |
 | [`qemu-runner`](https://github.com/derfsss/qemu-runner) | v1.3.1 (pinned commit `bb72730`), installed from GitHub | MIT ([LICENSE](https://github.com/derfsss/qemu-runner/blob/main/LICENSE)) | QMP client for the `qemu.*` tools, and the serial client some `scripts/` use. |
 
+Development only (the `dev` dependency group, not installed with the
+package): `pytest` (MIT), `pytest-asyncio` (Apache-2.0), `ruff`
+(MIT), `mypy` (MIT). The build backend is `hatchling` (MIT).
+
 ## AmigaOS shared libraries linked at run time
 
 These ship with AmigaOS or with separately-installed packages on the
@@ -81,5 +85,6 @@ likewise a separate program on the target, uploaded by
 | `z.library` | 53 or later | zlib (Hyperion port of zlib) | Decompressing `fs.upload` chunks and encoding PNGs for `wb.screenshot`. |
 | `keymap.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Layout-correct typing for `input.type`. |
 | `graphics.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Screen capture for `wb.screenshot`. |
-| `dos.library`, `exec.library`, `intuition.library`, `application.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Standard system libraries. |
-| [`clib4`](https://github.com/AmigaLabs/clib4) (link-time) | 2.1 or later | GPL-2.0 with linking exception | POSIX-shaped C library. |
+| `elf.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | ELF symbol tables for `sys.executable.symbols`. |
+| `dos.library`, `exec.library`, `intuition.library`, `application.library`, `utility.library` | AmigaOS 4 base | proprietary (ships with AmigaOS 4) | Standard system libraries. |
+| `newlib.library` | AmigaOS 4 base | ships with AmigaOS 4 | The C runtime MCPd is linked against (the toolchain default, `-mcrt=newlib`). |

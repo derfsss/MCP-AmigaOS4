@@ -99,7 +99,8 @@ addresses. They require:
   aperture, the MCU UART, or some of the perfmon counters.
 
 `sys.read_pa` is **dangerous**: it performs an unchecked
-supervisor-mode load at any 36-bit physical address. A wrong PA
+supervisor-mode load at an address it uses as 32 bits wide (higher
+bits are dropped), through the kernel's current mapping. A wrong PA
 takes a DSI exception that crashes the connection-handling task
 (the daemon's main listener stays up by design — see the
 spawn-per-connection isolation note in `mcpd/src/main.c`). Use the
@@ -121,8 +122,11 @@ QEMU process and start a fresh one instead.
 later. The daemon encodes the PNG itself — AmigaOS 4.1 has no PNG
 *writer* datatype — so there is nothing else to install.
 
-Screens deeper than 8 bits per pixel are captured directly; the result
-reports the geometry and depth it actually read.
+Screens deeper than 8 bits per pixel are captured directly. A screen
+of 8 bits or less (a palette screen) is read as pens and expanded
+through the screen's palette (MCPd 2.4 and later; older daemons
+returned garbage for these). The result reports the geometry and
+depth it actually read.
 
 ### `input.*` (keyboard / mouse injection)
 
@@ -351,9 +355,10 @@ Then open the app and ask it something about your Amiga, such as
 > **Why it seems to hang when you run it yourself:** the server
 > talks to the app over its standard input and output (the "stdio"
 > transport, set by `[server] mcp_transport = "stdio"`). Run by hand
-> in a terminal, it prints the log folder and your target list, then
-> waits silently for the app's messages, which never come. That is
-> normal, not a hang. Press Ctrl-C to quit. To check your setup by
+> in a terminal, it logs the archive folder and your target list,
+> prints a note that it is waiting for an MCP client on stdin, then
+> waits for the app's messages, which never come. That is normal, not
+> a hang. Press Ctrl-C to quit. To check your setup by
 > hand, use the commands in
 > [Running it by hand for checks](#running-it-by-hand-for-checks).
 
@@ -532,8 +537,8 @@ blocks. See [USAGE.md](USAGE.md) for the configuration schema.
 
 The starter config also ships with a commented `[defaults]` block —
 uncomment and fill it in to give frequently-repeated parameters
-(`dest_volume`, `sources_dir`, `machine`, `iso_filename`) a
-fleet-wide default. See [USAGE.md § Per-tool
+(`dest_volume`, `sources_dir`, `machine`, `iso_filename`,
+`exec_priority`) a fleet-wide default. See [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults) for the full list of keys.
 
 If an AI agent is doing the install, point it at
@@ -604,7 +609,7 @@ start it once from the server first; [QEMU_CONFIG.md](QEMU_CONFIG.md)
 has the whole sequence. Then:
 
 - **Release archive.** Download `MCPd-<version>.lha` in the guest and
-  run `Execute MCPd/MCPd-Install`, as in
+  run `MCPd-Install` from the `MCPd` drawer it unpacks, as in
   [Manual install](#manual-install-no-host-helper). The simplest
   route; it also sets up auto-start.
 - **Web browser on the guest.** Same idea as real hardware —
@@ -648,7 +653,7 @@ it into the AmigaOS startup sequence:
 python scripts/install_mcpd_autostart.py <target-ip>:4322
 ```
 
-The installer performs five steps:
+The installer performs these steps:
 
 1. Creates the `SYS:System/MCPd/` drawer.
 2. Copies the binary to `SYS:System/MCPd/MCPd` and clears the
@@ -663,7 +668,10 @@ The installer performs five steps:
 4. Creates a one-time backup of `S:Network-Startup` at
    `S:Network-Startup.before-mcpd`.
 5. Idempotently appends a launch line that runs the watchdog from the
-   `Network-Startup` script.
+   `Network-Startup` script. A bare `Run >NIL: <NIL:
+   SYS:System/MCPd/MCPd` line left by `MCPd-Install` is replaced with
+   the watchdog line instead.
+6. Reads `S:Network-Startup` back to check the watchdog line is there.
 
 After the next reboot, MCPd binds on `:4322` within approximately
 eleven seconds of cold boot.
@@ -671,14 +679,18 @@ eleven seconds of cold boot.
 ### Manual install (no host helper)
 
 The simplest route is the release archive. Download
-`MCPd-<version>.lha` from the [latest
-release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest) onto
-the Amiga and, from a Shell:
+`MCPd-<version>.lha` from the
+[latest release](https://github.com/derfsss/MCP-AmigaOS4/releases/latest)
+onto the Amiga and, from a Shell:
 
 ```
 LhA x MCPd-<version>.lha
-Execute MCPd/MCPd-Install
+CD MCPd
+Execute MCPd-Install
 ```
+
+`MCPd-Install` looks for the `MCPd` binary in the current directory,
+so run it from inside the `MCPd` drawer the archive unpacks.
 
 The archive is assembled on AmigaOS, so every file already carries the
 right protection bits — the daemon is runnable the moment it is
@@ -707,18 +719,31 @@ CD <directory containing the files>
 Execute MCPd-Install
 ```
 
-The script performs the same Network-Startup patch as the host helper.
+`MCPd-Install` copies the binary and the two input scripts to
+`SYS:System/MCPd/`, backs up `S:Network-Startup` once, and appends a
+line that runs MCPd directly (`Run >NIL: <NIL: SYS:System/MCPd/MCPd`).
+Unlike the host helper it does not install `MCPd-Watchdog`, so a
+daemon that exits is not restarted until the next boot. Running
+`scripts/install_mcpd_autostart.py` afterwards switches that line to
+the watchdog.
 
 ### Uninstalling
 
+`MCPd-Uninstall` is not copied into `SYS:System/MCPd/` by any of the
+installers, so run it from where you have it: the `MCPd` drawer the
+release archive unpacked, or a copy of `mcpd/install/MCPd-Uninstall`.
 From a Shell on the target:
 
 ```
-Execute SYS:System/MCPd/MCPd-Uninstall
+CD MCPd
+Execute MCPd-Uninstall
 ```
 
-This restores `S:Network-Startup` from the `.before-mcpd` backup and
-removes the `SYS:System/MCPd/` drawer. Reboot to take effect.
+This restores `S:Network-Startup` from the `.before-mcpd` backup
+(and deletes the backup), then removes the `SYS:System/MCPd/` drawer.
+Without a backup it leaves `S:Network-Startup` alone, and the MCPd
+line has to be removed by hand. Reboot, or stop the running MCPd, to
+take effect.
 
 ## Verifying the installation
 
@@ -783,7 +808,7 @@ broadcast never reaches them.
 - **`Method not found`** — the deployed binary is older than the
   client's wire schema. `exec.status`, `exec.output`, `exec.kill` and
   `exec.list` need MCPd 2.0; `exec_cmd` itself still works against an
-  older daemon, without job fields. 1.2-era daemons also lack
+  older daemon, without job fields. Daemons before 2.0 also lack
   `fs.sync`, so `qemu_stop` can't flush them: pass `settle_s=50`. Install the latest release, or
   rebuild and redeploy with `scripts/install_mcpd_autostart.py`.
 - **Watchdog log empty** — the daemon's stdout is redirected to NIL

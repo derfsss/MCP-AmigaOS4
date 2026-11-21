@@ -28,8 +28,8 @@ A clear, concise description of what you expected.
 ## Environment
 
 - **Target**: <!-- e.g. real X5000, QEMU pegasos2, A1222 -->
-- **AmigaOS version**: <!-- output of `MCPd --version` on the target,
-  or `Version` from a Shell -->
+- **AmigaOS version**: <!-- `Version` from a Shell on the target -->
+- **MCPd version**: <!-- `MCPd --version` on the target -->
 - **Host OS**: <!-- e.g. Linux x86_64, macOS arm64, Windows 10 -->
 - **Python**: <!-- `python --version` -->
 - **`amiga-fleet-mcp` version**: <!-- `amiga-fleet-mcp --version` -->

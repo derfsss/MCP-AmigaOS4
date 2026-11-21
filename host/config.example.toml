@@ -21,7 +21,10 @@ archive_root  = "<absolute path to a writable archive directory>"
 # Retention. Neither the run archive nor the QEMU serial logs
 # were pruned before and both grow without limit -- serial logs
 # in particular run to hundreds of megabytes per boot with
-# kernel debug enabled. Comment a line out to keep everything.
+# kernel debug enabled. A line left out takes the default shown
+# here. Set archive_keep_runs or serial_log_keep to 0 to drop
+# that count limit (TOML has no null, so the size budget can't
+# be switched off from here, only raised).
 #
 # serial_log_max_total_mb is a size budget per target, because a
 # count alone does not bound the disk: twenty logs of 150 MB is
@@ -31,6 +34,9 @@ serial_log_keep          = 20
 serial_log_max_total_mb  = 512
 mcp_transport = "stdio"                  # stdio | sse | streamable-http
 # mcp_http_addr = "127.0.0.1:7180"       # only set when mcp_transport != "stdio"
+# Target used when a tool call omits `target`. Handy with one
+# machine; a call can still name any target. `--init` offers it.
+# default_target = "qemu-pegasos2"
 
 [paths]
 # Optional helper paths. Each entry is consumed by a specific tool
@@ -88,6 +94,7 @@ qemu_config  = "<absolute path to your QEMU machine's config.json>"
 # first; its config.json works as is. To write one by hand,
 # start from host/qemu-config.example.json; QEMU_CONFIG.md explains
 # the format.
+# headless     = false                  # true: no window ("display" -> -display none)
 
   [targets.qemu-pegasos2.channels.mcpd]
   enabled  = true

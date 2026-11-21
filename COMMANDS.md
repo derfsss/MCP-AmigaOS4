@@ -1,7 +1,7 @@
 # Command reference
 
-Every command, MCP tool, MCP resource, RPC method, and helper script
-the project ships, with a one-line description of each. This is the
+Every command, MCP tool, MCP resource, MCP prompt, RPC method, and
+helper script the project ships, with a one-line description of each. This is the
 authoritative single page; see [USAGE.md](USAGE.md) for narrative
 context.
 
@@ -13,6 +13,7 @@ for diagnostics.
 | Flag | Purpose |
 |---|---|
 | *(no flag)* | Start the MCP server. The default mode when invoked by an MCP client. |
+| `-h`, `--help` | Print usage and exit. |
 | `--version` | Print the host package version and exit. |
 | `--config PATH` | Path to a `config.toml`. Defaults to `$AMIGA_FLEET_CONFIG` or the platform default location. |
 | `--inspect` | Load the config, list configured targets, and exit. Does not start MCP. |
@@ -87,9 +88,9 @@ prerequisites](INSTALL.md#per-feature-prerequisites).
 | `sys.crashhook_status` | Diagnostic counters for the daemon's IDebug crash hook (registered, fire count, exception count). |
 | `sys.cold_reboot` | Software cold reboot via `IExec->ColdReboot`. Requires `confirm: true`; the response flushes before the reboot fires. |
 | `sys.read_ccsr` | Read 32-bit register(s) from the Freescale QorIQ CCSR aperture (CPU PA `0xFE000000+offset`). Supervisor-mode read serialised under `Forbid()` / `Permit()`. Used for SoC introspection on real hardware. |
-| `sys.read_pa` | DANGEROUS supervisor-mode read at any 36-bit physical address. No range checking; misuse can crash the connection-handling task (the daemon listener stays up by design). |
+| `sys.read_pa` | DANGEROUS supervisor-mode read at an address with no range check. `pa` is used as a 32-bit address (higher bits dropped) through the kernel's current mapping; misuse can crash the connection-handling task (the daemon listener stays up by design). |
 | `sys.tlb_dump` | Dump all 64 TLB1 entries from a P5020 / P1022 target via `tlbre` / MAS registers. |
-| `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1). Documented commands `t` / `v` / `f` / `s` plus build-info `b`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
+| `sys.mcu_cmd` | X5000 Cyrus MCU supervisor protocol over `serial.device` unit 1 (38400 8N1; `unit` 0-7 overrides). Sends `#<cmd>` and reads the `$` reply with a 5 s timeout. Documented commands `t` / `v` / `f` / `s` plus build-info `b`; `s` (power off) requires `confirm: true`. The canonical sensor path on X5000 (board / CPU temperatures, voltage rails, fan PWM/RPM, soft power-off). |
 
 ### `fs.*`
 
@@ -123,8 +124,6 @@ auto-base64, auto-zlib, optional resume + SHA-256 verify.
 
 ### `exec.*`
 
-| Method | Description |
-|---|---|
 Every command runs as a **job** with an id (daemon 2.0+). A job
 outlives the call that started it, so a caller whose wait ran out can
 still follow it or stop it. Jobs run at priority **-2** by default and
@@ -147,7 +146,7 @@ a missing volume fails instead of opening "Please insert volume".
 
 | Method | Description |
 |---|---|
-| `wb.screens` | List public screens via `IntuitionBase` walk. |
+| `wb.screens` | List every open screen (walk from `IntuitionBase->FirstScreen`). |
 | `wb.windows` | List windows across all screens. |
 | `wb.publicscreens` | Public-screens registry via `LockPubScreenList`. |
 | `wb.frontmost` | Frontmost screen, active screen, and active window. |
@@ -169,9 +168,9 @@ a missing volume fails instead of opening "Please insert volume".
 | Method | Confirm | Description |
 |---|---|---|
 | `input.state` | — | Pointer position, frontmost/active screen, active window + geometry. **Call this before `input.click`** so you know what you are about to click on. |
-| `input.type` | ✅ | Type a string as keystrokes. `text` (≤512 chars), `keymap` (`system` default / `us`), `delay_ms`. Layout-correct: characters are mapped through the target's `keymap.library` (`MapANSI`), including dead-key sequences. Unmappable characters are returned in `unmapped[]`, never silently dropped. |
-| `input.key` | ✅ | Press a key or chord: `keys: ["lamiga","q"]`. All but the last entry must be modifiers. `ctrl+lamiga+ramiga` **reboots the machine** and additionally requires `confirm_reset: true`. |
-| `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. |
+| `input.type` | ✅ | Type a string as keystrokes. `text` (≤512 chars; the host tool's own default limit is 128, `[targets.<name>.input] max_text_len`), `keymap` (`system` default / `us`), `delay_ms`. Layout-correct: characters are mapped through the target's `keymap.library` (`MapANSI`), including dead-key sequences. Unmappable characters are returned in `unmapped[]`, never silently dropped. |
+| `input.key` | ✅ | Press a key or chord: `keys: ["lamiga","q"]` (the host tool also takes `chord: "lamiga+q"`). All but the last entry must be modifiers. `ctrl+lamiga+ramiga` **reboots the machine** and additionally requires `confirm_reset: true`. |
+| `input.mouse_move` | — | Move the pointer: `x`+`y` (absolute) or `dx`/`dy` (relative, ±4096). Absolute targets are clamped to the frontmost screen and the achieved position is returned. `steps` (default 1) splits the motion into several events. `absolute_mode`: `delta` (default: read the pointer, then move by the difference) or `raw` (a true absolute event, for A/B testing on hardware). |
 | `input.click` | ✅ | Click at the pointer, or at `x`/`y`. `button` (`left`/`right`/`middle`), `count` (1–8). Returns the pointer position actually achieved, as `mouse_move` and `drag` do. |
 | `input.drag` | ✅ | Press at `from_x`/`from_y`, move to `to_x`/`to_y`, release. The button is always released, even if the call aborts on a budget overrun. |
 | `input.scroll` | — | Mouse wheel. `clicks` (1–32), `direction`, `style`: `native` (default, AmigaOS 4's own `IECLASS_MOUSEWHEEL`, which applications receive as `IDCMP_EXTENDEDMOUSE` wheel data) or `newmouse` (the legacy NewMouse rawkey codes; on the X5000 an ordinary Intuition window receives nothing from these). |
@@ -200,7 +199,7 @@ Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
 
 | Method | Description |
 |---|---|
-| `events.wait` | Long-poll subscribed topics; returns on first delta or timeout. |
+| `events.wait` | Long-poll the given topics (default all three; no subscription needed); returns on first delta or timeout (default 5000 ms, max 60000). |
 | `events.subscribe` | Server-push: register topics. Daemon emits JSON-RPC notifications on change. |
 | `events.unsubscribe` | Server-push: clear the subscription. |
 | `events.test_emit` | Synthesize a JSON-RPC notification (test path for the server-push wiring). |
@@ -213,8 +212,11 @@ Named keys for `input.key`: `shift` `lshift` `rshift` `ctrl` `alt`
 
 ## MCP tools (host side)
 
-Each tool corresponds to one of the RPC methods above, with an MCP
-schema for parameters and result. `amiga-fleet-mcp --list-tools`
+Most tools wrap one of the RPC methods above, with an MCP schema for
+parameters and result. The `qemu.*`, `fleet.*`, `tests.*`,
+`installer.*`, `serial.*`, `power.*`, `sandbox.*` and `notify.*`
+tools, `sys_debug_ring` and `fs_upload` / `fs_download` run on the
+host (some of them call daemon methods underneath). `amiga-fleet-mcp --list-tools`
 prints the live list.
 
 ### Per-target tools
@@ -225,13 +227,13 @@ prints the live list.
 | `sys_version` / `sys_tasks` / `sys_libraries` / `sys_devices` / `sys_ports` / `sys_lastalert` / `sys_uptime` / `sys_memory` / `sys_volumes` / `sys_assigns` / `sys_hardware` / `sys_hardware_i2c` / `sys_hardware_perfcounters` / `sys_executable_symbols` / `sys_applications` / `sys_alert_decode` / `sys_cold_reboot` / `sys_read_ccsr` / `sys_read_pa` / `sys_tlb_dump` / `sys_mcu_cmd` | `sys.*` |
 | `sys_debug_ring` | Host-side tool, not a daemon RPC method: runs `C:DumpDebugBuffer` through `exec.cmd` to read the kernel debug ring. Returns the most recent `max_lines` lines, the truncation flag, raw byte size, and an ISO-8601 host capture timestamp. Useful for post-install forensics, hardware bring-up, and as the primitive that `sandbox.last_trap` filters against. `since_s` is reserved for a future timestamp-aware trim — accepted but not yet used (DumpDebugBuffer entries don't carry per-line timestamps). **The AmigaOS debug buffer does not wrap**: once full it stops accepting entries, so on a machine with a verbose driver (a real X5000 with amdgpu-os4 fills ~80 KB during boot) nothing logged after that point is visible here — including MCPd's own beacons and any later trap. Check `raw_size` against a second call: if it doesn't grow, the buffer is exhausted and this tool can't see anything current. |
 | `fs_list` / `fs_stat` / `fs_read` / `fs_write` / `fs_write_chunk` / `fs_delete` / `fs_makedir` / `fs_rename` / `fs_protect` / `fs_copy` / `fs_hash` / `fs_sync` | `fs.*` (daemon-side primitives — see [`fs.*`](#fs)) |
-| `fs_upload` / `fs_download` | Host-side whole-file wrappers. `transfer="auto"` (default) uses the raw streams `fs.stream_put` / `fs.stream_get` on MCPd 2.3+ (uploads of 1 MiB and more; a broken stream resumes by itself on a new connection) and falls back to `fs.write_chunk` / `fs.read` (auto-chunk, auto-base64, auto-zlib) on older daemons; `"stream"` or `"chunked"` forces one. Each stream is checked with `fs.stream_status`'s CRC-32 where the daemon has it (`crc32_verified` in the result: true when one checked stream carried the whole file, false after a resume); a mismatch sends or fetches that stream again. Optional `resume` + `verify=sha256`. **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
+| `fs_upload` / `fs_download` | Host-side whole-file wrappers. `transfer="auto"` (default) uses the raw streams `fs.stream_put` / `fs.stream_get` on MCPd 2.3+ (uploads of 1 MiB and more; a broken stream resumes by itself on a new connection) and falls back to `fs.write_chunk` / `fs.read` (auto-chunk, auto-base64, auto-zlib) on older daemons; `"stream"` or `"chunked"` forces one. Each stream is checked with `fs.stream_status`'s CRC-32 where the daemon has it (`crc32_verified` in the result: true when one checked stream carried the whole file, false after a resume); a mismatch sends or fetches that stream again. Optional `resume` + `verify=True` (SHA-256 of both ends). **Use these for "I have a host file, please move it"** — they do not exist as daemon RPC methods, only as MCP tools. |
 | `exec_cmd` | `exec.cmd`, except that a command still running at `timeout_s` returns `state: "running"` and its `job_id` instead of raising. **Do not re-run it**: follow it with `exec_status` / `exec_output`, or stop it with `exec_kill`. `priority` defaults to `[defaults] exec_priority`. `sandbox: true` runs `command` (a program path) under SandboxVM so a crash is contained: the result gains a `sandbox` block with the guest's output, `trap_kind` and SandboxVM's trap report (ip, dar, dsisr, registers) from the debug ring, plus `end_reason` (`exit` / `trap` / `aborted` / `timeout`). `sandbox_extmem_mb`, `sandbox_window_mb` and `sandbox_deny_libs` override the target's `[sandbox]` defaults; `sandbox_time_limit_s` passes SandboxVM's `-T` limit (SandboxVM 1.1+). ExtMem machines only. See [USAGE.md § Running commands](USAGE.md#running-commands-exec). |
 | `exec_status` / `exec_output` / `exec_kill` / `exec_list` | `exec.*` job follow-up (`exec_kill` takes `wait_s`; `force=True` only for sandboxed jobs, and only where `sandbox_probe` reports `abort_supported`, which needs SandboxVM 1.1 or later). |
 | `wb_screens` / `wb_windows` / `wb_publicscreens` / `wb_frontmost` | `wb.*` introspection |
 | `wb_screenshot` | `wb.screenshot` — capture a screen to PNG on the target, download it, optionally inline it as base64. Works on real hardware, unlike the QMP-based `qemu_screenshot`. |
 | `input_state` / `input_type` / `input_key` / `input_mouse_move` / `input_click` / `input_drag` / `input_scroll` | `input.*` — **disabled by default**, needs the daemon gate *and* `[targets.<name>.input] enabled = true`. See [`input.*`](#input-keyboard--mouse-injection). |
-| `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub) |
+| `debug_task_snapshot` / `debug_symbol` / `debug_stacktrace` / `debug_write_memory` / `debug_write_register` / `debug_read_registers` / `debug_read_memory` / `debug_set_breakpoint` / `debug_clear_breakpoint` / `debug_step` / `debug_continue` / `debug_backtrace` / `debug_stop_reason` / `debug_detach` | `debug.*` (per-task IDebug + whole-system GDB stub). `debug_write_memory` and `debug_write_register` send the daemon's `confirm: true` themselves, so calling the tool is the confirmation. |
 | `events_wait` | `events.wait` (long-poll only). The other three `events.*` methods are exposed only as daemon RPC; clients invoke them via the transport directly. |
 | `app_notify` | `app.notify` |
 
@@ -253,12 +255,12 @@ The captured QEMU serial output is exposed as the read-only resource
 
 | Tool | Description |
 |---|---|
-| `fleet_list_targets` | List configured targets with their tags. |
+| `fleet_list_targets` | List configured targets with their channel summary. Optional `tags` filter (a target must carry every tag). |
 | `fleet_target_status` | Per-target reachability and active channels. |
 | `fleet_snapshot` | One-call health summary across the entire fleet. |
 | `fleet_run_on_all` | Run a method on every (or tag-filtered) target in parallel. |
-| `fleet_barrier` | Same as `run_on_all` but with a per-target timeout. |
-| `fleet_quorum_run` | Require at least *N* of *M* targets to succeed. |
+| `fleet_barrier` | Same as `run_on_all` but with a per-target timeout (`per_target_timeout_s`, default 30); a slow target gets a -32002 entry. |
+| `fleet_quorum_run` | Fan out, return as soon as `quorum` targets succeed and cancel the rest (`overall_timeout_s`, default 60). |
 | `fleet_relay` | Copy a file from one target to another via the host. |
 | `fleet_discover` | Probe for MCPd instances: UDP broadcast for machines on the LAN, plus a direct probe to the forwarded discovery port of every configured QEMU target (a guest behind `hostfwd` cannot hear a broadcast). Each responder is reported with the endpoint the host can actually reach and, where it matches a configured forward, the `target` name; `target` is `null` for a daemon the config doesn't know about. |
 
@@ -288,6 +290,12 @@ under `[defaults]` so a typical session does not have to repeat
 them on every call — see [USAGE.md § Per-tool
 defaults](USAGE.md#per-tool-defaults).
 
+The tools that change the target need `confirm=True`:
+`installer_copy_tree`, `installer_apply_lha`,
+`installer_write_kicklayout`, `installer_patch_kicklayout`,
+`installer_stage`, and `installer_install_x5000` / `installer_run`
+when `dry_run=False`.
+
 | Tool | Description |
 |---|---|
 | `installer_list_machines` | List supported target machines with their canonical IDs, friendly names, and aliases. |
@@ -312,6 +320,11 @@ Host-side capture of a target's debug UART (for example, an
 X5000's rear-panel DB9). Useful for reading kernel-debug output
 during boot or crash investigation without tying up the cable in a
 terminal program.
+
+Every tool takes `channel`: `uboot` (the default, the rear-panel
+DB9) or `mcu`, matching `[targets.<name>.channels.uboot]` /
+`[targets.<name>.channels.mcu]`. On `serial_status` it is an optional
+filter instead, with no default.
 
 | Tool | Description |
 |---|---|
@@ -409,14 +422,14 @@ Live, read-only data exposed under the `amiga://` URI scheme.
 
 | URI | Description |
 |---|---|
-| `amiga://fleet/targets` | List of configured targets and their tags. |
+| `amiga://fleet/targets` | Configured targets: name, type, display name, machine, MCPd / QMP / GDB endpoints, and whether this server's QEMU process for it is running. |
 | `amiga://{target}/sys/version` | Per-target Kickstart / Workbench snapshot. |
 | `amiga://{target}/sys/tasks` | Per-target live task list. |
 | `amiga://{target}/proto/capabilities` | Per-target daemon capability report. |
-| `amiga://{target}/qemu/serial_log` | Tail of captured QEMU serial output (QEMU targets only). |
+| `amiga://{target}/qemu/serial_log` | QEMU serial output captured since this server's last `qemu.start` of the target: the last 1 MiB (empty for a guest this server didn't start, or a remote target). |
 | `amiga://runs/` | Index of archived tool-call runs. |
 | `amiga://runs/{run_id}` | Metadata for a specific run. |
-| `amiga://runs/{run_id}/calls` | NDJSON of tool calls in a run. |
+| `amiga://runs/{run_id}/calls` | NDJSON of tool calls in a run (capped at 1 MiB). |
 
 ## MCP prompts
 
@@ -435,7 +448,7 @@ one.
 | `check_fleet` | `tags` (comma-separated) | `fleet_snapshot` (uptime, free memory and last alert per target), decodes any alert, and sums it up in one table. |
 | `safe_reboot` | `target` | Cold boot without losing writes: no running jobs, `fs_sync`, a fresh serial log, then `power_off` / `power_on` on real hardware or `qemu_stop` / `qemu_start` on QEMU (never `sys_cold_reboot` on an X5000, never `qemu_reset`), and wait for the `[MCPd] ready` line. Asks first. |
 | `deploy_library` | `local_path`, `remote_path`, `target` | Dated backup with `fs_rename`, `fs_upload` with verify, the cold boot above, then confirms the new version is the one loaded. Never `Avail FLUSH`. |
-| `run_test_batch` | `local_script`, `target`, `remote_dir`, `results` | Runs an AmigaDOS script as a tracked job with a short timeout, follows it with `exec_status` / `exec_output` without re-running it, and collects the results. |
+| `run_test_batch` | `local_script`, `target`, `remote_dir` (default `RAM:`), `results` | Runs an AmigaDOS script as a tracked job with a short timeout, follows it with `exec_status` / `exec_output` without re-running it, and collects the results. |
 | `ab_test_fix` | `repro`, `local_path`, `remote_path`, `target` | Runs the reproduction (expect a failure), deploys the fix with a cold boot, checks it's loaded, runs it again (expect a pass), and tables before against after. |
 
 ## Helper scripts
@@ -452,42 +465,45 @@ package, which is installed only as a host dependency.
 | `install_mcpd_autostart.py [endpoint] [binary]` | Drop MCPd at `SYS:System/MCPd/`, upload the watchdog, patch `S:Network-Startup`. Idempotent. |
 | `x5000_bootstrap_mcpd.py --host <ip>` | One-time bootstrap: upload `mcpd/MCPd` to `RAM:MCPd` on the target and launch it through a SerialShell already running there. |
 | `x5000_kill_mcpd.py --host <ip>` | Stop a running MCPd through SerialShell (`Break N C`) so a new build can be bootstrapped. |
+| `install_mcpd_via_serialshell.py --host <ip> [--port 4321] [--mcpd-binary F] [--mcpd-install-script F] [--serialshell-binary F]` | Bring MCPd up on a machine that only has SerialShell: uploads a fresh SerialShell to `C:`, then MCPd and `MCPd-Install`, and runs the install. |
 
 ### Validation
 
 | Script | Description |
 |---|---|
 | `validate.py --endpoint host:port [--rounds 1,2,3,4,5]` | Parametric runner for the validation suites against any endpoint. |
-| `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Comprehensive capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, stress, and the host MCP protocol layer. |
+| `validate_full.py --endpoint host:port [--skip-stress] [--skip-mcp]` | Capability sweep covering connectivity, fs, exec, sys, wb, debug, events, application library, edge cases, MCPd 2.x jobs, chunked and streamed transfers (CRC-checked), the screen-blanker hold, `wb.screenshot` (including 8-bit screens), stress, and the host MCP protocol layer. Checks skip when the daemon lacks the method. The place for coverage of a new method. |
 | `validate_input.py --target <name> [--shared-dir DIR] [--restart-mode qemu\|cold\|manual] [--keep-running]` | End-to-end check of the `input.*` gate and injection path on a live target: refuses everything by default, opens only after `MCPd-Enable-Input` + a restart, types ASCII and non-ASCII into a Shell (byte-checked through the guest's `SHARED:` volume), drags a window, verifies the `confirm` guards, then closes the gate again. By default kills/relaunches QEMU for the restarts; on real hardware use `--restart-mode cold` (`sys.cold_reboot`, with an MCU power-cycle fallback) or `manual`. |
 | `validate_durability.py --endpoint host:port [--skip-long]` | Out-of-the-box durability sweep: raw-socket frame fuzzing, JSON-RPC envelope abuse, error-code coverage, connection lifecycle, long-running stability, filesystem corner cases, exec.cmd corners, subscription state transitions, concurrency, numeric boundaries, cross-method workflows, MCP resources, fleet host tools, CLI flags. |
-| `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, hardcoded for the canonical test endpoint. |
-| `qemu_install_test.py` | End-to-end: launch QEMU, bootstrap, install, kill+relaunch, verify auto-start, run all rounds. |
+| `round1_validation.py` … `round5_serverpush_validation.py` | The individual suites; standalone, against `$MCPD_ENDPOINT` (default `127.0.0.1:4322`). |
+| `qemu_install_test.py` | End-to-end: launch QEMU, bootstrap, install, kill+relaunch, verify auto-start, run rounds 1-4. |
 | `concurrent_x5000_qemu.py` | Drive an X5000 and a QEMU pegasos2 guest simultaneously; verifies fleet fan-out, relay, barrier. |
-| `x5000_probe.py` | Quick reachability + capability probe on the X5000. |
-| `x5000_method_sweep.py` | Walk every advertised method and exercise it. |
+| `x5000_probe.py --host <ip>` | Pre-MCPd probe through SerialShell: `Version FULL`, `Info`, `Avail FLUSH`. |
+| `x5000_method_sweep.py` | Exercise a core subset of methods (fs, sys, wb, exec, plus `sys.tlb_dump` / `sys.mcu_cmd t` on boards that have them) on a live target. |
 
 ### Installer
 
 | Script | Description |
 |---|---|
-| `run_installer_x5000.py` | Drive an end-to-end X5000 install via `installer_run` (defaults to dry-run). |
+| `run_installer_x5000.py` | Drive an end-to-end X5000 install via `installer_run`. **Live**: runs with `dry_run=False, confirm=True`. |
 | `run_installer_stage.py` | Drive `installer_stage` to upload the ISO + Update LHAs + Enhancer + extras + MCPd to a target. |
 | `build_release_lha.py --target <name> [--version V] [--out DIR]` | Assemble the release archive on an AmigaOS target (a QEMU guest is fine) so the AmigaOS protection bits are baked into the file users download. Stages the daemon, the install scripts and a README, sets the executable and script bits, runs `LhA`, extracts the result again to prove the flags survived, then downloads the archive and tidies up after itself. |
-| `deploy_mcpd_x5000.py` | One-shot deploy of a freshly built MCPd to a running X5000 (auto-start install + watchdog). |
+| `deploy_mcpd_x5000.py` | One-shot deploy of a freshly built MCPd to a running X5000: chunked upload of the binary only (no autostart or watchdog changes; use `install_mcpd_autostart.py` for those). |
 
 ### Diagnostics and probes
 
 | Script | Description |
 |---|---|
-| `tail_serial.py` | Live tail a target's serial-capture log without booting an MCP client. |
+| `tail_serial.py --port COMx --out FILE [--baud N]` | Open a serial port directly and log it to a file, without an MCP server. |
 | `validate_serial_tools.py` | Smoke-test the host-side `serial.*` capture lifecycle. |
 | `investigate_crash.py` | Pull a crash snapshot via `debug.*` after a target has alerted. |
-| `test_crashhook.py` | Force the IDebug crash hook to fire and verify recovery. |
+| `test_crashhook.py` | Run a NULL-dereferencing binary and check the IDebug crash hook sends a `debug.exception` notification and updates `sys.crashhook_status`. |
 | `test_events_soak.py` | Long-running event-channel soak test. |
 | `probe_x5000_uboot.py`, `probe_x5000_mcu.py`, `probe_mcu_debug.py`, `probe_x5000_netinterfaces.py` | Hardware-specific probes used during X5000 bring-up. |
 | `fetch_x5000_kickstart.py` | Pull the live `SYS:Kickstart/` tree off a real X5000 for offline analysis. |
-| `fix_a1222_network_startup.py`, `fix_x5000_disk_info_and_neticon.py` | Targeted fix-up scripts for known target-specific quirks. |
+| `fix_a1222_network_startup.py`, `fix_x5000_disk_info_and_neticon.py`, `fix_emu10kx_via_serialshell.py` | Targeted fix-up scripts for known target-specific quirks (the last uses SerialShell to move the `emu10kx.audio` driver that stops an X5000 install booting out of `BootTest:DEVS/AHI/`). |
+| `crashtest.c` | Deliberate-crash fixture for the `debug.exception` crash hook: dereferences an unmapped address. Cross-compile with `ppc-amigaos-gcc -o crashtest crashtest.c`. |
+| `apply-patches.sh` | Applies `third-party/<name>-patches/*.patch` to the matching submodules (`git apply`); a no-op when there are none. |
 
 ## AmigaDOS install scripts
 
